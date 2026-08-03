@@ -341,3 +341,7 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Default budgets are conservative and integer-microdollar based: $5 monthly, $25 year-to-date, $0.10 per request, with an 80% warning threshold. A request reserves capacity atomically and carries provider-side output/max-price constraints; any reported overage is withheld but retained as authoritative charged usage.
 - Kimi is registered as the strategic route and DeepSeek as the everyday route only when the user supplies exact model IDs; Codex/Claude fallback must be explicitly selected and never widens workspace/device/tool authority.
 - Provider keys never enter workspace backup, sync, relay, or receipts. Usage receipts use keyed prompt provenance and minimized bounded fields.
+# 2026-08-03 — Defer P6A paired model comparison
+
+- P6A is moved to the bottom of the roadmap and is not a dependency for the next phase.
+- Its implementation-ready contract remains preserved, but no A/B harness code, provider/model activation, API call, or deployment is authorized by this sequencing update.

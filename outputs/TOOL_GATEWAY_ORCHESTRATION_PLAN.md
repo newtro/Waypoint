@@ -4,6 +4,8 @@ Status: planning-only, 2026-08-03. No provider activation, API key, model usage/
 
 ## P6A — policy-bounded paired provider evaluation
 
+**Sequence status: deferred to the bottom of the roadmap by user decision on 2026-08-03. P6A is not a dependency for any intervening phase. Do not implement it opportunistically while advancing the next phase.**
+
 Build a user-triggered harness that presents the same sanitized, versioned task envelope to two compatible candidates—for example Kimi K3 versus Codex or Claude—and compares results without duplicating effects. The default is read-only evaluation or separate disposable worktrees/sandboxes. Live side-effect comparison is unavailable until a separately explicit policy is approved.
 
 Acceptance:

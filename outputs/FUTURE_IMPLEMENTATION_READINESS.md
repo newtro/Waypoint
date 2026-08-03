@@ -180,7 +180,7 @@ Requires Apple Developer and Windows code-signing identities, certificate/key cu
 - Keep signed-in Codex and Claude Code CLIs primary. Add local model/runtime providers or optional API providers only through separately authorized adapters.
 - Add policy-driven routing with an explainable proposed route, explicit fallback order, execution device, security profile, data eligibility, budget, and user override.
 - Extend bounded agents to typed tasks, finite depth/concurrency/runtime/token-or-cost budgets, parent/child artifacts, approval boundaries, cancellation propagation, recovery, and deterministic terminal status.
-- Implement provider A/B comparison and the model-neutral Tool Gateway through the canonical `outputs/TOOL_GATEWAY_ORCHESTRATION_PLAN.md`: a trusted-main-process policy point, shared UI/AI domain commands, local-CLI-first developer tooling, visible trusted-terminal/browser-profile policy, normalized receipts, and explicit provider/network/credential/PR/deployment activation gates.
+- Continue model-neutral orchestration through the canonical `outputs/TOOL_GATEWAY_ORCHESTRATION_PLAN.md`: the Tool Gateway is implemented, while provider A/B comparison (P6A) is explicitly deferred to the bottom of the roadmap and is not a prerequisite for the next phase. It retains explicit provider/network/credential/PR/deployment activation gates.
 - Integrate the swappable embedding/chunking benchmark and future trusted peer embedding worker through the same device/data-policy model.
 
 ### Data/privacy boundary
