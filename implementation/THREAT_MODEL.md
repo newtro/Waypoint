@@ -49,3 +49,12 @@ Adversaries include a malicious document or prompt, compromised renderer, malici
 - Audited end-to-end encryption protocol selection, key recovery, replay resistance, and metadata review.
 - Representative local embedding runtime license, package size, memory, latency, and retrieval quality.
 - Full Mac/Windows/coordinator convergence, revocation, and deletion tests.
+
+## Phase 3 local-foundation update
+
+- Authenticated encryption and signatures use a pinned official libsodium JS/WASM distribution behind a narrow trusted-process facade. The dependency, wrapper integration, protocol composition, key lifecycle, and packaging still require continuing review; audited primitives do not make a custom protocol automatically safe.
+- The local opaque relay requires an injected authority to validate active membership/key epoch and envelope signature, and directly validates sequence, expiry, replay and storage quotas without decrypting workspace payloads. A malicious relay can still withhold, delay, reorder, partition, or expose permitted delivery metadata. Deterministic client convergence limits data corruption, but fork/checkpoint detection is deferred with the real-node protocol; availability remains outside end-to-end encryption.
+- Revocation protects future synchronization and peer execution through membership and key epochs. It cannot remotely erase previously decrypted local state; OS full-disk encryption and device-management controls remain the user's protection for a lost endpoint.
+- Recovery material is an explicit user-held artifact with no server-side plaintext recovery key. Loss can make encrypted data unrecoverable; theft plus the recovery passphrase can authorize recovery. Production recovery UX and destructive drills remain required.
+- Peer execution is a new privileged boundary. Requests are untrusted input even when signed: the target validates membership, replay, expiry and approval, loads its own profile, and rejects remotely supplied capabilities. Native Windows enforcement and real cross-device cancellation remain unvalidated.
+- Real public TLS, Ubuntu/AWS host hardening, Windows protected storage, platform process containment, release signing, and professional protocol review are intentionally not represented by the Mac-local simulation.
