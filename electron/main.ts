@@ -216,6 +216,15 @@ function registerIpc(): void {
     });
     return result;
   });
+  handle('waypoint:webhook-channels',async(_event,input:unknown)=>syncService.webhookChannels(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)));
+  handle('waypoint:webhook-channel-create',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),label=text(value.label,'channel label',80).trim();if(!label)throw new Error('Channel label is required');return syncService.createWebhookChannel(workspaceId,label)});
+  handle('waypoint:webhook-channel-rotate',async(_event,input:unknown)=>{const value=input as Record<string,unknown>;return syncService.rotateWebhookChannel(text(value.workspaceId,'workspace ID',64),text(value.channelId,'channel ID',128))});
+  handle('waypoint:webhook-channel-revoke',async(_event,input:unknown)=>{const value=input as Record<string,unknown>;return syncService.revokeWebhookChannel(text(value.workspaceId,'workspace ID',64),text(value.channelId,'channel ID',128))});
+  handle('waypoint:webhook-channel-delete',async(_event,input:unknown)=>{const value=input as Record<string,unknown>;return syncService.deleteWebhookChannel(text(value.workspaceId,'workspace ID',64),text(value.channelId,'channel ID',128))});
+  handle('waypoint:webhook-kill',async(_event,input:unknown)=>{const value=input as Record<string,unknown>;if(typeof value.active!=='boolean')throw new Error('Kill state is invalid');return syncService.setWebhookKill(text(value.workspaceId,'workspace ID',64),value.active)});
+  handle('waypoint:webhook-fetch',async(_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64);return syncService.fetchWebhookEvents(workspaceId,store)});
+  handle('waypoint:webhook-events',(_event,input:unknown)=>store.listExternalInboundEvents(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)));
+  handle('waypoint:webhook-event-delete',(_event,input:unknown)=>{const value=input as Record<string,unknown>;store.deleteExternalInboundEvent(text(value.workspaceId,'workspace ID',64),text(value.eventId,'event ID',128));return{ok:true}});
   handle('waypoint:search-text', (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     const workspaceId = text(value.workspaceId, 'workspace ID', 64);

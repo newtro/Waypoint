@@ -11,6 +11,7 @@ import {createRelayServer} from './server.js'
 export function validateRelayRuntime(input:Record<string,string|undefined>):void{
   const config=parseRelayConfig(input)
   accessSync(config.authorityRegistryPath,constants.R_OK)
+  accessSync(config.webhookKeyPath,constants.R_OK)
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url))){

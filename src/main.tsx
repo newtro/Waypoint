@@ -20,6 +20,8 @@ type KnowledgeGraph = Awaited<ReturnType<Window['waypoint']['graph']>>;
 type Meeting = Awaited<ReturnType<Window['waypoint']['listMeetings']>>[number];
 type TranscriptionCapability = Awaited<ReturnType<Window['waypoint']['meetingTranscriptionCapability']>>;
 type TriggerLab=Awaited<ReturnType<Window['waypoint']['listLocalTriggerLab']>>;
+type WebhookChannels=Awaited<ReturnType<Window['waypoint']['webhookChannels']>>;
+type WebhookEvent=Awaited<ReturnType<Window['waypoint']['listWebhookEvents']>>[number];
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -71,7 +73,7 @@ export function App() {
     [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({}),
     [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>();
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
-    [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>();
+    [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>(),[webhookChannels,setWebhookChannels]=useState<WebhookChannels>(),[webhookEvents,setWebhookEvents]=useState<WebhookEvent[]>([]);
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
@@ -90,7 +92,7 @@ export function App() {
   }
   async function openAutomations() {
     if (!workspace) return;
-    const[nextPlaybooks,nextLab]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);
+    const[nextPlaybooks,nextLab,nextSync]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id),window.waypoint.desktopSyncStatus(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);if(nextSync.configured){const[channels,events]=await Promise.all([window.waypoint.webhookChannels(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]);setWebhookChannels(channels);setWebhookEvents(events)}else{setWebhookChannels(undefined);setWebhookEvents([])}
     setSidebarOpen(false);
     setDrawer('automations');
   }
@@ -99,6 +101,10 @@ export function App() {
   async function dryRunTrigger(ruleId:string,simulateFailure=false){if(!workspace)return;const result=await window.waypoint.dryRunLocalTriggerRule(workspace.id,ruleId,simulateFailure);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));setNotice(result.idempotent?'This exact zero-effect dry run was already recorded.':`${result.status.replace('_',' ')} recorded at attempt ${result.attempt}, with zero proposed effects.`)}
   async function toggleTriggerKill(){if(!workspace||!triggerLab)return;await window.waypoint.setLocalTriggerKill(workspace.id,!triggerLab.killSwitch);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));setNotice(triggerLab.killSwitch?'Local trigger evaluation resumed; rules remain paused and simulation-only.':'Workspace trigger kill switch enabled. All evaluations are blocked.')}
   async function deleteTriggerEvent(eventId:string){if(!workspace||!window.confirm('Permanently delete this local fixture event, its suggested rule, and all dry-run history?'))return;await window.waypoint.deleteLocalTriggerEvent(workspace.id,eventId);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id))}
+  async function createWebhookChannel(){if(!workspace)return;const label=window.prompt('Inbound webhook channel name','Private inbound')?.trim();if(!label)return;const result=await window.waypoint.createWebhookChannel(workspace.id,label),configuration={endpoint:`https://waypoint-relay.johnnycode.ai/v1/hooks/${result.channelId}`,channelId:result.channelId,secretVersion:result.secretVersion,signingSecret:result.secret,recipientPublicKey:result.recipientPublicKey,mime:'application/vnd.waypoint.encrypted-event+json'};await navigator.clipboard.writeText(JSON.stringify(configuration,null,2));setWebhookChannels(await window.waypoint.webhookChannels(workspace.id));setNotice('One-time encrypted sender configuration copied to the clipboard. Store it in the sender’s protected secret storage; Waypoint will not show the signing secret again.')}
+  async function rotateWebhookChannel(channelId:string){if(!workspace||!window.confirm('Rotate this signing secret now? The previous sender configuration will stop immediately.'))return;const result=await window.waypoint.rotateWebhookChannel(workspace.id,channelId);await navigator.clipboard.writeText(JSON.stringify({channelId,secretVersion:result.secretVersion,signingSecret:result.secret},null,2));setWebhookChannels(await window.waypoint.webhookChannels(workspace.id));setNotice('Rotated one-time signing configuration copied. Update the sender before retrying.')}
+  async function refreshWebhookEvents(){if(!workspace)return;const result=await window.waypoint.fetchWebhookEvents(workspace.id);setWebhookEvents(await window.waypoint.listWebhookEvents(workspace.id));setNotice(`${result.imported} signed inbound event${result.imported===1?'':'s'} fetched into quarantine. No rule, model, or action ran.`)}
+  async function deleteWebhookEvent(eventId:string){if(!workspace||!window.confirm('Permanently delete this quarantined inbound event?'))return;await window.waypoint.deleteWebhookEvent(workspace.id,eventId);setWebhookEvents(await window.waypoint.listWebhookEvents(workspace.id))}
   async function createPlaybook() {
     if (!workspace) return;
     const title = window.prompt('Fixture playbook title', 'Morning fixture review')?.trim();
@@ -1579,7 +1585,14 @@ export function App() {
             )}
             {drawer === 'automations' && (
               <div className="drawer-body">
-                <p className="drawer-intro">A safe local lab for synthetic events, suggested rules, and versioned playbooks. Everything remains paused or dry-run-only. No port, public webhook, schedule, account, model, network call, or external effect is available.</p>
+                <p className="drawer-intro">Signed inbound events can arrive through the opaque Waypoint relay and remain quarantined for review. Local synthetic rules and playbooks remain paused or dry-run-only. No event can invoke a model, rule, command, schedule, or external effect.</p>
+                <section>
+                  <h3>Signed inbound <span>{webhookEvents.length}</span></h3>
+                  {!webhookChannels&&<p className="drawer-empty">Set up and enroll desktop sync before creating a production inbound channel.</p>}
+                  {webhookChannels&&<><div className="automation-boundary" role="status"><strong>{webhookChannels.killSwitch?'Inbound kill switch active':'Encrypted inbound enabled'}</strong><span>signed · replay protected · opaque relay · quarantined · zero effects</span></div><div className="drawer-actions"><button onClick={()=>void createWebhookChannel().catch(showError)}>New inbound channel</button><button onClick={()=>void refreshWebhookEvents().catch(showError)}>Fetch inbound</button><button className="secondary" onClick={()=>void window.waypoint.setWebhookKill(workspace!.id,!webhookChannels.killSwitch).then(()=>window.waypoint.webhookChannels(workspace!.id)).then(setWebhookChannels).catch(showError)}>{webhookChannels.killSwitch?'Resume inbound':'Kill inbound'}</button></div></>}
+                  {webhookChannels?.channels.map((channel)=><article className={`playbook-item ${channel.status}`} key={channel.channelId}><header><div><small>{channel.status} · secret v{channel.secretVersion}</small><strong>{channel.label}</strong><small>Channel {channel.channelId.slice(0,10)}… · recipient {channel.recipientDeviceId.slice(0,10)}…</small><span>The signing secret is protected and cannot be displayed again. Rotate to issue a replacement.</span></div></header><div className="meeting-actions"><button disabled={channel.status!=='active'} onClick={()=>void rotateWebhookChannel(channel.channelId).catch(showError)}>Rotate</button><button disabled={channel.status!=='active'} onClick={()=>void window.waypoint.revokeWebhookChannel(workspace!.id,channel.channelId).then(()=>window.waypoint.webhookChannels(workspace!.id)).then(setWebhookChannels).catch(showError)}>Revoke</button><button onClick={()=>void window.waypoint.deleteWebhookChannel(workspace!.id,channel.channelId).then(()=>window.waypoint.webhookChannels(workspace!.id)).then(setWebhookChannels).catch(showError)}>Delete</button></div></article>)}
+                  {webhookEvents.map((event)=><article className="playbook-item paused" key={event.id}><header><div><small>quarantined · untrusted · {event.proposedEffects} effects</small><strong>{event.eventType}</strong><small>Channel {event.channelId.slice(0,10)}… · payload {event.payloadDigest.slice(0,10)}…</small><span>{JSON.stringify(event.payload)}</span></div><button onClick={()=>void deleteWebhookEvent(event.id).catch(showError)}>Delete</button></header></article>)}
+                </section>
                 <div className="automation-boundary" role="status">
                   <strong>{triggerLab?.killSwitch?'Kill switch active':'Local simulation only'}</strong>
                   <span>webhook.fixture.local · quarantined · zero effects · network off</span>

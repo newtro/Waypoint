@@ -214,3 +214,12 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Implemented quarantined fixture events, suggested/paused rules, deterministic zero-effect dry runs, bounded retry/dead-letter history, kill/delete controls, workspace isolation, schema migration, backup/restore, and chat-first Automations UI.
 - Independent review drove repair of stored event/rule/run provenance, payload authority/shape validation, canonical event grammar, retry/success idempotency, terminal dead letters, and a real schema-15 migration test. Final verdict: ship, blocker 0 / high 0 / medium 0 / low 0.
 - Terminal gate: 71 suites / 326 tests, lint/build, zero high dependency vulnerabilities, native arm64 package/runtime closure, diff hygiene, and isolated-profile native launch.
+
+## Production signed inbound webhook — vertical slice (2026-08-03)
+
+- User explicitly authorized a real inbound path on the existing dedicated relay origin. Acceptance is frozen in `implementation/PRODUCTION_INBOUND_WEBHOOK_PLAN.md`.
+- Survey: existing Caddy/TLS and loopback relay are healthy, Caddy validates, PostgreSQL remains untouched, and no DNS/firewall/new resource is required. Planned live mutation is limited to a versioned relay release, dedicated protected webhook key/config, relay SQLite migration, and restart of only `waypoint-relay.service` after verified backup.
+- Implemented owner-only channel lifecycle, one-time protected signing secrets, timestamp/nonce replay defense, opaque sealed event intake, authenticated pull/ack, local quarantine/decryption, kill/delete, bounded retention/quotas, backup/restore, and schema-v17 source provenance.
+- Independent review drove two repair rounds across authorization, retention, duplicate identity, expiry, AES-GCM AAD, key recovery, backup provenance, and future-time bounds. Final verdict: SHIP, blocker 0 / high 0 / medium 0 / low 0.
+- Terminal local gate: 73 suites / 333 tests, lint/build, zero dependency vulnerabilities, SBOM, native arm64 package/runtime closure, and diff hygiene.
+- Hosted gate passed at the existing dedicated TLS endpoint: encrypted pre-migration backup, protected paired webhook key recovery, versioned release, relay-only restart, signed/replay/rotation/kill/delete tests, restart persistence, outage/recovery, exact synthetic cleanup, empty production registry, zero queued webhook data, and SQLite integrity `ok`. Caddy/PostgreSQL remained active and unchanged.

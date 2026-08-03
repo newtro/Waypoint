@@ -66,6 +66,15 @@ declare global {
       revokeSyncDevice(workspaceId: string, deviceId: string): Promise<{ canceled: boolean; rotation?: { keyEpoch: number } }>;
       resumeSyncRotation(workspaceId: string): Promise<{ keyEpoch: number }>;
       syncNow(workspaceId: string): Promise<{ sent: number; received: number; activePeers: number }>;
+      webhookChannels(workspaceId:string):Promise<{channels:Array<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;secretVersion:number;status:'active'|'revoked';createdAt:string;rotatedAt:string;revokedAt?:string}>;killSwitch:boolean}>;
+      createWebhookChannel(workspaceId:string,label:string):Promise<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;secretVersion:number;status:'active';createdAt:string;rotatedAt:string;secret:string}>;
+      rotateWebhookChannel(workspaceId:string,channelId:string):Promise<{channelId:string;secretVersion:number;secret:string}>;
+      revokeWebhookChannel(workspaceId:string,channelId:string):Promise<{channelId:string;status:'revoked'}>;
+      deleteWebhookChannel(workspaceId:string,channelId:string):Promise<{deleted:boolean}>;
+      setWebhookKill(workspaceId:string,active:boolean):Promise<{active:boolean}>;
+      fetchWebhookEvents(workspaceId:string):Promise<{imported:number}>;
+      listWebhookEvents(workspaceId:string):Promise<Array<{id:string;sourceEventId:string;channelId:string;eventType:string;occurredAt:string;receivedAt:string;payload:Record<string,string|number|boolean|null>;payloadDigest:string;status:'quarantined';createdAt:string;proposedEffects:0}>>;
+      deleteWebhookEvent(workspaceId:string,eventId:string):Promise<{ok:true}>;
       searchText(workspaceId: string, query: string): Promise<SearchResult[]>;
       searchSemantic(workspaceId: string, query: string): Promise<SearchResult[]>;
       indexDocument(workspaceId: string, objectId: string): Promise<{ ok: true; model: string; modelDigest: string }>;

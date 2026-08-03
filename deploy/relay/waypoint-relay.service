@@ -3,6 +3,7 @@ Description=Waypoint opaque sync relay
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/waypoint-relay/authority.json
+ConditionPathExists=/etc/waypoint-relay/webhook.key
 
 [Service]
 Type=simple
