@@ -1,4 +1,5 @@
-export const SUITE_VERSION = 'waypoint-retrieval-v2'
+import {BENCHMARK_SUITE_VERSION} from '../electron/core/embedding-benchmark.js'
+export const SUITE_VERSION = BENCHMARK_SUITE_VERSION
 export interface CorpusItem { id: string; topic: string; text: string }
 export interface QueryCase { id: string; expectedTopic: string; text: string }
 

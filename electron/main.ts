@@ -7,6 +7,7 @@ import { accessSync, constants, readFileSync, renameSync, rmSync, statfsSync, wr
 import { randomUUID } from 'node:crypto';
 import { WorkspaceStore } from './core/store.js';
 import { LocalOllamaEmbeddings } from './core/ollama.js';
+import { CHUNKING_POLICIES, storedChunkingProvenance } from './core/embedding-benchmark.js';
 import { CliWorkbench, type ExecutionEvent } from './core/ai-workbench.js';
 import { detectCli } from '../spikes/cli-capabilities.js';
 import { deleteWithExecutionCancellation, startDurableChild, validateOneChildDelegation } from './core/execution-lifecycle.js';
@@ -30,6 +31,7 @@ const syncAbort = new AbortController();
 let trustedSenderId: number | undefined;
 let trustedRendererUrl: string | undefined;
 const embeddings = new LocalOllamaEmbeddings();
+const activeChunkingProvenance=storedChunkingProvenance(CHUNKING_POLICIES[0]);
 const workbench = new CliWorkbench();
 
 function handle(channel: string, listener: (event: IpcMainInvokeEvent, input: unknown) => unknown): void {
@@ -212,7 +214,7 @@ function registerIpc(): void {
       providerVersion: embeddings.providerVersion,
       model: embeddings.model,
       modelDigest: embedded.modelDigest,
-      chunkingDigest: 'whole-document-v1',
+      chunkingDigest: activeChunkingProvenance,
     });
   });
   handle('waypoint:index-document', async (_event, input: unknown) => {
@@ -227,7 +229,7 @@ function registerIpc(): void {
       providerVersion: embeddings.providerVersion,
       model: embeddings.model,
       modelDigest: embedded.modelDigest,
-      chunkingDigest: 'whole-document-v1',
+      chunkingDigest: activeChunkingProvenance,
     });
     return {
       ok: true,

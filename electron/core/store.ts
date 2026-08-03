@@ -1384,8 +1384,10 @@ export class WorkspaceStore {
     this.assertObjectInWorkspace(workspaceId, source.objectId);
     if (vector.length === 0 || vector.some((value) => !Number.isFinite(value))) throw new Error('Valid embedding vector required');
     this.transaction(() => {
-      this.db.prepare('DELETE FROM embeddings WHERE workspace_id=? AND object_id=?').run(workspaceId, source.objectId);
+      this.db.prepare('DELETE FROM embeddings WHERE workspace_id=? AND object_id=? AND provider=? AND provider_version=? AND model=? AND model_digest=? AND chunking_digest=?').run(workspaceId,source.objectId,provenance.provider,provenance.providerVersion,provenance.model,provenance.modelDigest,provenance.chunkingDigest);
       this.db.prepare('INSERT INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, source.objectId, source.objectKind, source.revisionId ?? null, provenance.provider, provenance.providerVersion, provenance.model, provenance.modelDigest, vector.length, provenance.chunkingDigest, JSON.stringify(vector), now());
+      const stale=this.db.prepare('SELECT id FROM embeddings WHERE workspace_id=? AND object_id=? ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET 2').all(workspaceId,source.objectId) as Array<{id:string}>;
+      for(const row of stale)this.db.prepare('DELETE FROM embeddings WHERE id=?').run(row.id);
     });
   }
 

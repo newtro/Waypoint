@@ -249,3 +249,13 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Child context is a maximum 100,000-character parent result labeled untrusted plus a maximum 4,000-character user instruction. It does not inherit attachments, hidden chat history, secrets, connectors, or new roots.
 - Cap child runtime at 60 seconds or the lower profile cap. Provider, workspace, chat, local device, profile, concurrency, and fallback policy cannot change.
 - Parent cancellation terminalizes queued children before spawn and cancels running children. Startup rechecks durable queued state after CLI detection.
+
+## R5 Slice 3 — local embedding and chunking benchmark (2026-08-03)
+
+- Use the versioned representative Waypoint suite and isolated in-memory indexes; never infer a product default from incomparable public aggregate claims or mutate live workspace search during evaluation.
+- Recommend Qwen3-Embedding 4B under the production-ready whole-document policy from current local evidence. Keep Qwen 8B unavailable until installed/hardware-tested and retain BGE-M3 as the lighter baseline.
+- Read active Ollama model memory from its loopback `/api/ps` endpoint and keep harness RSS separate. Never substitute file size for runtime memory. Recommendation requires measured runtime memory below 80% of host RAM plus the model's registered minimum-memory gate.
+- Keep direct llama.cpp and Chonkie disabled pending native packaging and dependency/license review. OpenAI comparison remains disabled pending explicit API key, data, and cost authorization.
+- Trusted-peer selection is a typed policy seam only: local remains the default; peer eligibility requires model capability, memory, availability, workspace permission, explicit allow policy, and user preference.
+- Encode chunk policy identity/version/digest with every new live vector generation. Any provider, model, digest, dimensions, or chunk-policy change requires explicit reindex rather than silent vector mixing.
+- Retain at most the two newest provenance-distinct vector generations per object so a failed/default change can roll back without rebuilding immediately. Source revision change and deletion still purge every generation, preserving lifecycle semantics.

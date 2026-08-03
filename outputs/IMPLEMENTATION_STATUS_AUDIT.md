@@ -5,7 +5,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Roadmap capability | Current status | Next evidence / gate |
 |---|---|---|
 | Native Electron/React desktop, onboarding, chat-first UI, window restore | Implemented and current-Mac verified | Windows-native verification remains hardware-contingent |
-| Durable chats, documents, memories, graph, attachments, text/semantic search | Implemented | PDF/DOCX extraction, richer chunking, and optional peer embeddings remain later evaluated providers |
+| Durable chats, documents, memories, graph, attachments, text/semantic search | R5 Slice 3 adds a versioned isolated embedding/chunking benchmark, evidence-backed local model comparison, explicit reindex provenance, and disabled provider/peer seams | PDF/DOCX extraction, production chunking beyond whole-document, direct llama.cpp, Chonkie packaging, and peer embeddings remain separately gated |
 | Signed-in Codex/Claude CLI chat, streaming, cancel/retry/failure, visible routing | Implemented and packaged-Mac verified | Windows CLI/process matrix remains hardware-contingent |
 | Security profiles and bounded one-child lineage | R5 Slice 2 adds explicit typed Claude child tasks with one-child/depth-one/profile/provider/device enforcement, bounded untrusted parent context, no tools/attachments/fallback/peer authority, 60-second cap, durable provenance, and cancel propagation | Codex no-tool child mode, richer budgets/recovery, and real peer execution remain later reviewed gates |
 | Activity, local cascade deletion, export/restore, diagnostics, backup/migrations | Implemented MVP baseline | Richer activity is R3; backup administration and signed release are later gates |

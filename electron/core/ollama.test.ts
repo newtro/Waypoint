@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { LocalOllamaEmbeddings } from './ollama.js'
+import { LocalOllamaEmbeddings, OllamaBenchmarkProvider } from './ollama.js'
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('local Ollama embedding boundary', () => {
+  it('rejects non-loopback benchmark providers',()=>expect(()=>new OllamaBenchmarkProvider('test','https://example.com')).toThrow(/loopback/))
+  it('uses total loaded model memory rather than only its VRAM subset',async()=>{vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({models:[{name:'model:latest',size:12*1024**3,size_vram:4*1024**3}]}),{status:200})));await expect(new OllamaBenchmarkProvider('test').runtimeMemoryMiB('model')).resolves.toBe(12*1024)})
   it('rejects non-loopback and credentialed endpoints', () => {
     expect(() => new LocalOllamaEmbeddings('model', 'https://example.com')).toThrow(/loopback/)
     expect(() => new LocalOllamaEmbeddings('model', 'http://user:pass@127.0.0.1:11434')).toThrow(/loopback/)
