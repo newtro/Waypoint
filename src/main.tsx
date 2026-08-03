@@ -1549,6 +1549,12 @@ export function App() {
                     </p>
                   ))}
                 </section>
+                <section>
+                  <h3>Recent execution budgets</h3>
+                  <p className="drawer-intro">Every local run records a fixed approval and resource envelope. Automatic retries, external cost, peer execution, and fallback remain off.</p>
+                  {runs.slice(0,5).map((run)=>{const budget=run.budget as Record<string,unknown>|undefined;return budget?<p className="provider-row" key={String(run.id)}><strong>{String(run.cli)} · {String(budget.kind)}</strong><span>{Math.round(Number(budget.maxDurationMs)/1000)}s · {Math.round(Number(budget.maxOutputBytes)/1024/1024)} MiB output · 1 attempt · {String(budget.approvalOrigin).replaceAll('-',' ')}</span></p>:null})}
+                  {!runs.some((run)=>run.budget)&&<p className="drawer-empty">No budgeted run has been recorded yet.</p>}
+                </section>
               </div>
             )}
             {drawer === 'automations' && (

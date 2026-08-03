@@ -20,6 +20,7 @@ export const CONSERVATIVE_PROFILE: SecurityProfile = {
 export interface RunRequest {
   cli: CliName; prompt: string; workspaceRoot: string; profile: SecurityProfile; model?: string
   parentRunId?: string; depth?: number; timeoutMs?: number; executable?: string; version?: string; imagePaths?: string[]
+  maxOutputBytes?: number
 }
 
 export interface RunningExecution {
@@ -40,6 +41,7 @@ export function validateRequest(request: RunRequest): void {
   if ((request.depth ?? 0) > 1) throw new Error('Agent lineage depth exceeds the Phase 2 limit')
   if (request.profile.maxConcurrency !== 1) throw new Error('Phase 2 profiles must limit concurrency to one')
   if (request.profile.secretNames.length) throw new Error('Phase 2 does not inject secrets')
+  if(request.maxOutputBytes!==undefined&&(!Number.isSafeInteger(request.maxOutputBytes)||request.maxOutputBytes<1||request.maxOutputBytes>8_388_608))throw new Error('Execution output budget is invalid')
 }
 
 export function adapterArgs(cli: CliName, _prompt: string, model?: string, imagePaths: string[] = []): string[] {
@@ -92,11 +94,12 @@ export class CliWorkbench {
     const timer = setTimeout(() => { timedOut = true; finishSignal() }, timeoutMs)
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
     child.stdin.end(request.prompt)
-    child.stdout.on('data', (chunk: string) => { outputBytes += Buffer.byteLength(chunk); if (outputBytes > 8_388_608) { outputLimited = true; finishSignal(); return }; buffer += chunk; const lines = buffer.split(/\r?\n/); buffer = lines.pop() ?? ''; for (const line of lines) if (line.trim()) onEvent(parseEvent(request.cli, line)) })
+    const maxOutputBytes=request.maxOutputBytes??8_388_608
+    child.stdout.on('data', (chunk: string) => { outputBytes += Buffer.byteLength(chunk); if (outputBytes > maxOutputBytes) { outputLimited = true; finishSignal(); return }; buffer += chunk; const lines = buffer.split(/\r?\n/); buffer = lines.pop() ?? ''; for (const line of lines) if (line.trim()) onEvent(parseEvent(request.cli, line)) })
     child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8_192) })
     const completion = new Promise<{ status: Exclude<RunStatus,'queued'|'running'>; exitCode: number|null; error?: string }>((resolve) => {
       child.once('error', (error) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId); resolve({ status: 'failed', exitCode: null, error: error.message }) })
-      child.once('close', (code) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId); if (buffer.trim() && !outputLimited) onEvent(parseEvent(request.cli, buffer)); const status = timedOut ? 'timed_out' : canceled ? 'canceled' : outputLimited ? 'failed' : code === 0 ? 'completed' : 'failed'; resolve({ status, exitCode: code, error: outputLimited ? 'CLI output exceeded the 8 MiB limit' : status === 'failed' ? (stderr.trim() || `CLI exited with code ${code}`) : undefined }) })
+      child.once('close', (code) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId); if (buffer.trim() && !outputLimited) onEvent(parseEvent(request.cli, buffer)); const status = timedOut ? 'timed_out' : canceled ? 'canceled' : outputLimited ? 'failed' : code === 0 ? 'completed' : 'failed'; resolve({ status, exitCode: code, error: outputLimited ? `CLI output exceeded the ${maxOutputBytes}-byte execution budget` : status === 'failed' ? (stderr.trim() || `CLI exited with code ${code}`) : undefined }) })
     })
     const running: RunningExecution = { executable, version:request.version, args, cancel: () => { canceled = true; finishSignal() }, completion }
     this.active.set(runId, running)

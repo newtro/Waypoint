@@ -176,3 +176,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Initial independent review returned no-ship with three highs, three mediums, and one low. Repairs now enforce quality/measured-memory thresholds, canonical provider/model registration, strict batching/resource caps, disabled peer authority, single suite provenance, and bounded two-generation live-index rollback. Follow-up review is in progress.
 - Follow-up retained one high and one medium in hybrid-memory accounting and generic-provider timeout. Repairs use total loaded Ollama memory and a whole-benchmark deadline; focused 34-test, lint, build, and diff gate passes. Final review is in progress.
 - Final independent verdict: ship, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 64 suites / 288 tests, lint, build, zero high vulnerabilities/undeclared licenses, production SBOM, native arm64 package/runtime closure/launch, and diff hygiene.
+
+## R5 Slice 4 — conservative local execution budgets (2026-08-03)
+
+- Selected as the next safe R5 slice because it completes finite budget, approval, and recovery visibility for existing local runs without making gated policy choices or widening authority. Executor: primary task; reviewer: fresh independent adversarial context.
+- Acceptance is frozen in `implementation/R5_EXECUTION_BUDGETS_PLAN.md`. Focused 3-file / 32-test, lint, and build gate passes; independent review is in progress.
+- Initial review returned no-ship with one high, one medium, and one low. Repairs make receipts mandatory, validate and bind the exact budget/profile/lineage contract, fail closed on profile widening, and cover child restore. Follow-up review is in progress.
+- Follow-up retained one duration-binding high. Repairs now bind duration exactly to effective profile plus root/child cap and reject widened/mismatched receipts; final review is in progress.
+- Final independent verdict: ship, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 65 suites / 292 tests, lint, build, zero high vulnerabilities/undeclared licenses, production SBOM, native arm64 package/runtime closure/launch, and diff hygiene.

@@ -22,6 +22,7 @@ import { DesktopSyncService } from './core/sync/desktop-sync-service.js';
 import { recordSyncActivityBestEffort } from './core/activity-recording.js';
 import { assertRoute, proposeRoute } from './core/provider-routing.js';
 import {assertChildAgainstParent,childContext,createChildTask,type ChildTaskManifest} from './core/agent-policy.js';
+import {createExecutionBudget,serializeExecutionBudget} from './core/execution-budget.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
@@ -503,6 +504,7 @@ function registerIpc(): void {
       if (prompt.length + context.length > 2_000_000) throw new Error('Prompt and attached text exceed the execution limit');
       prompt += context;
     }
+    const budget=createExecutionBudget({kind:parentExecutionId?'child':'root',profile,prompt,attachmentCount:attachmentIds.length});
     if (parentExecutionId) validateOneChildDelegation(store.listExecutions(workspaceId, chatId), parentExecutionId, profileId);
     const runId = store.createExecution({
       workspaceId,
@@ -516,6 +518,7 @@ function registerIpc(): void {
       parentExecutionId,
       depth: parentExecutionId ? 1 : 0,
       taskType:childTask?.type,
+      budgetReceipt:serializeExecutionBudget(budget),
     });
     const fallbackEvents: ExecutionEvent[] = [];
     try {
@@ -542,7 +545,8 @@ function registerIpc(): void {
               version: capability.version,
               parentRunId: parentExecutionId,
               depth: parentExecutionId ? 1 : 0,
-              timeoutMs:childTask?.maxDurationMs,
+              timeoutMs:budget.maxDurationMs,
+              maxOutputBytes:budget.maxOutputBytes,
               imagePaths,
             },
             (event) => {

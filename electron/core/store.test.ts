@@ -4,6 +4,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { WorkspaceStore } from './store.js'
+import {createExecutionBudget,serializeExecutionBudget} from './execution-budget.js'
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), 'waypoint-store-'))
@@ -14,12 +15,13 @@ function fixture() {
 }
 
 const provenance = { provider: 'test', providerVersion: '1', model: 'fixture', modelDigest: 'digest', chunkingDigest: 'chunks-v1' }
+const receipt=(profile:ReturnType<WorkspaceStore['listSecurityProfiles']>[number],kind:'root'|'child',prompt:string)=>serializeExecutionBudget(createExecutionBudget({kind,profile,prompt,attachmentCount:0}))
 
 describe('durable local workspace', () => {
   it('recognizes only durable execution capabilities', () => {
     const { root, store, workspace } = fixture(), other = store.createWorkspace('Other', path.join(root, 'other'))
     const chat = store.createChat(workspace.id, 'Scoped run'), profile = store.listSecurityProfiles(workspace.id)[0]
-    const run = store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'scoped'})
+    const run = store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'scoped',budgetReceipt:receipt(profile,'root','scoped')})
     expect(store.executionExists(workspace.id,run)).toBe(true)
     expect(store.executionExists(other.id,run)).toBe(false)
     store.close()
@@ -28,16 +30,16 @@ describe('durable local workspace', () => {
   it('persists the exact source message for historical retry provenance',()=>{
     const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Retries'),profile=store.listSecurityProfiles(workspace.id)[0]
     const first=store.addMessage(workspace.id,chat,'user','first prompt'),second=store.addMessage(workspace.id,chat,'user','second prompt')
-    const firstRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:first,cli:'codex',securityProfileId:profile.id,prompt:'first prompt'})
-    const secondRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:second,cli:'claude',securityProfileId:profile.id,prompt:'second prompt'})
+    const firstRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:first,cli:'codex',securityProfileId:profile.id,prompt:'first prompt',budgetReceipt:receipt(profile,'root','first prompt')})
+    const secondRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:second,cli:'claude',securityProfileId:profile.id,prompt:'second prompt',budgetReceipt:receipt(profile,'root','second prompt')})
     expect(store.listExecutions(workspace.id,chat)).toEqual([expect.objectContaining({id:secondRun,sourceMessageId:second}),expect.objectContaining({id:firstRun,sourceMessageId:first})])
-    expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:'missing',cli:'codex',securityProfileId:profile.id,prompt:'x'})).toThrow(/source message/)
+    expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:'missing',cli:'codex',securityProfileId:profile.id,prompt:'x',budgetReceipt:receipt(profile,'root','x')})).toThrow(/source message/)
     store.close()
   })
   it('reconciles queued and running executions to durable interrupted failures on startup',()=>{
     const {database,store,workspace}=fixture(),chat=store.createChat(workspace.id,'Interrupted'),profile=store.listSecurityProfiles(workspace.id)[0]
-    const queued=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'queued'})
-    const running=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'running'});store.startExecution(running,workspace.id,'/trusted/claude','1')
+    const queued=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'queued',budgetReceipt:receipt(profile,'root','queued')})
+    const running=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'running',budgetReceipt:receipt(profile,'root','running')});store.startExecution(running,workspace.id,'/trusted/claude','1')
     store.close();const reopened=new WorkspaceStore(database)
     expect(reopened.listExecutions(workspace.id,chat)).toEqual(expect.arrayContaining([expect.objectContaining({id:queued,status:'failed',errorCode:'interrupted'}),expect.objectContaining({id:running,status:'failed',errorCode:'interrupted'})]))
     expect(reopened.listActivity(workspace.id).filter((event)=>event.action==='execution.failed')).toHaveLength(2)
@@ -45,7 +47,7 @@ describe('durable local workspace', () => {
   })
   it('persists CLI detection and process startup failures before returning the error',()=>{
     const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Unavailable CLI'),profile=store.listSecurityProfiles(workspace.id)[0]
-    const run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'test'})
+    const run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'test',budgetReceipt:receipt(profile,'root','test')})
     store.failQueuedExecution(run,workspace.id,'claude was not found on PATH')
     expect(store.listExecutions(workspace.id,chat)[0]).toMatchObject({id:run,status:'failed',errorCode:'startup_failed',errorMessage:'claude was not found on PATH'})
     store.close()
@@ -54,17 +56,20 @@ describe('durable local workspace', () => {
     const { store, workspace } = fixture(), chat = store.createChat(workspace.id, 'Agent work')
     const profile = store.listSecurityProfiles(workspace.id)[0]
     expect(profile).toMatchObject({ name: 'Workspace — conservative', filesystem: 'read-only', tools: [], maxConcurrency: 1, peerEligible: false, secretNames: [] })
-    const root = store.createExecution({ workspaceId: workspace.id, chatId: chat, cli: 'codex', model: 'gpt-test', securityProfileId: profile.id, prompt: 'private prompt' })
+    const budget=createExecutionBudget({kind:'root',profile,prompt:'private prompt',attachmentCount:0})
+    const root = store.createExecution({ workspaceId: workspace.id, chatId: chat, cli: 'codex', model: 'gpt-test', securityProfileId: profile.id, prompt: 'private prompt',budgetReceipt:serializeExecutionBudget(budget) })
     store.startExecution(root, workspace.id, '/trusted/codex', '1.2.3')
     store.appendExecutionEvent(root, workspace.id, { type:'text', text:'answer', rawType:'item.completed' })
     store.finishExecution(root, workspace.id, { status:'completed', exitCode:0 })
-    const child = store.createExecution({ workspaceId: workspace.id, chatId: chat, parentExecutionId:root, depth:1, cli:'claude', securityProfileId:profile.id, prompt:'child work' })
+    const child = store.createExecution({ workspaceId: workspace.id, chatId: chat, parentExecutionId:root, depth:1, cli:'claude', securityProfileId:profile.id, prompt:'child work',budgetReceipt:receipt(profile,'child','child work') })
     expect(store.listExecutions(workspace.id, chat)).toEqual(expect.arrayContaining([
-      expect.objectContaining({id:root,cli:'codex',cliVersion:'1.2.3',model:'gpt-test',device:'local',profileName:'Workspace — conservative',status:'completed',depth:0,events:[expect.objectContaining({type:'text',text:'answer'})]}),
+      expect.objectContaining({id:root,cli:'codex',cliVersion:'1.2.3',model:'gpt-test',device:'local',profileName:'Workspace — conservative',status:'completed',depth:0,budget:expect.objectContaining({version:1,maxAttempts:1,approvalOrigin:'explicit-chat-action'}),events:expect.arrayContaining([expect.objectContaining({type:'policy',name:'budget:local-v1'}),expect.objectContaining({type:'text',text:'answer'})])}),
       expect.objectContaining({id:child,parentExecutionId:root,depth:1,status:'queued'}),
     ]))
     expect(JSON.stringify(store.listExecutions(workspace.id, chat))).not.toContain('private prompt')
-    expect(() => store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:root,depth:2,cli:'codex',securityProfileId:profile.id,prompt:'bad'})).toThrow(/lineage/)
+    expect(() => store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:root,depth:2,cli:'codex',securityProfileId:profile.id,prompt:'bad',budgetReceipt:receipt(profile,'child','bad')})).toThrow(/lineage/)
+    expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'bad',budgetReceipt:'{}'})).toThrow(/budget receipt/)
+    const wrongDuration={...createExecutionBudget({kind:'root',profile,prompt:'bad',attachmentCount:0}),maxDurationMs:30_000};expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'bad',budgetReceipt:JSON.stringify(wrongDuration)})).toThrow(/budget receipt/)
     expect(store.executionIsQueued(workspace.id,child)).toBe(true);expect(store.cancelQueuedExecution(workspace.id,child)).toBe(true);expect(store.executionIsQueued(workspace.id,child)).toBe(false)
     store.deleteObject(workspace.id, 'chat', chat)
     expect(store.counts()).toMatchObject({ executions:0, execution_events:0 })
@@ -229,9 +234,9 @@ describe('durable local workspace', () => {
     const document = store.createDocument(workspace.id, 'Exported note', 'restore-search-needle')
     const chat = store.createChat(workspace.id, 'Exported chat')
     store.addMessage(workspace.id, chat, 'assistant', 'restored-message-needle')
-    const profile=store.listSecurityProfiles(workspace.id)[0],run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'archived task'})
+    const profile=store.listSecurityProfiles(workspace.id)[0],archivedBudget=createExecutionBudget({kind:'root',profile,prompt:'archived task',attachmentCount:0}),run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'archived task',budgetReceipt:serializeExecutionBudget(archivedBudget)})
     store.startExecution(run,workspace.id,'/trusted/codex','1.2.3');store.appendExecutionEvent(run,workspace.id,{type:'text',text:'archived answer'});store.finishExecution(run,workspace.id,{status:'completed',exitCode:0})
-    const child=store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:run,depth:1,cli:'claude',securityProfileId:profile.id,prompt:'critique it',taskType:'critique'})
+    const child=store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:run,depth:1,cli:'claude',securityProfileId:profile.id,prompt:'critique it',taskType:'critique',budgetReceipt:receipt(profile,'child','critique it')})
     const memory = store.createMemory(workspace.id, 'Exported memory', 'remember this', document.id)
     store.createRelationship(workspace.id, document.id, memory, 'supports')
     store.indexEmbedding(workspace.id, { objectId: document.id, objectKind: 'document', revisionId: document.revisionId }, [1, 0], provenance)
@@ -252,8 +257,8 @@ describe('durable local workspace', () => {
     const restoredExecutions=store.listExecutions(restored.id)
     const restoredParent=restoredExecutions.find((execution)=>execution.depth===0)
     const restoredChild=restoredExecutions.find((execution)=>execution.depth===1)
-    expect(restoredParent).toMatchObject({cli:'codex',cliVersion:'1.2.3',status:'completed',events:[expect.objectContaining({type:'text',text:'archived answer'})]})
-    expect(restoredChild).toMatchObject({cli:'claude',status:'failed',parentExecutionId:restoredParent?.id,events:[expect.objectContaining({type:'agent',name:'task:critique',rawType:'bounded-child-v1'})]})
+    expect(restoredParent).toMatchObject({cli:'codex',cliVersion:'1.2.3',status:'completed',budget:expect.objectContaining({approvalOrigin:'explicit-chat-action',maxAttempts:1}),events:expect.arrayContaining([expect.objectContaining({type:'policy',name:'budget:local-v1'}),expect.objectContaining({type:'text',text:'archived answer'})])})
+    expect(restoredChild).toMatchObject({cli:'claude',status:'failed',parentExecutionId:restoredParent?.id,budget:expect.objectContaining({kind:'child',approvalOrigin:'explicit-delegate-action',maxChildren:0}),events:expect.arrayContaining([expect.objectContaining({type:'policy',name:'budget:local-v1'}),expect.objectContaining({type:'agent',name:'task:critique',rawType:'bounded-child-v1'})])})
     expect(restoredChild?.id).not.toBe(child)
     expect(store.graph(restored.id)).toMatchObject({ edges: [{ type: 'supports' }] })
     expect(store.counts().embeddings).toBe(1)

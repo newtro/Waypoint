@@ -14,6 +14,7 @@ import { extractRuleDirectives, RULE_EXTRACTOR } from './learned-rules.js';
 import { ACTIVITY_FAMILIES, activityFamily, safeActivityDetails } from './activity-timeline.js';
 import { validateMeetingAudio, validateTranscript } from './meeting-audio.js';
 import { assertPlaybookDefinition, FIXTURE_CONNECTOR, fixtureDryRun, nextDailyOccurrence, playbookDefinitionDigest, playbookDefinitionJson } from './fixture-automations.js';
+import {parseExecutionBudget,securityProfileDigest} from './execution-budget.js';
 
 const now = () => new Date().toISOString();
 const contentDigest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -522,11 +523,12 @@ export class WorkspaceStore {
     }));
   }
 
-  createExecution(input: { workspaceId: string; chatId: string; sourceMessageId?: string; parentExecutionId?: string; cli: 'codex' | 'claude'; routedCliVersion?:string;model?: string; securityProfileId: string; prompt: string; depth?: number;taskType?:'analyze'|'summarize'|'critique' }): string {
+  createExecution(input: { workspaceId: string; chatId: string; sourceMessageId?: string; parentExecutionId?: string; cli: 'codex' | 'claude'; routedCliVersion?:string;model?: string; securityProfileId: string; prompt: string; depth?: number;taskType?:'analyze'|'summarize'|'critique';budgetReceipt:string }): string {
     this.assertObjectInWorkspace(input.workspaceId, input.chatId, 'chat');
     const profile = this.db.prepare('SELECT id FROM security_profiles WHERE id=? AND workspace_id=?').get(input.securityProfileId, input.workspaceId);
     if (!profile) throw new Error('Security profile not found in workspace');
     if (input.sourceMessageId && !this.db.prepare("SELECT 1 FROM messages WHERE id=? AND chat_id=? AND role='user'").get(input.sourceMessageId, input.chatId)) throw new Error('Execution source message not found in chat');
+    {const receipt=parseExecutionBudget(input.budgetReceipt),effectiveProfile=this.listSecurityProfiles(input.workspaceId).find((item)=>item.id===input.securityProfileId),kind=input.parentExecutionId?'child':'root';if(!receipt||receipt.kind!==kind||!effectiveProfile||receipt.profileDigest!==securityProfileDigest(effectiveProfile)||receipt.maxDurationMs!==Math.min(effectiveProfile.maxDurationMs,kind==='child'?60_000:120_000)||Buffer.byteLength(input.prompt,'utf8')>receipt.maxPromptBytes)throw new Error('Execution budget receipt is invalid')}
     if (input.parentExecutionId) {
       const parent = this.db.prepare('SELECT depth FROM executions WHERE id=? AND workspace_id=? AND chat_id=?').get(input.parentExecutionId, input.workspaceId, input.chatId) as { depth: number } | undefined;
       if (!parent || (input.depth ?? 0) !== parent.depth + 1) throw new Error('Invalid execution lineage');
@@ -535,7 +537,8 @@ export class WorkspaceStore {
       timestamp = now();
     this.transaction(() => {
       this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,cli_version,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, input.workspaceId, input.chatId, input.sourceMessageId ?? null, input.parentExecutionId ?? null, input.cli,input.routedCliVersion??null, input.model ?? null, 'local', input.securityProfileId, createHash('sha256').update(input.prompt).digest('hex'), 'queued', input.depth ?? 0, timestamp);
-      if(input.taskType)this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),id,1,'agent',null,`task:${input.taskType}`,'bounded-child-v1',timestamp);
+      let sequence=1;this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),id,sequence++,'policy',null,'budget:local-v1',input.budgetReceipt,timestamp);
+      if(input.taskType)this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),id,sequence,'agent',null,`task:${input.taskType}`,'bounded-child-v1',timestamp);
       this.activity(input.workspaceId, 'ai', 'execution.queued', id, 'execution', { cli: input.cli, device: 'local',routePolicyVersion:1 });
     });
     return id;
@@ -603,6 +606,7 @@ export class WorkspaceStore {
     return rows.map((run) => ({
       ...run,
       events: this.db.prepare('SELECT sequence,type,text,name,raw_type rawType,created_at createdAt FROM execution_events WHERE execution_id=? ORDER BY sequence').all(String(run.id)),
+      budget: (()=>{const row=this.db.prepare("SELECT raw_type rawType FROM execution_events WHERE execution_id=? AND type='policy' AND name='budget:local-v1' ORDER BY sequence LIMIT 1").get(String(run.id)) as {rawType?:string}|undefined;return parseExecutionBudget(row?.rawType)})(),
     }));
   }
 

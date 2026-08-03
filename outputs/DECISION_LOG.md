@@ -259,3 +259,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Trusted-peer selection is a typed policy seam only: local remains the default; peer eligibility requires model capability, memory, availability, workspace permission, explicit allow policy, and user preference.
 - Encode chunk policy identity/version/digest with every new live vector generation. Any provider, model, digest, dimensions, or chunk-policy change requires explicit reindex rather than silent vector mixing.
 - Retain at most the two newest provenance-distinct vector generations per object so a failed/default change can roll back without rebuilding immediately. Source revision change and deletion still purge every generation, preserving lifecycle semantics.
+
+## R5 Slice 4 — conservative local execution budgets (2026-08-03)
+
+- Derive every budget in trusted main-process code from the effective workspace security profile and actual root/child request. Renderer data never grants or widens budget authority.
+- Treat Send/Retry and Delegate as explicit per-run user actions. Each action receives a new one-attempt receipt; automatic retry and unattended continuation remain unavailable.
+- Root default: 2,000,000 prompt bytes, 8 MiB output, at most 120 seconds/profile cap, one concurrent run, depth one, one child, and up to 20 selected attachments. Child default: 512 KiB prompt, 2 MiB output, at most 60 seconds/profile cap, no child or attachment.
+- Fix all current receipts to local device, fallback off, external cost off, peer off, one attempt, and the digest of the effective profile. Wider values require a later explicit user policy decision and review.
+- Persist content-minimized receipts with the execution rather than duplicating prompt/output or sensitive profile contents. Receipt restore and deletion follow execution ownership.

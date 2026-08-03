@@ -28,6 +28,7 @@ describe('AI workbench privilege boundary', () => {
     expect(() => validateRequest({ cli:'codex', prompt:'x', workspaceRoot:'/outside', profile })).toThrow(/outside/)
     expect(() => validateRequest({ cli:'codex', prompt:'x', workspaceRoot:'/safe/workspace', profile:{...profile,secretNames:['TOKEN']} })).toThrow(/secrets/)
     expect(() => validateRequest({ cli:'codex', prompt:'x', workspaceRoot:'/safe/workspace', profile, depth:2 })).toThrow(/depth/)
+    expect(() => validateRequest({ cli:'codex', prompt:'x', workspaceRoot:'/safe/workspace', profile,maxOutputBytes:8_388_609 })).toThrow(/output budget/)
   })
 
   it('normalizes text, tool, and malformed output without treating output as authority', () => {
@@ -68,6 +69,7 @@ describe('AI workbench privilege boundary', () => {
     const timeoutRun = await timed.start('t', {cli:'codex',prompt:'x',workspaceRoot:'/safe/workspace',profile,timeoutMs:10}, ()=>{}); await vi.advanceTimersByTimeAsync(11)
     await expect(timeoutRun.completion).resolves.toMatchObject({status:'timed_out'}); vi.useRealTimers()
   })
+  it('terminates output at the receipt-specific byte budget',async()=>{const child=new FakeChild(),workbench=new CliWorkbench((()=>child) as never,async()=>'/bin/codex'),run=await workbench.start('limited',{cli:'codex',prompt:'x',workspaceRoot:'/safe/workspace',profile,maxOutputBytes:10},()=>{});child.stdout.write('12345678901');await expect(run.completion).resolves.toMatchObject({status:'failed',error:expect.stringContaining('10-byte')})})
   it('cancels and boundedly drains active children during shutdown',async()=>{
     const child=new FakeChild(),workbench=new CliWorkbench((()=>child) as never,async()=>'/bin/codex')
     await workbench.start('shutdown',{cli:'codex',prompt:'x',workspaceRoot:'/safe/workspace',profile},()=>{})
