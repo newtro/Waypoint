@@ -1,0 +1,27 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+contextBridge.exposeInMainWorld('waypoint', {
+  bootstrap: () => ipcRenderer.invoke('waypoint:bootstrap'),
+  createWorkspace: (name: string) => ipcRenderer.invoke('waypoint:create-workspace', { name }),
+  createDocument: (workspaceId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:create-document', { workspaceId, title, body }),
+  updateDocument: (workspaceId: string, objectId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:update-document', { workspaceId, objectId, title, body }),
+  listDocuments: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-documents', { workspaceId }),
+  searchText: (workspaceId: string, query: string) => ipcRenderer.invoke('waypoint:search-text', { workspaceId, query }),
+  searchSemantic: (workspaceId: string, query: string) => ipcRenderer.invoke('waypoint:search-semantic', { workspaceId, query }),
+  indexDocument: (workspaceId: string, objectId: string) => ipcRenderer.invoke('waypoint:index-document', { workspaceId, objectId }),
+  deleteDocument: (workspaceId: string, objectId: string) => ipcRenderer.invoke('waypoint:delete-document', { workspaceId, objectId }),
+  deleteObject: (workspaceId: string, kind: string, objectId: string) => ipcRenderer.invoke('waypoint:delete-object', { workspaceId, kind, objectId }),
+  attachDocument: (workspaceId: string, objectId: string) => ipcRenderer.invoke('waypoint:attach-document', { workspaceId, objectId }),
+  graph: (workspaceId: string) => ipcRenderer.invoke('waypoint:graph', { workspaceId }),
+  activity: (workspaceId: string) => ipcRenderer.invoke('waypoint:activity', { workspaceId }),
+  listChats: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-chats', { workspaceId }),
+  createChat: (workspaceId: string, title: string) => ipcRenderer.invoke('waypoint:create-chat', { workspaceId, title }),
+  captureChat: (workspaceId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:capture-chat', { workspaceId, title, body }),
+  addMessage: (workspaceId: string, chatId: string, role: string, body: string) => ipcRenderer.invoke('waypoint:add-message', { workspaceId, chatId, role, body }),
+  listMemories: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-memories', { workspaceId }),
+  createMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string) => ipcRenderer.invoke('waypoint:create-memory', { workspaceId, title, body, sourceObjectId }),
+  captureMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned = false) => ipcRenderer.invoke('waypoint:capture-memory', { workspaceId, title, body, sourceObjectId, sourceOwned }),
+  createRelationship: (workspaceId: string, fromId: string, toId: string, type: string) => ipcRenderer.invoke('waypoint:create-relationship', { workspaceId, fromId, toId, type }),
+  exportWorkspace: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-workspace', { workspaceId }),
+  restoreWorkspace: () => ipcRenderer.invoke('waypoint:restore-workspace'),
+})

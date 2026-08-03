@@ -1,21 +1,57 @@
-import { StrictMode } from 'react'
+import { FormEvent, StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { GraphEdge, GraphNode, SearchResult, WorkspaceSummary } from '../electron/core/types'
 import './styles.css'
 
+type Document = { id: string; title: string; body: string; revisionId: string; updatedAt: string }
+type Chat = Awaited<ReturnType<Window['waypoint']['listChats']>>[number]
+type Memory = Awaited<ReturnType<Window['waypoint']['listMemories']>>[number]
+
 export function App() {
-  return (
-    <main>
-      <p className="eyebrow">WAYPOINT · PHASE 0</p>
-      <h1>Your thinking,<br />within reach.</h1>
-      <p className="summary">
-        This shell validates the secure Electron and React delivery path. Product
-        workflows begin only after the Phase 0 architecture gate passes.
-      </p>
-      <section aria-label="Prototype status">
-        <span>Local-first</span><span>Inspectable AI</span><span>Owned sync</span>
-      </section>
-    </main>
-  )
+  const [workspace, setWorkspace] = useState<WorkspaceSummary>()
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
+  const [documents, setDocuments] = useState<Document[]>([]), [chats, setChats] = useState<Chat[]>([]), [memories, setMemories] = useState<Memory[]>([])
+  const [graph, setGraph] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] }>({ nodes: [], edges: [] }), [activity, setActivity] = useState<Array<Record<string, unknown>>>([])
+  const [results, setResults] = useState<SearchResult[]>([]), [editing, setEditing] = useState<Document>(), [panel, setPanel] = useState<'notes'|'chats'|'memory'|'activity'>('notes')
+  const [error, setError] = useState(''), [notice, setNotice] = useState('')
+
+  function showError(reason: unknown) { setError(reason instanceof Error ? reason.message : String(reason)) }
+  async function refresh(next = workspace) {
+    if (!next) return
+    const [nextDocuments, nextChats, nextMemories, nextGraph, nextActivity] = await Promise.all([window.waypoint.listDocuments(next.id), window.waypoint.listChats(next.id), window.waypoint.listMemories(next.id), window.waypoint.graph(next.id), window.waypoint.activity(next.id)])
+    setDocuments(nextDocuments); setChats(nextChats); setMemories(nextMemories); setGraph(nextGraph); setActivity(nextActivity)
+  }
+  async function selectWorkspace(next: WorkspaceSummary) { setWorkspace(next); setResults([]); await refresh(next) }
+  useEffect(() => { void window.waypoint.bootstrap().then(async ({ workspaces: available }) => { setWorkspaces(available); if (available[0]) await selectWorkspace(available[0]) }).catch(showError) // Initial bootstrap intentionally runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  async function createWorkspace(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(''); try { const created=await window.waypoint.createWorkspace(String(new FormData(event.currentTarget).get('name') ?? '')); setWorkspaces((current)=>[...current,created]); await selectWorkspace(created) } catch (reason) { showError(reason) } }
+  async function saveDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!workspace) return
+    const form = event.currentTarget, data = new FormData(form), title = String(data.get('title') ?? ''), body = String(data.get('body') ?? '')
+    try { if (editing) await window.waypoint.updateDocument(workspace.id, editing.id, title, body); else await window.waypoint.createDocument(workspace.id, title, body); setEditing(undefined); form.reset(); await refresh() } catch (reason) { showError(reason) }
+  }
+  async function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!workspace) return; const data = new FormData(event.currentTarget), query = String(data.get('query') ?? ''); try { setResults(data.get('method') === 'semantic' ? await window.waypoint.searchSemantic(workspace.id, query) : await window.waypoint.searchText(workspace.id, query)) } catch (reason) { showError(reason) } }
+  async function remove(kind: 'document'|'chat'|'memory', objectId: string) { if (!workspace || !window.confirm(`Delete this ${kind} and all owned local data? This cannot be undone.`)) return; try { await window.waypoint.deleteObject(workspace.id, kind, objectId); setEditing(undefined); setResults((current) => current.filter((result) => result.objectId !== objectId)); await refresh() } catch (reason) { showError(reason) } }
+  async function index(documentId: string) { if (!workspace) return; try { const result = await window.waypoint.indexDocument(workspace.id, documentId); setNotice(`Semantic index updated with ${result.model}.`); await refresh() } catch (reason) { showError(reason) } }
+  async function attach(documentId: string) { if (!workspace) return; try { const result = await window.waypoint.attachDocument(workspace.id, documentId); if (!result.canceled) setNotice('Attachment copied into the local workspace store.') } catch (reason) { showError(reason) } }
+  async function addChat(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!workspace) return; const form=event.currentTarget,data=new FormData(form); try { await window.waypoint.captureChat(workspace.id,String(data.get('title')??''),String(data.get('body')??'')); form.reset(); await refresh() } catch(reason){showError(reason)} }
+  async function addToChat(event: FormEvent<HTMLFormElement>, chatId: string) { event.preventDefault(); if (!workspace) return; const form=event.currentTarget, body=String(new FormData(form).get('body')??''); try { await window.waypoint.addMessage(workspace.id,chatId,'user',body); form.reset(); await refresh() } catch(reason){showError(reason)} }
+  async function addMemory(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!workspace) return; const form=event.currentTarget,data=new FormData(form); try { const source=String(data.get('source')??'')||undefined; await window.waypoint.captureMemory(workspace.id,String(data.get('title')??''),String(data.get('body')??''),source,data.get('sourceOwned')==='on'); form.reset(); await refresh() } catch(reason){showError(reason)} }
+  async function exportWorkspace(){if(!workspace)return;try{const result=await window.waypoint.exportWorkspace(workspace.id);if(!result.canceled)setNotice('Workspace export saved.')}catch(reason){showError(reason)}}
+  async function restoreWorkspace(){try{const result=await window.waypoint.restoreWorkspace();if(result.workspace){setWorkspaces((current)=>[...current,result.workspace!]);await selectWorkspace(result.workspace)}}catch(reason){showError(reason)}}
+
+  if (!workspace) return <main className="onboarding"><p className="eyebrow">WAYPOINT · LOCAL FIRST</p><h1>Start where<br />you are.</h1><p className="summary">Create a personal workspace stored on this computer. Nothing syncs or leaves your device during this phase.</p><form onSubmit={createWorkspace}><label>Workspace name<input name="name" required maxLength={120} placeholder="Personal" autoFocus /></label><button>Create local workspace</button></form>{error && <p role="alert" className="error">{error}</p>}</main>
+  const displayItems = results.length ? results.map((result) => ({ id: result.objectId, kind: result.objectKind, title: result.title, body: result.excerpt, detail: `${result.method} · ${result.objectKind} ${result.objectId.slice(0, 8)}${result.revisionId ? ` · revision ${result.revisionId.slice(0,8)}`:''}` })) : documents.map((document) => ({ id: document.id, kind: 'document' as const, title: document.title, body: document.body.slice(0, 180), detail: `revision ${document.revisionId.slice(0,8)}` }))
+  return <div className="shell">
+    <header><div><p className="eyebrow">PERSONAL WORKSPACE</p><h2>{workspace.name}</h2><p className="path">Waypoint data root: {workspace.localPath}</p></div><div className="header-actions"><label className="workspace-picker">Workspace<select value={workspace.id} onChange={(event)=>{const selected=workspaces.find((candidate)=>candidate.id===event.target.value);if(selected)void selectWorkspace(selected)}}>{workspaces.map((candidate)=><option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><span className="status">Local only</span><button className="quiet" onClick={()=>void exportWorkspace()}>Export</button><button className="quiet" onClick={()=>void restoreWorkspace()}>Restore</button></div></header>
+    <nav aria-label="Workspace sections">{(['notes','chats','memory','activity'] as const).map((name)=><button key={name} className={panel===name?'active':'quiet'} onClick={()=>setPanel(name)}>{name}</button>)}</nav>
+    {error && <p role="alert" className="error">{error}</p>}{notice&&<p role="status" className="notice">{notice}</p>}
+    {panel==='notes'&&<div className="columns"><section className="composer"><h3>{editing?'Edit note':'Capture a note'}</h3><form key={editing?.revisionId??'new'} onSubmit={saveDocument}><label>Title<input name="title" maxLength={300} required defaultValue={editing?.title}/></label><label>Markdown or plain text<textarea name="body" rows={12} required defaultValue={editing?.body}/></label><button>{editing?'Save revision':'Save note'}</button>{editing&&<button type="button" className="quiet" onClick={()=>setEditing(undefined)}>Cancel</button>}</form></section><section className="library"><form className="search" onSubmit={search}><input name="query" aria-label="Search workspace" placeholder="Search this workspace…" required/><select name="method" aria-label="Search method"><option value="text">Text</option><option value="semantic">Semantic · Ollama</option></select><button>Search</button></form><h3>{results.length?'Search results':'Recent notes'}</h3><div className="cards">{displayItems.map((item)=><article key={item.id}><button className="card-main" onClick={()=>{if(item.kind==='document')setEditing(documents.find((document)=>document.id===item.id));else setPanel(item.kind==='memory'?'memory':'chats')}}><h4>{item.title}</h4><p>{item.body}</p><small>{item.detail}</small></button>{item.kind==='document'&&<div className="card-actions"><button className="quiet" onClick={()=>void attach(item.id)}>Attach</button><button className="quiet" onClick={()=>void index(item.id)}>Index</button><button className="danger" onClick={()=>void remove('document',item.id)}>Delete</button></div>}{item.kind==='memory'&&<button className="danger" onClick={()=>void remove('memory',item.id)}>Delete</button>}</article>)}{!documents.length&&!results.length&&<p className="empty">Your first durable note will appear here.</p>}</div></section></div>}
+    {panel==='chats'&&<div className="columns"><section className="composer"><h3>New durable chat</h3><form onSubmit={addChat}><label>Title<input name="title" required/></label><label>First message<textarea name="body" rows={8} required/></label><button>Save chat</button></form></section><section className="library"><h3>Chats</h3><div className="cards">{chats.map((chat)=><article key={chat.id}><div><h4>{chat.title}</h4>{chat.messages.map((message)=><p key={message.id}><small>{message.role}</small> {message.body}</p>)}<form className="inline-form" onSubmit={(event)=>void addToChat(event,chat.id)}><input name="body" aria-label={`Add message to ${chat.title}`} required/><button>Add message</button></form></div><button className="danger" onClick={()=>void remove('chat',chat.id)}>Delete</button></article>)}</div></section></div>}
+    {panel==='memory'&&<div className="columns"><section className="composer"><h3>Add memory</h3><form onSubmit={addMemory}><label>Title<input name="title" required/></label><label>Memory<textarea name="body" rows={7} required/></label><label>Connect from note<select name="source"><option value="">No connection</option>{documents.map((document)=><option key={document.id} value={document.id}>{document.title}</option>)}</select></label><label className="check"><input type="checkbox" name="sourceOwned"/>Delete this memory if its source is deleted</label><button>Save memory</button></form></section><section className="library"><h3>Memory graph</h3><p className="empty">{graph.nodes.length} nodes · {graph.edges.length} relationships</p><div className="edge-list">{graph.edges.map((edge)=><p key={edge.id}>{graph.nodes.find((node)=>node.id===edge.fromId)?.title??'Unknown'} <strong>{edge.type}</strong> {graph.nodes.find((node)=>node.id===edge.toId)?.title??'Unknown'}</p>)}</div><div className="cards">{memories.map((memory)=><article key={memory.id}><div><h4>{memory.title}</h4><p>{memory.body}</p><small>{memory.ownership}{memory.sourceObjectId?` · source ${memory.sourceObjectId.slice(0,8)}`:''}</small></div><button className="danger" onClick={()=>void remove('memory',memory.id)}>Delete</button></article>)}</div></section></div>}
+    {panel==='activity'&&<section className="library full"><h3>Activity timeline</h3><div className="cards">{activity.map((item)=><article key={String(item.id)}><div><h4>{String(item.action)}</h4><small>{String(item.createdAt)} · {String(item.objectKind??'workspace')} {String(item.objectId??'').slice(0,8)}</small></div></article>)}</div></section>}
+  </div>
 }
 
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)

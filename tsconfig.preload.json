@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "ignoreDeprecations": "6.0",
+    "types": ["node"],
+    "outDir": "dist-preload",
+    "rootDir": "electron",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["electron/preload.ts"]
+}
