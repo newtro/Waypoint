@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Waypoint compass orbit</title>
+  <defs><mask id="compass-cutout"><rect width="64" height="64" fill="white"/><circle cx="32" cy="32" r="3.4" fill="black"/></mask></defs>
+  <circle cx="32" cy="32" r="24" fill="none" stroke="#17264d" stroke-width="6" stroke-dasharray="130 21" transform="rotate(-40 32 32)"/>
+  <path d="M32 15 39 32 32 49 25 32Z" fill="#17264d" mask="url(#compass-cutout)"/>
+  <circle cx="48.5" cy="14.5" r="5" fill="#3159e8"/>
+</svg>

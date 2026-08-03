@@ -159,3 +159,4 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Hard-delete and note management stay reachable but unobtrusive. Conversation-derived notes are created with their provenance relationship in one transaction.
 - Right drawers and responsive navigation are modal overlays with explicit focus containment and restoration.
 - Window display, normal bounds, and maximized state are private local preferences. Restore validates live displays and bounds, recenters off-screen state, and falls back safely when state is corrupt or a monitor is disconnected.
+- The chosen Waypoint identity is the compass-orbit mark. The production UI uses a deterministic transparent SVG recreation rather than shipping the chroma-green concept raster; navy compass/orbit geometry and a blue waypoint node remain legible at sidebar and message-avatar sizes.
