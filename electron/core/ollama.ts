@@ -9,6 +9,15 @@ export class LocalOllamaEmbeddings {
     }
   }
 
+  async status(): Promise<{ configured: true; reachable: boolean; model: string; modelInstalled: boolean }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(2_000), redirect: 'error' })
+      if (!response.ok) return { configured: true, reachable: false, model: this.model, modelInstalled: false }
+      const payload = await response.json() as { models?: Array<{name:string}> }
+      return { configured: true, reachable: true, model: this.model, modelInstalled: Boolean(payload.models?.some((candidate)=>candidate.name===this.model||candidate.name===`${this.model}:latest`)) }
+    } catch { return { configured: true, reachable: false, model: this.model, modelInstalled: false } }
+  }
+
   async embed(inputs: string[]): Promise<{ vectors: number[][]; modelDigest: string }> {
     if (!inputs.length) throw new Error('Embedding input is required')
     const [embeddingResponse, tagsResponse] = await Promise.all([

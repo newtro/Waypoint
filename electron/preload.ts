@@ -29,5 +29,9 @@ contextBridge.exposeInMainWorld('waypoint', {
   captureMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned = false) => ipcRenderer.invoke('waypoint:capture-memory', { workspaceId, title, body, sourceObjectId, sourceOwned }),
   createRelationship: (workspaceId: string, fromId: string, toId: string, type: string) => ipcRenderer.invoke('waypoint:create-relationship', { workspaceId, fromId, toId, type }),
   exportWorkspace: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-workspace', { workspaceId }),
+  verifyBackup: () => ipcRenderer.invoke('waypoint:verify-backup'),
   restoreWorkspace: () => ipcRenderer.invoke('waypoint:restore-workspace'),
+  diagnostics: (workspaceId:string)=>ipcRenderer.invoke('waypoint:diagnostics',{workspaceId}),
+  rebuildSearch: (workspaceId:string)=>ipcRenderer.invoke('waypoint:rebuild-search',{workspaceId}),
+  exportDiagnostics: (workspaceId:string)=>ipcRenderer.invoke('waypoint:export-diagnostics',{workspaceId}),
 })

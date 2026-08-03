@@ -3,13 +3,15 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './core/store.js'
 import { LocalOllamaEmbeddings } from './core/ollama.js'
 import { CliWorkbench } from './core/ai-workbench.js'
 import { detectCli } from '../spikes/cli-capabilities.js'
 import { deleteWithExecutionCancellation, startDurableChild } from './core/execution-lifecycle.js'
+import { readBackup, writeAtomicBackup } from './core/backup.js'
+import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let store: WorkspaceStore
@@ -28,6 +30,18 @@ function handle(channel: string, listener: (event: IpcMainInvokeEvent, input: un
 function text(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string' || value.length > max) throw new Error(`Invalid ${field}`)
   return value
+}
+
+async function collectDiagnostics(workspaceId:string) {
+  const local=store.localDiagnostics(workspaceId),capabilities=await Promise.all([detectCli('codex'),detectCli('claude')])
+  return runDiagnostics({
+    database:async()=>({schemaVersion:local.schemaVersion,expectedSchemaVersion:local.expectedSchemaVersion,integrity:local.integrity,foreignKeyViolations:local.foreignKeyViolations}),
+    storage:async()=>{const stats=statfsSync(app.getPath('userData'));let writable=true;try{accessSync(app.getPath('userData'),constants.W_OK)}catch{writable=false}return {freeBytes:Number(stats.bavail)*Number(stats.bsize),minimumFreeBytes:512*1024*1024,writable}},
+    attachments:async()=>({missingFiles:local.missingFiles,orphanFiles:local.orphanFiles,digestMismatches:local.digestMismatches}),
+    search:async()=>({indexedObjects:local.indexedObjects,expectedObjects:local.expectedObjects}), embeddings:()=>embeddings.status(),
+    cli:async(provider)=>{const state=capabilities.find((candidate)=>candidate.name===provider);return {configured:Boolean(state?.executable),available:Boolean(state?.available),version:state?.version}},
+    sync:async()=>({configured:false,pending:0,conflicts:0,activePeers:0}),
+  })
 }
 
 function registerIpc(): void {
@@ -128,19 +142,37 @@ function registerIpc(): void {
   handle('waypoint:create-relationship', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.createRelationship(text(value.workspaceId, 'workspace ID', 64), text(value.fromId, 'source ID', 64), text(value.toId, 'target ID', 64), text(value.type, 'relationship type', 80)) })
   handle('waypoint:export-workspace', async (_event, input: unknown) => {
     const workspaceId = text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)
-    const chosen = await dialog.showSaveDialog({ title: 'Export Waypoint workspace', defaultPath: 'waypoint-export.json', filters: [{ name: 'Waypoint archive', extensions: ['json'] }] })
+    const warning = await dialog.showMessageBox({ type:'warning',buttons:['Create plaintext backup','Cancel'],defaultId:1,cancelId:1,title:'Backup privacy',message:'Waypoint backups are plaintext.',detail:'Choose a protected location. Deleting content in Waypoint does not delete backup copies.' })
+    if(warning.response!==0)return {canceled:true}
+    const chosen = await dialog.showSaveDialog({ title: 'Back up Waypoint workspace', defaultPath: 'waypoint-backup.json', filters: [{ name: 'Waypoint backup', extensions: ['json'] }] })
     if (chosen.canceled || !chosen.filePath) return { canceled: true }
-    const temporaryPath = `${chosen.filePath}.tmp-${randomUUID()}`
-    try { writeFileSync(temporaryPath, JSON.stringify(store.exportWorkspace(workspaceId), null, 2), { flag: 'wx' }); renameSync(temporaryPath, chosen.filePath) }
-    catch (error) { rmSync(temporaryPath, { force: true }); throw error }
-    return { canceled: false }
+    const result=writeAtomicBackup(chosen.filePath,store.exportWorkspace(workspaceId))
+    return { canceled: false, ...result }
+  })
+  handle('waypoint:verify-backup', async () => {
+    const chosen=await dialog.showOpenDialog({title:'Verify Waypoint backup',properties:['openFile'],filters:[{name:'Waypoint backup',extensions:['json']}]})
+    if(chosen.canceled||!chosen.filePaths[0])return {canceled:true}
+    const archive=readBackup(chosen.filePaths[0])
+    return {canceled:false,version:archive.version,exportedAt:archive.exportedAt,integrity:archive.integrity}
   })
   handle('waypoint:restore-workspace', async () => {
-    const chosen = await dialog.showOpenDialog({ title: 'Restore Waypoint workspace', properties: ['openFile'], filters: [{ name: 'Waypoint archive', extensions: ['json'] }] })
+    const chosen = await dialog.showOpenDialog({ title: 'Restore Waypoint backup as a new workspace', properties: ['openFile'], filters: [{ name: 'Waypoint backup', extensions: ['json'] }] })
     if (chosen.canceled || !chosen.filePaths[0]) return { canceled: true }
-    const archive = JSON.parse(readFileSync(chosen.filePaths[0], 'utf8')) as Parameters<WorkspaceStore['restoreWorkspace']>[0]
+    const archive = readBackup(chosen.filePaths[0])
     const base = path.basename(chosen.filePaths[0], '.json')
     return { canceled: false, workspace: store.restoreWorkspace(archive, `${base} restored`, app.getPath('userData')) }
+  })
+  handle('waypoint:diagnostics', async (_event,input:unknown) => {
+    return collectDiagnostics(text((input as Record<string,unknown>).workspaceId,'workspace ID',64))
+  })
+  handle('waypoint:rebuild-search',(_event,input:unknown)=>{store.rebuildTextIndex(text((input as Record<string,unknown>).workspaceId,'workspace ID',64));return {ok:true}})
+  handle('waypoint:export-diagnostics',async (_event,input:unknown)=>{
+    const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64),payload=exportDiagnosticsReport(await collectDiagnostics(workspaceId))
+    const chosen=await dialog.showSaveDialog({title:'Save local diagnostic report',defaultPath:'waypoint-diagnostics.json',filters:[{name:'JSON',extensions:['json']}]})
+    if(chosen.canceled||!chosen.filePath)return {canceled:true}
+    const temporary=`${chosen.filePath}.partial-${randomUUID()}`
+    try{writeFileSync(temporary,payload,{flag:'wx',mode:0o600});renameSync(temporary,chosen.filePath)}catch(error){rmSync(temporary,{force:true});throw error}
+    return {canceled:false}
   })
 }
 

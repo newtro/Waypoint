@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, copyFi
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { ExportArchive, GraphEdge, GraphNode, ObjectKind, SearchResult, WorkspaceSummary } from './types.js'
+import { archiveIntegrity, validateArchive } from './backup.js'
+import { assertSupportedSchema, createMigrationSnapshot, CURRENT_SCHEMA_VERSION, runMigrations, schemaVersion } from './migrations.js'
 
 const now = () => new Date().toISOString()
 const supportedAttachmentTypes = new Set(['text/plain', 'text/markdown'])
@@ -17,6 +19,8 @@ export class WorkspaceStore {
     mkdirSync(this.attachmentRoot, { recursive: true })
     this.db = new DatabaseSync(databasePath)
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;')
+    const priorVersion = assertSupportedSchema(this.db)
+    createMigrationSnapshot(this.db, databasePath, priorVersion)
     this.migrate()
     this.reconcileInterruptedExecutions()
     this.reconcileAttachmentFiles()
@@ -60,6 +64,9 @@ export class WorkspaceStore {
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(2, now())
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(3, now())
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(4, now())
+    runMigrations(this.db, schemaVersion(this.db), [{ version: 5, apply: (database) => database.exec(`
+      CREATE TABLE app_settings(key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+    `) }])
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{id:string;localPath:string}>) {
       const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
       const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)
@@ -395,8 +402,7 @@ export class WorkspaceStore {
   }
 
   restoreWorkspace(archive: ExportArchive, newName: string, newLocalPath: string): WorkspaceSummary {
-    if (archive.version !== 2 && archive.version !== 3) throw new Error('Unsupported archive version')
-    if (!archive.objects || !archive.workspace || archive.integrity !== archiveIntegrity({ version: archive.version, exportedAt: archive.exportedAt, workspace: archive.workspace, objects: archive.objects })) throw new Error('Archive integrity check failed')
+    archive = validateArchive(archive)
     if (!newName.trim() || !path.isAbsolute(newLocalPath)) throw new Error('Workspace name and absolute local path are required')
     const workspace = { id: randomUUID(), name: newName.trim(), localPath: path.resolve(newLocalPath), createdAt: now() }
     const writtenFiles: string[] = []
@@ -493,6 +499,42 @@ export class WorkspaceStore {
     return Object.fromEntries(tables.map((table) => [table, Number((this.db.prepare(`SELECT count(*) count FROM ${table}`).get() as { count: number }).count)]))
   }
 
+  localDiagnostics(workspaceId: string): {
+    schemaVersion: number; expectedSchemaVersion: number; integrity: 'ok'|'corrupt'; foreignKeyViolations:number;
+    missingFiles: number; orphanFiles: number; digestMismatches: number; indexedObjects: number; expectedObjects: number;
+  } {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found')
+    const integrityRows = this.db.prepare('PRAGMA quick_check').all() as Array<Record<string, unknown>>
+    const integrity = integrityRows.length === 1 && Object.values(integrityRows[0])[0] === 'ok' ? 'ok' : 'corrupt'
+    const foreignKeyViolations=(this.db.prepare('PRAGMA foreign_key_check').all() as unknown[]).length
+    const attachments = this.db.prepare('SELECT relative_path,sha256 FROM attachments WHERE workspace_id=?').all(workspaceId) as Array<{relative_path:string;sha256:string}>
+    const referenced = new Set((this.db.prepare('SELECT relative_path FROM attachments').all() as Array<{relative_path:string}>).map((row)=>row.relative_path))
+    let missingFiles = 0, digestMismatches = 0
+    for (const attachment of attachments) {
+      const file = path.join(this.attachmentRoot, attachment.relative_path)
+      if (!existsSync(file)) { missingFiles += 1; continue }
+      if (createHash('sha256').update(readFileSync(file)).digest('hex') !== attachment.sha256) digestMismatches += 1
+    }
+    const orphanFiles = readdirSync(this.attachmentRoot).filter((entry) => !entry.includes('.deleting-') && !referenced.has(entry)).length
+    const indexedObjects = Number((this.db.prepare('SELECT count(*) count FROM search_fts WHERE workspace_id=?').get(workspaceId) as {count:number}).count)
+    const expectedObjects = Number((this.db.prepare(`SELECT
+      (SELECT count(*) FROM documents WHERE workspace_id=?) +
+      (SELECT count(*) FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?) +
+      (SELECT count(*) FROM memories WHERE workspace_id=?) count`).get(workspaceId,workspaceId,workspaceId) as {count:number}).count)
+    return { schemaVersion: schemaVersion(this.db), expectedSchemaVersion: CURRENT_SCHEMA_VERSION, integrity, foreignKeyViolations, missingFiles, orphanFiles, digestMismatches, indexedObjects, expectedObjects }
+  }
+
+  rebuildTextIndex(workspaceId: string): void {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found')
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM search_fts WHERE workspace_id=?').run(workspaceId)
+      this.db.prepare("INSERT INTO search_fts SELECT d.workspace_id,d.id,'document',r.id,d.title,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=?").run(workspaceId)
+      this.db.prepare("INSERT INTO search_fts SELECT c.workspace_id,m.id,'message',NULL,c.title,m.body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?").run(workspaceId)
+      this.db.prepare("INSERT INTO search_fts SELECT workspace_id,id,'memory',NULL,title,body FROM memories WHERE workspace_id=?").run(workspaceId)
+      this.activity(workspaceId, 'maintenance', 'search.rebuilt', workspaceId, 'workspace', {})
+    })
+  }
+
   private activity(workspaceId: string, category: string, action: string, objectId: string, objectKind: string, metadata: Record<string, unknown>): void {
     this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, category, action, objectId, objectKind, JSON.stringify(metadata), now())
   }
@@ -552,10 +594,6 @@ function cosine(left: number[], right: number[]): number {
   let dot = 0, leftMagnitude = 0, rightMagnitude = 0
   for (let index = 0; index < left.length; index += 1) { dot += left[index] * right[index]; leftMagnitude += left[index] ** 2; rightMagnitude += right[index] ** 2 }
   return leftMagnitude && rightMagnitude ? dot / Math.sqrt(leftMagnitude * rightMagnitude) : Number.NaN
-}
-
-function archiveIntegrity(archive: Omit<ExportArchive, 'integrity'>): string {
-  return createHash('sha256').update(JSON.stringify(archive)).digest('hex')
 }
 
 function remapArchiveValue(value: unknown, idMap: Map<string, string>, oldWorkspaceId: string, newWorkspaceId: string): unknown {

@@ -1,4 +1,5 @@
 import type { GraphEdge, GraphNode, SearchResult, WorkspaceSummary } from '../electron/core/types'
+import type { DiagnosticsReport } from '../electron/core/diagnostics'
 
 declare global {
   interface Window {
@@ -29,8 +30,12 @@ declare global {
       createMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string): Promise<string>
       captureMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned?: boolean): Promise<string>
       createRelationship(workspaceId: string, fromId: string, toId: string, type: string): Promise<string>
-      exportWorkspace(workspaceId: string): Promise<{ canceled: boolean }>
+      exportWorkspace(workspaceId: string): Promise<{ canceled: boolean; bytes?:number; integrity?:string }>
+      verifyBackup(): Promise<{canceled:boolean;version?:number;exportedAt?:string;integrity?:string}>
       restoreWorkspace(): Promise<{ canceled: boolean; workspace?: WorkspaceSummary }>
+      diagnostics(workspaceId:string):Promise<DiagnosticsReport>
+      rebuildSearch(workspaceId:string):Promise<{ok:true}>
+      exportDiagnostics(workspaceId:string):Promise<{canceled:boolean}>
     }
   }
 }

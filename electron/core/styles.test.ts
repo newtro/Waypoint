@@ -22,4 +22,11 @@ describe('desktop responsive shell', () => {
     expect(styles).toMatch(/\.cards article>div:first-child\s*\{[^}]*min-width:0/)
     expect(styles).toMatch(/\.cards h4,\.cards p,\.cards small\s*\{[^}]*overflow-wrap: anywhere/)
   })
+
+  it('provides visible keyboard focus, reduced motion, and zoom-friendly stacking', () => {
+    expect(styles).toMatch(/button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible\s*\{[^}]*outline:/)
+    expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)/)
+    expect(styles).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.chat-composer,\.search\s*\{\s*grid-template-columns:minmax\(0,1fr\)/)
+    expect(styles).toMatch(/\.diagnostic-grid\s*\{[^}]*minmax\(min\(100%,280px\),1fr\)/)
+  })
 })

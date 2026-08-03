@@ -30,12 +30,23 @@
 - Scope and acceptance criteria: `implementation/PHASE_1_PLAN.md`.
 - Evidence: `implementation/PHASE_1_EVIDENCE.md`.
 
-## Later phases
+## Phase 2 — AI workbench alpha
 
-Phases 2–4 retain the gates in `outputs/ROADMAP.md`. Their detailed evidence will be added only when each phase begins.
+- Status: current-Mac gate completed; see `implementation/PHASE_2_PLAN.md` and `implementation/PHASE_2_EVIDENCE.md`.
+
+## Phase 3 — multi-peer private-beta foundation
+
+- Status: Mac-local protocol foundation completed; see `implementation/PHASE_3_PLAN.md` and `implementation/PHASE_3_EVIDENCE.md`. Real Windows/Ubuntu/TLS/public-network evidence remains open.
+
+## Phase 4 — current-Mac hardening release candidate
+
+- Executor: Phase 4 implementation task.
+- Reviewer: fresh independent context, with focused re-review after four high-severity findings were repaired.
+- Scope and criteria: `implementation/PHASE_4_PLAN.md`.
+- Evidence: `implementation/PHASE_4_EVIDENCE.md`.
 
 ## Current gate
 
-Phase 1 passes its current-macOS gate with 48 tests, lint, build, audit, native packaging, bounded launch, and clean independent re-review.
+Phase 4 current-Mac verification is recorded in its evidence. The signed/published cross-platform release gate remains open.
 
 Windows-native build/package/launch, filesystem, update-path, and child-process validation is required immediately when the project moves to Windows, by explicit user decision.

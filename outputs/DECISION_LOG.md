@@ -113,3 +113,14 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Attachment transfer uses bounded independently authenticated chunks so interruption resumes without trusting partial files. Embeddings remain device-local and are recomputed rather than synchronized.
 - Every peer run requires explicit target approval in the MVP. The target chooses and enforces its own `peerEligible` security profile; a requester cannot transmit or widen roots, tools, secrets, network, duration, or concurrency.
 - The current deliverable is a Mac-local protocol and relay simulation. Real Ubuntu/AWS, TLS/domain/public networking, native Windows validation, signing/update policy, production recovery, and professional protocol audit remain mandatory deferred gates, not implied successes.
+
+## Phase 4 current-Mac hardening decisions (2026-08-03)
+
+- Waypoint has no product telemetry or automatic crash upload in the MVP. Guided diagnostics run locally; a user may explicitly save a content-minimized report whose paths, content, prompts, credentials, keys, and raw errors are excluded.
+- The MVP recovery baseline is a bounded, corruption-checked plaintext logical backup at a user-selected location. SHA-256 detects accidental corruption, not malicious replacement or authenticity. External backups have a retention lifecycle separate from live deletion and must be protected and deleted by the user.
+- Restore always creates a new workspace and object identities. Authored content, supported attachments, content-minimized lifecycle history, execution provenance, and profile definitions may be restored; embeddings/full-text indexes rebuild, and device keys, credentials, transport/session state, and peer enrollment are excluded.
+- Schema 5 begins an ordered migration registry from the known schema-4 baseline. A known old database receives a retained pre-migration SQLite snapshot; migrations are transactional and stamp only after success. A newer unknown schema fails closed, and Waypoint never automatically downgrades.
+- Current-Mac backup replacement uses a durable temporary file, verified deterministic prior copy, one atomic rename over the destination, and directory synchronization. Windows replacement semantics remain a mandatory platform-contingent test.
+- Direct packages are pinned exactly with Node `22.16.x`, npm `10.9.x`, and lockfile reproducibility. High-severity audit, complete declared-license inventory, and a production CycloneDX SBOM are release evidence.
+- The version-2 performance fixture and absolute budgets are current-Mac regression controls, not claims for Windows or the oldest supported hardware. It measures startup/reopen, search, index writes, attachment ingestion, graph, diagnostics, and database growth.
+- Docker remains unnecessary. Packaged clients do not require Node; source development and the future native Ubuntu service use pinned native Node/npm paths.
