@@ -85,3 +85,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - The independent first pass found 3 high/3 medium issues; all were repaired. Final independent severity verdict: blocker 0, high 0, medium 0, low 0.
 - Final gate: 35 suites / 179 tests, lint, build, zero-vulnerability high audit, native macOS package, packaged runtime closure, and diff-check pass.
 - External stop remains: no AWS/Ubuntu deployment, public transport, Windows/signing environment, external credentials, accounts, or data.
+
+## 2026-08-03 — R1 secure relay local preparation
+
+- Executor: primary implementation task. Reviewer: fresh independent security/operations context.
+- Status: local preparation completed; canonical hosted R1 remains at the explicit external authority gate. Scope: `implementation/R1_LOCAL_PREPARATION_PLAN.md`; evidence: `implementation/R1_LOCAL_PREPARATION_EVIDENCE.md`.
+- Independent first pass found blocker 1, high 5, medium 5. Repairs and expanded fixtures produced a final clean verdict: blocker 0, high 0, medium 0, low 0.
+- Final gate: 39 suites / 196 tests, lint, build, zero-vulnerability high audit, native macOS package, packaged runtime closure, and diff-check pass.
+- External stop: no AWS resources, DNS, TLS identity, firewall, credentials, backup destination, public network, employer environment, or real two-peer claim without explicit user authority/access.

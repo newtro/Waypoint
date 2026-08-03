@@ -1,0 +1,33 @@
+[Unit]
+Description=Waypoint opaque sync relay
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/waypoint-relay/authority.json
+
+[Service]
+Type=simple
+User=waypoint-relay
+Group=waypoint-relay
+EnvironmentFile=/etc/waypoint-relay/relay.env
+ExecStart=/usr/bin/node /opt/waypoint-relay/dist-electron/node/relay/entry.js
+Restart=on-failure
+RestartPreventExitStatus=78
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/waypoint-relay
+ReadOnlyPaths=/etc/waypoint-relay
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

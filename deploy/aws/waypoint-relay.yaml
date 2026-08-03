@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Inert-by-default Waypoint relay host definition. Deploy only after explicit user authorization.
+Parameters:
+  VpcId: {Type: 'AWS::EC2::VPC::Id'}
+  SubnetId: {Type: 'AWS::EC2::Subnet::Id'}
+  AllowedClientCidr: {Type: String, AllowedPattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})/(?:[0-9]|[12][0-9]|3[0-2])$'}
+  UbuntuAmiId: {Type: 'AWS::EC2::Image::Id'}
+  InstanceType: {Type: String, Default: t4g.small, AllowedValues: [t4g.small]}
+  RootVolumeGiB: {Type: Number, Default: 20, MinValue: 20, MaxValue: 200}
+Resources:
+  RelaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Waypoint relay TLS ingress from explicitly approved client CIDR
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: !Ref AllowedClientCidr}
+      # An empty list causes EC2 to restore its default allow-all rule. This
+      # localhost-only rule keeps egress fail-closed until an approved path is added.
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 1, ToPort: 1, CidrIp: 127.0.0.1/32}
+  RelayHost:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: !Ref UbuntuAmiId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref RelaySecurityGroup]
+      MetadataOptions: {HttpEndpoint: enabled, HttpTokens: required, HttpPutResponseHopLimit: 1}
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: {Encrypted: true, DeleteOnTermination: false, VolumeSize: !Ref RootVolumeGiB, VolumeType: gp3}
+      Tags: [{Key: Name, Value: waypoint-relay-NOT-AUTHORIZED-FOR-DEPLOYMENT}]
+Outputs:
+  HostId: {Value: !Ref RelayHost}
