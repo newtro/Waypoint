@@ -485,6 +485,7 @@ export function App() {
       showError(reason);
     }
   }
+  async function delegateTask(){if(!workspace||!selectedChat)return;const parent=runs.find((item)=>item.chatId===selectedChat.id&&Number(item.depth)===0&&item.cli==='claude'&&item.status==='completed'&&Array.isArray(item.events)&&item.events.some((event)=>event&&typeof event==='object'&&(event as Record<string,unknown>).type==='text'&&String((event as Record<string,unknown>).text??'').trim())&&!runs.some((child)=>child.parentExecutionId===item.id));if(!parent){setError('No completed Claude result has an unused child-task budget. Codex child tasks remain unavailable until a reviewed no-tool mode exists.');return}const type=window.prompt('Task type: analyze, summarize, or critique','critique')?.trim() as 'analyze'|'summarize'|'critique'|undefined;if(!type)return;const instruction=window.prompt('Bounded child instruction','Critique the prior answer for correctness and missing risks.')?.trim();if(!instruction)return;const source=selectedChat.messages.find((item)=>item.id===String(parent.sourceMessageId));if(!source){setError('The parent source message is unavailable.');return}try{await window.waypoint.runChat(workspace.id,selectedChat.id,source.id,'claude',String(parent.securityProfileId),instruction,parent.model?String(parent.model):undefined,String(parent.id),[],type);setNotice(`${type} child task started with the parent profile and a 60-second cap.`);await refresh()}catch(reason){showError(reason);await refresh().catch(showError)}}
   async function remove(kind: 'document' | 'chat' | 'memory', id: string) {
     if (!workspace || !window.confirm(`Delete this ${kind} and its owned local data? This cannot be undone.`)) return;
     try {
@@ -910,6 +911,7 @@ export function App() {
               </button>
             </div>
           )}
+          {selectedChat&&<button className="knowledge-button" onClick={()=>void delegateTask()}>Delegate task</button>}
           <button className="knowledge-button" onClick={() => setDrawer('knowledge')}>
             Knowledge <span>⌘K</span>
           </button>

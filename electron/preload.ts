@@ -166,7 +166,7 @@ contextBridge.exposeInMainWorld('waypoint', {
       chatId,
     });
   },
-  runChat: (workspaceId: string, chatId: string, sourceMessageId: string, cli: 'codex' | 'claude', securityProfileId: string, prompt: string, model?: string, parentExecutionId?: string, attachmentIds: string[] = []) =>
+  runChat: (workspaceId: string, chatId: string, sourceMessageId: string, cli: 'codex' | 'claude', securityProfileId: string, prompt: string, model?: string, parentExecutionId?: string, attachmentIds: string[] = [],taskType?:'analyze'|'summarize'|'critique') =>
     ipcRenderer.invoke('waypoint:run-chat', {
       workspaceId,
       chatId,
@@ -177,6 +177,7 @@ contextBridge.exposeInMainWorld('waypoint', {
       model,
       parentExecutionId,
       attachmentIds,
+      taskType,
     }),
   cancelExecution: (runId: string) => {
     if (!currentWorkspaceId) throw new Error('No active workspace');

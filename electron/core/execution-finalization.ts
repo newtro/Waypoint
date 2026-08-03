@@ -1,4 +1,5 @@
 import type { ExecutionEvent, RunStatus } from './ai-workbench.js'
+import { canonicalExecutionText } from './execution-output.js'
 
 type TerminalResult = { status: Exclude<RunStatus, 'queued' | 'running'>; exitCode: number | null; error?: string }
 
@@ -21,8 +22,7 @@ export async function finalizeExecution(
       const storedEvents = store.listExecutions(input.workspaceId, input.chatId).find((run) => run.id === input.runId)?.events
       const durableEvents = Array.isArray(storedEvents) ? storedEvents.filter((event): event is Record<string, unknown> => Boolean(event) && typeof event === 'object') : []
       const events: Array<Record<string, unknown>> = input.fallbackEvents?.length ? input.fallbackEvents : durableEvents
-      const textEvents = events.filter((event) => event.type === 'text').map((event) => typeof event.text === 'string' ? event.text : '')
-      const answer = (input.cli === 'claude' ? textEvents.at(-1) ?? '' : textEvents.join('')).trim()
+      const answer = canonicalExecutionText(input.cli, events)
       store.finishExecution(input.runId, input.workspaceId, input.result, answer)
       return 'persisted'
     } catch (error) {

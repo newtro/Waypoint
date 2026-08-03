@@ -241,3 +241,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Default fallback off. A proposal may describe opt-in fallback only between currently healthy local signed-in CLIs without changing workspace, device, profile, privacy, cost, or network boundary.
 - Recompute eligibility in the trusted main process immediately before execution creation. Renderer selection is a preference, never authority.
 - Unsupported attachments remain local with truthful per-provider eligibility; they do not silently cross providers or become model input.
+
+## R5 Slice 2 — bounded local child tasks (2026-08-03)
+
+- Delegation is explicit and limited to one typed child (`analyze`, `summarize`, `critique`) from one completed root result. Recursive and duplicate delegation remain forbidden.
+- Permit Claude children only because its reviewed adapter disables tools. Codex child tasks fail truthfully until a reviewed no-tool invocation is available; read-only filesystem sandboxing alone is not represented as no tools.
+- Child context is a maximum 100,000-character parent result labeled untrusted plus a maximum 4,000-character user instruction. It does not inherit attachments, hidden chat history, secrets, connectors, or new roots.
+- Cap child runtime at 60 seconds or the lower profile cap. Provider, workspace, chat, local device, profile, concurrency, and fallback policy cannot change.
+- Parent cancellation terminalizes queued children before spawn and cancels running children. Startup rechecks durable queued state after CLI detection.

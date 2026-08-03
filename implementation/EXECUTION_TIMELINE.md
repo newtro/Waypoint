@@ -160,3 +160,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Implemented a deterministic signed-in CLI capability registry, explainable route proposals, attachment eligibility, fail-closed main-process enforcement, visible local route/profile, and fallback-off default.
 - Initial review found one high and two mediums. Repairs unified displayed/submitted profile state with stale-response suppression, aligned attachment MIME/byte eligibility, and persisted/revalidated routed CLI version before spawn.
 - Final verdict: clean, blocker 0 / high 0 / medium 0. Terminal gate: 62 suites / 276 tests, 39 focused reviewer tests, lint, build, zero vulnerabilities/undeclared licenses, native arm64 package, packaged runtime closure/launch, and diff hygiene.
+
+## R5 Slice 2 — bounded local child tasks (2026-08-03)
+
+- Implemented explicit typed child manifests, one-child/depth-one same-authority enforcement, bounded parent-result context, 60-second runtime, durable task lineage, and parent cancellation propagation.
+- Initial review found three highs and two mediums: Codex tools were not disabled, parent output was absent, queued cancellation raced spawn, non-completed roots were eligible, and integration coverage was weak. Repairs restricted children to reviewed no-tools Claude, required completed text output, labeled/bounded parent context, terminalized queued children, rechecked queued state after detection, aligned UI, and added tests.
+- Follow-up review found a medium canonical-output mismatch and a low recovery-coverage gap. Repairs shared Claude terminal-frame selection with durable finalization and proved backup/restore remaps lineage, preserves typed provenance, and interrupts queued authority.
+- Final independent verdict: clean, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 63 suites / 278 tests, lint, build, zero vulnerabilities/undeclared licenses, native arm64 package, packaged runtime closure/launch, and diff hygiene.

@@ -20,6 +20,7 @@ import { ProtectedSyncVault } from './core/sync/protected-sync-vault.js';
 import { DesktopSyncService } from './core/sync/desktop-sync-service.js';
 import { recordSyncActivityBestEffort } from './core/activity-recording.js';
 import { assertRoute, proposeRoute } from './core/provider-routing.js';
+import {assertChildAgainstParent,childContext,createChildTask,type ChildTaskManifest} from './core/agent-policy.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
@@ -459,6 +460,7 @@ function registerIpc(): void {
     if (!workspace) throw new Error('Workspace not found');
     const profile = store.listSecurityProfiles(workspaceId).find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error('Security profile not found');
+    let childTask:ChildTaskManifest|undefined;if(parentExecutionId){childTask=createChildTask({type:text(value.taskType,'child task type',20),instruction:prompt,parentExecutionId,provider:cli as 'codex'|'claude',securityProfileId:profileId,profileMaxDurationMs:profile.maxDurationMs});const parent=store.listExecutions(workspaceId,chatId).find((item)=>item.id===parentExecutionId);if(!parent)throw new Error('Parent execution not found');assertChildAgainstParent(childTask,parent);if(attachmentIds.length)throw new Error('Child tasks cannot receive attachments');prompt=childContext(parent,childTask)}
     const chatAttachmentIds = new Set(store.listChatAttachments(workspaceId, chatId).map((attachment) => attachment.id));
     if (attachmentIds.some((id) => !chatAttachmentIds.has(id))) throw new Error('Attachment not found in chat');
     const attachmentMetadata=new Map(store.listChatAttachments(workspaceId,chatId).map((item)=>[item.id,item])),route=proposeRoute({capabilities:await Promise.all([detectCli('codex'),detectCli('claude')]),preferred:cli as 'codex'|'claude',allowFallback:false,securityProfileId:profileId,attachments:attachmentIds.map((id)=>({id,mediaType:attachmentMetadata.get(id)!.mediaType,bytes:attachmentMetadata.get(id)!.bytes}))});
@@ -511,6 +513,7 @@ function registerIpc(): void {
       prompt,
       parentExecutionId,
       depth: parentExecutionId ? 1 : 0,
+      taskType:childTask?.type,
     });
     const fallbackEvents: ExecutionEvent[] = [];
     try {
@@ -523,7 +526,7 @@ function registerIpc(): void {
           const routedVersion=route.providers.find((item)=>item.provider===cli)?.version;if(capability.version!==routedVersion)throw new Error('CLI version changed after route approval; review the route and retry');
           return capability;
         },
-        executionExists: (owner, id) => store.executionExists(owner, id),
+        executionExists: (owner, id) => store.executionIsQueued(owner, id),
         spawn: (capability) =>
           workbench.start(
             runId,
@@ -537,6 +540,7 @@ function registerIpc(): void {
               version: capability.version,
               parentRunId: parentExecutionId,
               depth: parentExecutionId ? 1 : 0,
+              timeoutMs:childTask?.maxDurationMs,
               imagePaths,
             },
             (event) => {
@@ -581,7 +585,7 @@ function registerIpc(): void {
       workspaceId = text(value.workspaceId, 'workspace ID', 64),
       runId = text(value.runId, 'execution ID', 64);
     if (!store.executionExists(workspaceId, runId)) throw new Error('Execution not found in workspace');
-    return { canceled: workbench.cancel(runId) };
+    const targets=[runId,...store.listExecutions(workspaceId).filter((item)=>item.parentExecutionId===runId&&['queued','running'].includes(String(item.status))).map((item)=>String(item.id))];return{canceled:targets.map((id)=>store.cancelQueuedExecution(workspaceId,id)||workbench.cancel(id)).some(Boolean)};
   });
   handle('waypoint:create-chat', (_event, input: unknown) => {
     const value = input as Record<string, unknown>;

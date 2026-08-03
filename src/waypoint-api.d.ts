@@ -171,6 +171,7 @@ declare global {
         model?: string,
         parentExecutionId?: string,
         attachmentIds?: string[],
+        taskType?:'analyze'|'summarize'|'critique',
       ): Promise<{
         runId: string;
         status: 'running';
