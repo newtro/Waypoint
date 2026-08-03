@@ -1,47 +1,53 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync,existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync,statSync } from 'node:fs'
-import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import type { ActivityFamily, ActivityTimelineItem, ExportArchive, GraphEdge, GraphNode, MeetingView, ObjectKind, SearchResult, WorkspaceSummary } from './types.js'
-import { WorkspaceSyncJournal } from './sync/workspace-sync-journal.js'
-import type { InboundChange, LocalMutation } from './sync/sync-store.js'
-import { archiveIntegrity, validateArchive } from './backup.js'
-import { assertSupportedSchema, createMigrationSnapshot, CURRENT_SCHEMA_VERSION, runMigrations, schemaVersion } from './migrations.js'
-import { MAX_ATTACHMENT_BYTES,MAX_ATTACHMENTS_PER_OWNER,MAX_ATTACHMENTS_PER_WORKSPACE,prepareAttachmentForProvider as prepareProviderAttachment,readAndValidateAttachment,validateAttachment,type AttachmentMetadata,type ProviderAttachmentPreparation } from './chat-attachments.js'
-import {extractSuggestions,SUGGESTION_EXTRACTOR,SUGGESTION_SCAN_LIMITS} from './derived-suggestions.js'
-import {composeDailyBriefing,localDayAt,type DailyBriefing,type BriefingSource} from './daily-briefing.js'
-import {extractRuleDirectives,RULE_EXTRACTOR} from './learned-rules.js'
-import {ACTIVITY_FAMILIES,activityFamily,safeActivityDetails} from './activity-timeline.js'
-import {validateMeetingAudio,validateTranscript} from './meeting-audio.js'
+import { createHash, randomUUID } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import type { ActivityFamily, ActivityTimelineItem, ExportArchive, FixturePlaybookView, GraphEdge, GraphNode, MeetingView, ObjectKind, SearchResult, WorkspaceSummary } from './types.js';
+import { WorkspaceSyncJournal } from './sync/workspace-sync-journal.js';
+import type { InboundChange, LocalMutation } from './sync/sync-store.js';
+import { archiveIntegrity, validateArchive } from './backup.js';
+import { assertSupportedSchema, createMigrationSnapshot, CURRENT_SCHEMA_VERSION, runMigrations, schemaVersion } from './migrations.js';
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_OWNER, MAX_ATTACHMENTS_PER_WORKSPACE, prepareAttachmentForProvider as prepareProviderAttachment, readAndValidateAttachment, validateAttachment, type AttachmentMetadata, type ProviderAttachmentPreparation } from './chat-attachments.js';
+import { extractSuggestions, SUGGESTION_EXTRACTOR, SUGGESTION_SCAN_LIMITS } from './derived-suggestions.js';
+import { composeDailyBriefing, localDayAt, type DailyBriefing, type BriefingSource } from './daily-briefing.js';
+import { extractRuleDirectives, RULE_EXTRACTOR } from './learned-rules.js';
+import { ACTIVITY_FAMILIES, activityFamily, safeActivityDetails } from './activity-timeline.js';
+import { validateMeetingAudio, validateTranscript } from './meeting-audio.js';
+import { assertPlaybookDefinition, FIXTURE_CONNECTOR, fixtureDryRun, nextDailyOccurrence, playbookDefinitionDigest, playbookDefinitionJson } from './fixture-automations.js';
 
-const now = () => new Date().toISOString()
-const contentDigest=(value:string)=>createHash('sha256').update(value).digest('hex')
+const now = () => new Date().toISOString();
+const contentDigest = (value: string) => createHash('sha256').update(value).digest('hex');
 
 export class WorkspaceStore {
-  private readonly db: DatabaseSync
-  private readonly attachmentRoot: string
-  private readonly meetingRoot: string
-  private readonly syncJournal: WorkspaceSyncJournal
+  private readonly db: DatabaseSync;
+  private readonly attachmentRoot: string;
+  private readonly meetingRoot: string;
+  private readonly syncJournal: WorkspaceSyncJournal;
 
   constructor(readonly databasePath: string) {
-    mkdirSync(path.dirname(databasePath), { recursive: true })
-    this.attachmentRoot = path.join(path.dirname(databasePath), 'attachments')
-    mkdirSync(this.attachmentRoot, { recursive: true,mode:0o700 });chmodSync(this.attachmentRoot,0o700)
-    this.meetingRoot=path.join(path.dirname(databasePath),'meeting-audio');mkdirSync(this.meetingRoot,{recursive:true,mode:0o700});chmodSync(this.meetingRoot,0o700)
-    this.db = new DatabaseSync(databasePath)
-    this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;')
-    const priorVersion = assertSupportedSchema(this.db)
-    createMigrationSnapshot(this.db, databasePath, priorVersion)
-    this.migrate()
-    this.syncJournal=new WorkspaceSyncJournal(this.db)
-    for(const workspace of this.db.prepare('SELECT id FROM workspaces').all() as Array<{id:string}>)this.syncJournal.ensureWorkspace(workspace.id)
-    this.reconcileInterruptedExecutions()
-    this.reconcileInterruptedMeetings()
-    this.reconcileAttachmentFiles()
-    this.reconcileMeetingFiles()
+    mkdirSync(path.dirname(databasePath), { recursive: true });
+    this.attachmentRoot = path.join(path.dirname(databasePath), 'attachments');
+    mkdirSync(this.attachmentRoot, { recursive: true, mode: 0o700 });
+    chmodSync(this.attachmentRoot, 0o700);
+    this.meetingRoot = path.join(path.dirname(databasePath), 'meeting-audio');
+    mkdirSync(this.meetingRoot, { recursive: true, mode: 0o700 });
+    chmodSync(this.meetingRoot, 0o700);
+    this.db = new DatabaseSync(databasePath);
+    this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
+    const priorVersion = assertSupportedSchema(this.db);
+    createMigrationSnapshot(this.db, databasePath, priorVersion);
+    this.migrate();
+    this.syncJournal = new WorkspaceSyncJournal(this.db);
+    for (const workspace of this.db.prepare('SELECT id FROM workspaces').all() as Array<{ id: string }>) this.syncJournal.ensureWorkspace(workspace.id);
+    this.reconcileInterruptedExecutions();
+    this.reconcileInterruptedMeetings();
+    this.reconcileAttachmentFiles();
+    this.reconcileMeetingFiles();
   }
 
-  close(): void { this.db.close() }
+  close(): void {
+    this.db.close();
+  }
 
   private migrate(): void {
     this.db.exec(`
@@ -75,852 +81,2326 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS learned_rules(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES rule_suggestions(id) ON DELETE CASCADE,statement TEXT NOT NULL,scope TEXT NOT NULL CHECK(scope='workspace'),version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),prior_enabled INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS rule_outcomes(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,rule_id TEXT REFERENCES learned_rules(id) ON DELETE CASCADE,suggestion_id TEXT REFERENCES rule_suggestions(id) ON DELETE CASCADE,action TEXT NOT NULL,match_count INTEGER NOT NULL,version INTEGER NOT NULL,created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,title TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('recording','ready','failed')),consent_acknowledged_at TEXT NOT NULL,consent_version TEXT NOT NULL,audio_relative_path TEXT,media_type TEXT,bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT,transcript TEXT,transcript_status TEXT NOT NULL CHECK(transcript_status IN ('none','draft','reviewed')),speaker_handling TEXT NOT NULL CHECK(speaker_handling='uncertain'),failure_code TEXT,created_at TEXT NOT NULL,ended_at TEXT);
+      CREATE TABLE IF NOT EXISTS fixture_playbooks(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,title TEXT NOT NULL,version INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('paused','killed')),timezone TEXT NOT NULL,hour INTEGER NOT NULL,minute INTEGER NOT NULL,definition_json TEXT NOT NULL,definition_digest TEXT NOT NULL,permission_json TEXT NOT NULL,last_dry_run_digest TEXT,last_dry_run_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS fixture_playbook_runs(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,playbook_id TEXT NOT NULL REFERENCES fixture_playbooks(id) ON DELETE CASCADE,idempotency_key TEXT,status TEXT NOT NULL CHECK(status IN ('dry_run','completed','retrying','dead_letter')),attempt INTEGER NOT NULL,input_count INTEGER NOT NULL,output_count INTEGER NOT NULL,proposed_effects INTEGER NOT NULL CHECK(proposed_effects=0),permission_json TEXT NOT NULL,created_at TEXT NOT NULL,finished_at TEXT,UNIQUE(playbook_id,idempotency_key));
       CREATE TRIGGER IF NOT EXISTS invalidate_rule_after_source_delete AFTER DELETE ON rule_suggestion_sources WHEN (SELECT count(*) FROM rule_suggestion_sources WHERE suggestion_id=OLD.suggestion_id)<2 BEGIN DELETE FROM rule_suggestions WHERE id=OLD.suggestion_id; END;
       CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(workspace_id UNINDEXED, object_id UNINDEXED, object_kind UNINDEXED, revision_id UNINDEXED, title, body);
-    `)
-    const memoryColumns = this.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>
-    if (!memoryColumns.some((column) => column.name === 'ownership')) this.db.exec("ALTER TABLE memories ADD COLUMN ownership TEXT NOT NULL DEFAULT 'workspace-owned'")
-    const ftsColumns = this.db.prepare('PRAGMA table_info(search_fts)').all() as Array<{ name: string }>
+    `);
+    const memoryColumns = this.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>;
+    if (!memoryColumns.some((column) => column.name === 'ownership')) this.db.exec("ALTER TABLE memories ADD COLUMN ownership TEXT NOT NULL DEFAULT 'workspace-owned'");
+    const ftsColumns = this.db.prepare('PRAGMA table_info(search_fts)').all() as Array<{ name: string }>;
     if (!ftsColumns.some((column) => column.name === 'workspace_id')) {
-      this.db.exec('DROP TABLE search_fts; CREATE VIRTUAL TABLE search_fts USING fts5(workspace_id UNINDEXED, object_id UNINDEXED, object_kind UNINDEXED, revision_id UNINDEXED, title, body);')
+      this.db.exec('DROP TABLE search_fts; CREATE VIRTUAL TABLE search_fts USING fts5(workspace_id UNINDEXED, object_id UNINDEXED, object_kind UNINDEXED, revision_id UNINDEXED, title, body);');
       this.db.exec(`
         INSERT INTO search_fts SELECT d.workspace_id,d.id,'document',r.id,d.title,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id;
         INSERT INTO search_fts SELECT c.workspace_id,m.id,'message',NULL,c.title,m.body FROM messages m JOIN chats c ON c.id=m.chat_id;
         INSERT INTO search_fts SELECT workspace_id,id,'memory',NULL,title,body FROM memories;
         INSERT OR IGNORE INTO schema_versions VALUES (2, '${now()}');
-      `)
+      `);
     }
-    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(2, now())
-    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(3, now())
-    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(4, now())
-    runMigrations(this.db, schemaVersion(this.db), [{ version: 5, apply: (database) => database.exec(`
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(2, now());
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(3, now());
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(4, now());
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 5,
+        apply: (database) =>
+          database.exec(`
       CREATE TABLE app_settings(key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
-    `) }, { version: 6, apply: (database) => { const columns=database.prepare('PRAGMA table_info(executions)').all() as Array<{name:string}>;if(!columns.some((column)=>column.name==='source_message_id'))database.exec('ALTER TABLE executions ADD COLUMN source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL') } }, {version:7,apply:(database)=>WorkspaceSyncJournal.install(database)},{version:8,apply:(database)=>database.exec(`CREATE TABLE IF NOT EXISTS memory_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,source_role TEXT NOT NULL,category TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,source_excerpt TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),accepted_object_id TEXT,resolved_at TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS commitments(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES memory_suggestions(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,title TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('open','completed')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT);`)}])
-    runMigrations(this.db,schemaVersion(this.db),[{version:9,apply:(database)=>{
-      const columns=database.prepare('PRAGMA table_info(memory_suggestions)').all() as Array<{name:string}>
-      if(columns.some((column)=>column.name==='source_digest'))return
-      database.exec("ALTER TABLE memory_suggestions ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''")
-      const legacy=database.prepare('SELECT s.id,s.status,s.chat_id chatId,s.source_role sourceRole,s.source_excerpt sourceExcerpt,s.start_offset startOffset,s.end_offset endOffset,m.body,m.role,m.chat_id messageChatId FROM memory_suggestions s JOIN messages m ON m.id=s.source_message_id').all() as Array<Record<string,unknown>>
-      const update=database.prepare('UPDATE memory_suggestions SET source_digest=? WHERE id=?'),remove=database.prepare("DELETE FROM memory_suggestions WHERE id=? AND status='pending'")
-      for(const item of legacy){const body=String(item.body),exact=String(item.sourceExcerpt)===body.slice(Number(item.startOffset),Number(item.endOffset))&&String(item.sourceRole)===String(item.role)&&String(item.chatId)===String(item.messageChatId);if(exact)update.run(contentDigest(body),String(item.id));else if(item.status==='pending')remove.run(String(item.id));else update.run('legacy-unverified',String(item.id))}
-    }}])
-    runMigrations(this.db,schemaVersion(this.db),[{version:10,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS briefing_dismissals(workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,source_id TEXT NOT NULL,source_kind TEXT NOT NULL CHECK(source_kind IN ('commitment','document','memory')),local_day TEXT NOT NULL,dismissed_at TEXT NOT NULL,PRIMARY KEY(workspace_id,source_id,source_kind,local_day));CREATE INDEX IF NOT EXISTS idx_briefing_dismissals_day ON briefing_dismissals(workspace_id,local_day);CREATE TRIGGER IF NOT EXISTS delete_commitment_briefing_dismissal AFTER DELETE ON commitments BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='commitment'; END;CREATE TRIGGER IF NOT EXISTS delete_document_briefing_dismissal AFTER DELETE ON documents BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='document'; END;CREATE TRIGGER IF NOT EXISTS delete_memory_briefing_dismissal AFTER DELETE ON memories BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='memory'; END;")}])
-    runMigrations(this.db,schemaVersion(this.db),[{version:11,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS rule_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,statement TEXT NOT NULL,normalized TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,scope TEXT NOT NULL CHECK(scope='workspace'),confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),last_dry_run_digest TEXT,last_dry_run_at TEXT,resolved_at TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS rule_suggestion_sources(suggestion_id TEXT NOT NULL REFERENCES rule_suggestions(id) ON DELETE CASCADE,message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,excerpt TEXT NOT NULL,source_digest TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,PRIMARY KEY(suggestion_id,message_id));CREATE TABLE IF NOT EXISTS learned_rules(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES rule_suggestions(id) ON DELETE CASCADE,statement TEXT NOT NULL,scope TEXT NOT NULL CHECK(scope='workspace'),version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),prior_enabled INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS rule_outcomes(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,rule_id TEXT REFERENCES learned_rules(id) ON DELETE CASCADE,suggestion_id TEXT REFERENCES rule_suggestions(id) ON DELETE CASCADE,action TEXT NOT NULL,match_count INTEGER NOT NULL,version INTEGER NOT NULL,created_at TEXT NOT NULL);CREATE TRIGGER IF NOT EXISTS invalidate_rule_after_source_delete AFTER DELETE ON rule_suggestion_sources WHEN (SELECT count(*) FROM rule_suggestion_sources WHERE suggestion_id=OLD.suggestion_id)<2 BEGIN DELETE FROM rule_suggestions WHERE id=OLD.suggestion_id; END;")}])
-    runMigrations(this.db,schemaVersion(this.db),[{version:12,apply:(database)=>database.exec('CREATE INDEX IF NOT EXISTS idx_activities_workspace_created ON activities(workspace_id,created_at DESC,id)')}])
-    runMigrations(this.db,schemaVersion(this.db),[{version:13,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,title TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('recording','ready','failed')),consent_acknowledged_at TEXT NOT NULL,consent_version TEXT NOT NULL,audio_relative_path TEXT,media_type TEXT,bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT,transcript TEXT,transcript_status TEXT NOT NULL CHECK(transcript_status IN ('none','draft','reviewed')),speaker_handling TEXT NOT NULL CHECK(speaker_handling='uncertain'),failure_code TEXT,created_at TEXT NOT NULL,ended_at TEXT)")}])
-    for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{id:string;localPath:string}>) {
-      const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
-      const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)
-      if(existing)this.db.prepare("UPDATE security_profiles SET roots_json=? WHERE workspace_id=? AND name='Workspace — conservative'").run(JSON.stringify([executionRoot]),workspace.id)
-      else this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
+    `),
+      },
+      {
+        version: 6,
+        apply: (database) => {
+          const columns = database.prepare('PRAGMA table_info(executions)').all() as Array<{ name: string }>;
+          if (!columns.some((column) => column.name === 'source_message_id')) database.exec('ALTER TABLE executions ADD COLUMN source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL');
+        },
+      },
+      {
+        version: 7,
+        apply: (database) => WorkspaceSyncJournal.install(database),
+      },
+      {
+        version: 8,
+        apply: (database) => database.exec(`CREATE TABLE IF NOT EXISTS memory_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,source_role TEXT NOT NULL,category TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,source_excerpt TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),accepted_object_id TEXT,resolved_at TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS commitments(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES memory_suggestions(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,title TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('open','completed')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT);`),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 9,
+        apply: (database) => {
+          const columns = database.prepare('PRAGMA table_info(memory_suggestions)').all() as Array<{ name: string }>;
+          if (columns.some((column) => column.name === 'source_digest')) return;
+          database.exec("ALTER TABLE memory_suggestions ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''");
+          const legacy = database.prepare('SELECT s.id,s.status,s.chat_id chatId,s.source_role sourceRole,s.source_excerpt sourceExcerpt,s.start_offset startOffset,s.end_offset endOffset,m.body,m.role,m.chat_id messageChatId FROM memory_suggestions s JOIN messages m ON m.id=s.source_message_id').all() as Array<Record<string, unknown>>;
+          const update = database.prepare('UPDATE memory_suggestions SET source_digest=? WHERE id=?'),
+            remove = database.prepare("DELETE FROM memory_suggestions WHERE id=? AND status='pending'");
+          for (const item of legacy) {
+            const body = String(item.body),
+              exact = String(item.sourceExcerpt) === body.slice(Number(item.startOffset), Number(item.endOffset)) && String(item.sourceRole) === String(item.role) && String(item.chatId) === String(item.messageChatId);
+            if (exact) update.run(contentDigest(body), String(item.id));
+            else if (item.status === 'pending') remove.run(String(item.id));
+            else update.run('legacy-unverified', String(item.id));
+          }
+        },
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 10,
+        apply: (database) => database.exec("CREATE TABLE IF NOT EXISTS briefing_dismissals(workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,source_id TEXT NOT NULL,source_kind TEXT NOT NULL CHECK(source_kind IN ('commitment','document','memory')),local_day TEXT NOT NULL,dismissed_at TEXT NOT NULL,PRIMARY KEY(workspace_id,source_id,source_kind,local_day));CREATE INDEX IF NOT EXISTS idx_briefing_dismissals_day ON briefing_dismissals(workspace_id,local_day);CREATE TRIGGER IF NOT EXISTS delete_commitment_briefing_dismissal AFTER DELETE ON commitments BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='commitment'; END;CREATE TRIGGER IF NOT EXISTS delete_document_briefing_dismissal AFTER DELETE ON documents BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='document'; END;CREATE TRIGGER IF NOT EXISTS delete_memory_briefing_dismissal AFTER DELETE ON memories BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='memory'; END;"),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 11,
+        apply: (database) => database.exec("CREATE TABLE IF NOT EXISTS rule_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,statement TEXT NOT NULL,normalized TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,scope TEXT NOT NULL CHECK(scope='workspace'),confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),last_dry_run_digest TEXT,last_dry_run_at TEXT,resolved_at TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS rule_suggestion_sources(suggestion_id TEXT NOT NULL REFERENCES rule_suggestions(id) ON DELETE CASCADE,message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,excerpt TEXT NOT NULL,source_digest TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,PRIMARY KEY(suggestion_id,message_id));CREATE TABLE IF NOT EXISTS learned_rules(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES rule_suggestions(id) ON DELETE CASCADE,statement TEXT NOT NULL,scope TEXT NOT NULL CHECK(scope='workspace'),version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),prior_enabled INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS rule_outcomes(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,rule_id TEXT REFERENCES learned_rules(id) ON DELETE CASCADE,suggestion_id TEXT REFERENCES rule_suggestions(id) ON DELETE CASCADE,action TEXT NOT NULL,match_count INTEGER NOT NULL,version INTEGER NOT NULL,created_at TEXT NOT NULL);CREATE TRIGGER IF NOT EXISTS invalidate_rule_after_source_delete AFTER DELETE ON rule_suggestion_sources WHEN (SELECT count(*) FROM rule_suggestion_sources WHERE suggestion_id=OLD.suggestion_id)<2 BEGIN DELETE FROM rule_suggestions WHERE id=OLD.suggestion_id; END;"),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 12,
+        apply: (database) => database.exec('CREATE INDEX IF NOT EXISTS idx_activities_workspace_created ON activities(workspace_id,created_at DESC,id)'),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 13,
+        apply: (database) => database.exec("CREATE TABLE IF NOT EXISTS meetings(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,title TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('recording','ready','failed')),consent_acknowledged_at TEXT NOT NULL,consent_version TEXT NOT NULL,audio_relative_path TEXT,media_type TEXT,bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT,transcript TEXT,transcript_status TEXT NOT NULL CHECK(transcript_status IN ('none','draft','reviewed')),speaker_handling TEXT NOT NULL CHECK(speaker_handling='uncertain'),failure_code TEXT,created_at TEXT NOT NULL,ended_at TEXT)"),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 14,
+        apply: (database) => database.exec("CREATE TABLE IF NOT EXISTS fixture_playbooks(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,title TEXT NOT NULL,version INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('paused','killed')),timezone TEXT NOT NULL,hour INTEGER NOT NULL,minute INTEGER NOT NULL,definition_json TEXT NOT NULL,definition_digest TEXT NOT NULL,permission_json TEXT NOT NULL,last_dry_run_digest TEXT,last_dry_run_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS fixture_playbook_runs(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,playbook_id TEXT NOT NULL REFERENCES fixture_playbooks(id) ON DELETE CASCADE,idempotency_key TEXT,status TEXT NOT NULL CHECK(status IN ('dry_run','completed','retrying','dead_letter')),attempt INTEGER NOT NULL,input_count INTEGER NOT NULL,output_count INTEGER NOT NULL,proposed_effects INTEGER NOT NULL CHECK(proposed_effects=0),permission_json TEXT NOT NULL,created_at TEXT NOT NULL,finished_at TEXT,UNIQUE(playbook_id,idempotency_key))"),
+      },
+    ]);
+    for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{ id: string; localPath: string }>) {
+      const executionRoot = path.join(workspace.localPath, 'waypoint-workspaces', workspace.id);
+      mkdirSync(executionRoot, { recursive: true });
+      const existing = this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id);
+      if (existing) this.db.prepare("UPDATE security_profiles SET roots_json=? WHERE workspace_id=? AND name='Workspace — conservative'").run(JSON.stringify([executionRoot]), workspace.id);
+      else this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
     }
   }
 
   private transaction<T>(operation: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE')
-    try { const result = operation(); this.db.exec('COMMIT'); return result }
-    catch (error) { this.db.exec('ROLLBACK'); throw error }
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = operation();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
-  private reconcileInterruptedMeetings():void{const timestamp=now();this.transaction(()=>{const rows=this.db.prepare("SELECT id,workspace_id workspaceId FROM meetings WHERE status='recording'").all() as Array<{id:string;workspaceId:string}>;for(const row of rows){this.db.prepare("UPDATE meetings SET status='failed',failure_code='interrupted',ended_at=? WHERE id=?").run(timestamp,row.id);this.activity(row.workspaceId,'meeting','recording.failed',row.id,'meeting',{})}})}
+  private reconcileInterruptedMeetings(): void {
+    const timestamp = now();
+    this.transaction(() => {
+      const rows = this.db.prepare("SELECT id,workspace_id workspaceId FROM meetings WHERE status='recording'").all() as Array<{ id: string; workspaceId: string }>;
+      for (const row of rows) {
+        this.db.prepare("UPDATE meetings SET status='failed',failure_code='interrupted',ended_at=? WHERE id=?").run(timestamp, row.id);
+        this.activity(row.workspaceId, 'meeting', 'recording.failed', row.id, 'meeting', {});
+      }
+    });
+  }
 
   createWorkspace(name: string, localPath: string): WorkspaceSummary {
-    if (!name.trim() || !path.isAbsolute(localPath)) throw new Error('Workspace name and absolute local path are required')
-    const workspace = { id: randomUUID(), name: name.trim(), localPath: path.resolve(localPath), createdAt: now() }
+    if (!name.trim() || !path.isAbsolute(localPath)) throw new Error('Workspace name and absolute local path are required');
+    const workspace = {
+      id: randomUUID(),
+      name: name.trim(),
+      localPath: path.resolve(localPath),
+      createdAt: now(),
+    };
     this.transaction(() => {
-      this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt)
-      this.syncJournal.ensureWorkspace(workspace.id)
-      this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
-      this.activity(workspace.id, 'workspace', 'created', workspace.id, 'workspace', { localPath: workspace.localPath })
-    })
-    return workspace
+      this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt);
+      this.syncJournal.ensureWorkspace(workspace.id);
+      this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+      this.activity(workspace.id, 'workspace', 'created', workspace.id, 'workspace', { localPath: workspace.localPath });
+    });
+    return workspace;
   }
 
-  syncStatus(workspaceId:string):Record<string,unknown>{return this.syncJournal.status(workspaceId)}
-  configureSyncDevice(workspaceId:string,deviceId:string):void{this.syncJournal.configureDevice(workspaceId,deviceId)}
-  pendingSyncChanges(workspaceId:string):LocalMutation[]{return this.syncJournal.pending(workspaceId)}
-  markSyncChangeRelayed(workspaceId:string,mutationId:string):void{this.syncJournal.markRelayed(workspaceId,mutationId)}
-  queueFullSyncSnapshot(workspaceId:string,recipientDeviceId?:string,withinTransaction=false):number{const operation=()=>{this.syncJournal.status(workspaceId);let count=0;const queue=(id:string,kind:string,payload:Record<string,unknown>)=>{const mutation=this.syncJournal.enqueue(workspaceId,id,kind,'upsert',payload);if(recipientDeviceId)this.syncJournal.targetMutation(workspaceId,mutation.id,recipientDeviceId);count++};for(const row of this.db.prepare('SELECT d.id,d.title,d.created_at createdAt,d.updated_at updatedAt,r.id revisionId,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=?').all(workspaceId) as Array<Record<string,unknown>>)queue(String(row.id),'document',row);for(const row of this.db.prepare('SELECT id,title,created_at createdAt,updated_at updatedAt FROM chats WHERE workspace_id=? ORDER BY created_at').all(workspaceId) as Array<Record<string,unknown>>)queue(String(row.id),'chat',row);for(const row of this.db.prepare('SELECT m.id,m.chat_id chatId,m.role,m.body,m.created_at createdAt FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? ORDER BY m.created_at').all(workspaceId) as Array<Record<string,unknown>>)queue(String(row.id),'message',row);for(const row of this.db.prepare('SELECT id,title,body,source_object_id sourceObjectId,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=memories.source_object_id)').all(workspaceId) as Array<Record<string,unknown>>)queue(String(row.id),'memory',row);for(const row of this.db.prepare('SELECT id,from_id fromId,to_id toId,type,created_at createdAt FROM relationships r WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=r.from_id OR mt.id=r.to_id) AND NOT EXISTS (SELECT 1 FROM memories lm JOIN meetings mt ON mt.id=lm.source_object_id WHERE lm.id=r.from_id OR lm.id=r.to_id)').all(workspaceId) as Array<Record<string,unknown>>)queue(String(row.id),'relationship',row);for(const row of this.db.prepare('SELECT id,owner_id ownerId,name,media_type mediaType,sha256,created_at createdAt FROM attachments WHERE workspace_id=?').all(workspaceId) as Array<Record<string,unknown>>){const bytes=this.readSyncAttachment(workspaceId,String(row.id));queue(String(row.id),'attachment',{...row,bytes:bytes.byteLength})}return count};return withinTransaction?operation():this.transaction(operation)}
-  syncHead(workspaceId:string,objectId:string):Record<string,unknown>|undefined{return this.syncJournal.head(workspaceId,objectId)}
-  queueReplacementSnapshot(workspaceId:string,requestId:string,recipientDeviceId:string):number{const liveIds=this.canonicalObjectIds(workspaceId);if(liveIds.length>100_000)throw new Error('Workspace snapshot object limit exceeded');const tombstoneIds=(this.db.prepare('SELECT object_id objectId FROM tombstones WHERE workspace_id=?').all(workspaceId) as Array<{objectId:string}>).map((row)=>row.objectId);return this.transaction(()=>{const count=this.queueFullSyncSnapshot(workspaceId,recipientDeviceId,true),mutation=this.syncJournal.enqueue(workspaceId,requestId,'snapshot','upsert',{id:requestId,targetDeviceId:recipientDeviceId,liveIds,tombstoneIds});this.syncJournal.targetMutation(workspaceId,mutation.id,recipientDeviceId);return count+1})}
-  acceptSnapshotRequest(workspaceId:string,requestId:string,senderDeviceId:string):boolean{return this.syncJournal.consumeControlRequest(workspaceId,requestId,senderDeviceId)}
-  recordSnapshotRequest(workspaceId:string,requestId:string,ownerDeviceId:string):void{this.syncJournal.recordSnapshotRequest(workspaceId,requestId,ownerDeviceId)}
-  acceptSnapshotResponse(workspaceId:string,requestId:string,ownerDeviceId:string):boolean{return this.syncJournal.consumeSnapshotResponse(workspaceId,requestId,ownerDeviceId)}
-  completeSnapshotResponse(workspaceId:string,requestId:string,ownerDeviceId:string):void{this.syncJournal.completeSnapshotResponse(workspaceId,requestId,ownerDeviceId)}
-  removeSnapshotRequest(workspaceId:string,requestId:string):void{this.syncJournal.removeSnapshotRequest(workspaceId,requestId)}
-  hasAppliedSyncChange(changeId:string):boolean{return this.syncJournal.hasAppliedChange(changeId)}
-  syncMutationRecipient(workspaceId:string,mutationId:string):string|undefined{return this.syncJournal.mutationTarget(workspaceId,mutationId)}
-  applyInboundReplacementSnapshot(change:InboundChange):void{const payload=change.payload as Record<string,unknown>,liveIds=Array.isArray(payload.liveIds)?payload.liveIds.map(String):[],tombstoneIds=Array.isArray(payload.tombstoneIds)?payload.tombstoneIds.map(String):[];if(payload.id!==change.objectId||liveIds.length>100_000||tombstoneIds.length>100_000||new Set(liveIds).size!==liveIds.length||new Set(tombstoneIds).size!==tombstoneIds.length)throw new Error('Replacement snapshot manifest is invalid');const removeFiles:string[]=[];this.transaction(()=>{const outcome=this.syncJournal.recordInbound(change);if(outcome==='replay')return;const keep=new Set(liveIds);for(const id of this.canonicalObjectIds(change.workspaceId))if(!keep.has(id)){this.syncJournal.cascadeTombstone(change.workspaceId,id,change.id);this.materializeInboundDelete(change.workspaceId,id,'any',removeFiles)}for(const id of tombstoneIds)this.syncJournal.cascadeTombstone(change.workspaceId,id,change.id)});for(const file of removeFiles)rmSync(this.attachmentPath(file),{force:true})}
-  recordInboundSyncChange(change:InboundChange):'applied'|'conflict'|'ignored'|'replay'{this.syncJournal.status(change.workspaceId);return this.transaction(()=>this.syncJournal.recordInbound(change))}
-  applyInboundSyncChange(change:InboundChange,attachmentChunkCount?:number):'applied'|'conflict'|'ignored'|'replay'{if(change.objectKind==='snapshot'){this.applyInboundReplacementSnapshot(change);return'applied'}this.syncJournal.status(change.workspaceId);const removeFiles:string[]=[];const result=this.transaction(()=>{const outcome=this.syncJournal.recordInbound(change);if(outcome==='replay'||outcome==='ignored')return outcome;const head=this.syncJournal.head(change.workspaceId,change.objectId);if(!head)return outcome;if(head.operation==='delete'){const payload=change.payload as Record<string,unknown>,cascadeIds=Array.isArray(payload?.cascadeIds)?payload.cascadeIds.map(String):[change.objectId];if(cascadeIds.length>10_000||!cascadeIds.includes(change.objectId)||new Set(cascadeIds).size!==cascadeIds.length)throw new Error('Inbound cascade deletion is invalid');for(const id of cascadeIds){this.syncJournal.cascadeTombstone(change.workspaceId,id,change.id);this.materializeInboundDelete(change.workspaceId,id,id===change.objectId?change.objectKind:'any',removeFiles)}}else this.materializeInboundUpsert(change.workspaceId,change.objectId,String(head.objectKind),head.payload as Record<string,unknown>,String(head.changeId),attachmentChunkCount);return outcome});for(const file of removeFiles)rmSync(this.attachmentPath(file),{force:true});return result}
-  readSyncAttachment(workspaceId:string,attachmentId:string):Uint8Array{const row=this.db.prepare('SELECT relative_path FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId,workspaceId) as {relative_path:string}|undefined;if(!row)throw new Error('Sync attachment not found');return new Uint8Array(readFileSync(this.attachmentPath(row.relative_path)))}
-  acceptInboundAttachmentChunk(workspaceId:string,transferId:string,index:number,total:number,plaintext:Uint8Array):boolean{const result=this.syncJournal.acceptAttachmentChunk(workspaceId,transferId,index,total,plaintext);if(!result.complete||!result.manifest||!result.bytes)return false;const manifest=result.manifest,id=String(manifest.attachment_id),validated=validateAttachment(String(manifest.name),String(manifest.media_type),result.bytes);if(validated.sha256!==String(manifest.sha256)||validated.bytes!==Number(manifest.total_bytes))throw new Error('Inbound attachment metadata mismatch');const relativePath=`${id}-${validated.safeName}`,target=this.attachmentPath(relativePath),temporary=`${target}.sync-partial`;writeFileSync(temporary,result.bytes,{flag:'wx',mode:0o600});try{rmSync(target,{force:true});renameSync(temporary,target);this.transaction(()=>{this.assertInboundIdentityAvailable(workspaceId,id);this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET owner_id=excluded.owner_id,name=excluded.name,media_type=excluded.media_type,sha256=excluded.sha256,relative_path=excluded.relative_path').run(id,workspaceId,String(manifest.owner_id),validated.safeName,String(manifest.media_type),validated.sha256,relativePath,String(manifest.created_at));this.syncJournal.finishAttachment(transferId)})}catch(error){rmSync(temporary,{force:true});rmSync(target,{force:true});throw error}return true}
-  missingInboundAttachmentChunks(workspaceId:string,transferId:string,total:number):number[]{return this.syncJournal.missingAttachmentChunks(workspaceId,transferId,total)}
-  recordOutboundAttachmentMissing(workspaceId:string,transferId:string,peerDeviceId:string,indices:number[]):void{this.syncJournal.recordAttachmentMissing(workspaceId,transferId,peerDeviceId,indices)}
-  requestedOutboundAttachmentChunks(workspaceId:string,transferId:string,peerDeviceId:string):number[]|undefined{return this.syncJournal.requestedAttachmentChunks(workspaceId,transferId,peerDeviceId)}
-  clearOutboundAttachmentRequest(transferId:string,peerDeviceId:string):void{this.syncJournal.clearAttachmentRequest(transferId,peerDeviceId)}
-  quarantineInboundEnvelope(workspaceId:string,envelopeId:string,senderDeviceId:string,reasonCode:string):void{this.syncJournal.quarantine(workspaceId,envelopeId,senderDeviceId,reasonCode)}
+  syncStatus(workspaceId: string): Record<string, unknown> {
+    return this.syncJournal.status(workspaceId);
+  }
+  configureSyncDevice(workspaceId: string, deviceId: string): void {
+    this.syncJournal.configureDevice(workspaceId, deviceId);
+  }
+  pendingSyncChanges(workspaceId: string): LocalMutation[] {
+    return this.syncJournal.pending(workspaceId);
+  }
+  markSyncChangeRelayed(workspaceId: string, mutationId: string): void {
+    this.syncJournal.markRelayed(workspaceId, mutationId);
+  }
+  queueFullSyncSnapshot(workspaceId: string, recipientDeviceId?: string, withinTransaction = false): number {
+    const operation = () => {
+      this.syncJournal.status(workspaceId);
+      let count = 0;
+      const queue = (id: string, kind: string, payload: Record<string, unknown>) => {
+        const mutation = this.syncJournal.enqueue(workspaceId, id, kind, 'upsert', payload);
+        if (recipientDeviceId) this.syncJournal.targetMutation(workspaceId, mutation.id, recipientDeviceId);
+        count++;
+      };
+      for (const row of this.db.prepare('SELECT d.id,d.title,d.created_at createdAt,d.updated_at updatedAt,r.id revisionId,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=?').all(workspaceId) as Array<Record<string, unknown>>) queue(String(row.id), 'document', row);
+      for (const row of this.db.prepare('SELECT id,title,created_at createdAt,updated_at updatedAt FROM chats WHERE workspace_id=? ORDER BY created_at').all(workspaceId) as Array<Record<string, unknown>>) queue(String(row.id), 'chat', row);
+      for (const row of this.db.prepare('SELECT m.id,m.chat_id chatId,m.role,m.body,m.created_at createdAt FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? ORDER BY m.created_at').all(workspaceId) as Array<Record<string, unknown>>) queue(String(row.id), 'message', row);
+      for (const row of this.db.prepare('SELECT id,title,body,source_object_id sourceObjectId,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=memories.source_object_id)').all(workspaceId) as Array<Record<string, unknown>>) queue(String(row.id), 'memory', row);
+      for (const row of this.db.prepare('SELECT id,from_id fromId,to_id toId,type,created_at createdAt FROM relationships r WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=r.from_id OR mt.id=r.to_id) AND NOT EXISTS (SELECT 1 FROM memories lm JOIN meetings mt ON mt.id=lm.source_object_id WHERE lm.id=r.from_id OR lm.id=r.to_id)').all(workspaceId) as Array<Record<string, unknown>>) queue(String(row.id), 'relationship', row);
+      for (const row of this.db.prepare('SELECT id,owner_id ownerId,name,media_type mediaType,sha256,created_at createdAt FROM attachments WHERE workspace_id=?').all(workspaceId) as Array<Record<string, unknown>>) {
+        const bytes = this.readSyncAttachment(workspaceId, String(row.id));
+        queue(String(row.id), 'attachment', {
+          ...row,
+          bytes: bytes.byteLength,
+        });
+      }
+      return count;
+    };
+    return withinTransaction ? operation() : this.transaction(operation);
+  }
+  syncHead(workspaceId: string, objectId: string): Record<string, unknown> | undefined {
+    return this.syncJournal.head(workspaceId, objectId);
+  }
+  queueReplacementSnapshot(workspaceId: string, requestId: string, recipientDeviceId: string): number {
+    const liveIds = this.canonicalObjectIds(workspaceId);
+    if (liveIds.length > 100_000) throw new Error('Workspace snapshot object limit exceeded');
+    const tombstoneIds = (this.db.prepare('SELECT object_id objectId FROM tombstones WHERE workspace_id=?').all(workspaceId) as Array<{ objectId: string }>).map((row) => row.objectId);
+    return this.transaction(() => {
+      const count = this.queueFullSyncSnapshot(workspaceId, recipientDeviceId, true),
+        mutation = this.syncJournal.enqueue(workspaceId, requestId, 'snapshot', 'upsert', {
+          id: requestId,
+          targetDeviceId: recipientDeviceId,
+          liveIds,
+          tombstoneIds,
+        });
+      this.syncJournal.targetMutation(workspaceId, mutation.id, recipientDeviceId);
+      return count + 1;
+    });
+  }
+  acceptSnapshotRequest(workspaceId: string, requestId: string, senderDeviceId: string): boolean {
+    return this.syncJournal.consumeControlRequest(workspaceId, requestId, senderDeviceId);
+  }
+  recordSnapshotRequest(workspaceId: string, requestId: string, ownerDeviceId: string): void {
+    this.syncJournal.recordSnapshotRequest(workspaceId, requestId, ownerDeviceId);
+  }
+  acceptSnapshotResponse(workspaceId: string, requestId: string, ownerDeviceId: string): boolean {
+    return this.syncJournal.consumeSnapshotResponse(workspaceId, requestId, ownerDeviceId);
+  }
+  completeSnapshotResponse(workspaceId: string, requestId: string, ownerDeviceId: string): void {
+    this.syncJournal.completeSnapshotResponse(workspaceId, requestId, ownerDeviceId);
+  }
+  removeSnapshotRequest(workspaceId: string, requestId: string): void {
+    this.syncJournal.removeSnapshotRequest(workspaceId, requestId);
+  }
+  hasAppliedSyncChange(changeId: string): boolean {
+    return this.syncJournal.hasAppliedChange(changeId);
+  }
+  syncMutationRecipient(workspaceId: string, mutationId: string): string | undefined {
+    return this.syncJournal.mutationTarget(workspaceId, mutationId);
+  }
+  applyInboundReplacementSnapshot(change: InboundChange): void {
+    const payload = change.payload as Record<string, unknown>,
+      liveIds = Array.isArray(payload.liveIds) ? payload.liveIds.map(String) : [],
+      tombstoneIds = Array.isArray(payload.tombstoneIds) ? payload.tombstoneIds.map(String) : [];
+    if (payload.id !== change.objectId || liveIds.length > 100_000 || tombstoneIds.length > 100_000 || new Set(liveIds).size !== liveIds.length || new Set(tombstoneIds).size !== tombstoneIds.length) throw new Error('Replacement snapshot manifest is invalid');
+    const removeFiles: string[] = [];
+    this.transaction(() => {
+      const outcome = this.syncJournal.recordInbound(change);
+      if (outcome === 'replay') return;
+      const keep = new Set(liveIds);
+      for (const id of this.canonicalObjectIds(change.workspaceId))
+        if (!keep.has(id)) {
+          this.syncJournal.cascadeTombstone(change.workspaceId, id, change.id);
+          this.materializeInboundDelete(change.workspaceId, id, 'any', removeFiles);
+        }
+      for (const id of tombstoneIds) this.syncJournal.cascadeTombstone(change.workspaceId, id, change.id);
+    });
+    for (const file of removeFiles) rmSync(this.attachmentPath(file), { force: true });
+  }
+  recordInboundSyncChange(change: InboundChange): 'applied' | 'conflict' | 'ignored' | 'replay' {
+    this.syncJournal.status(change.workspaceId);
+    return this.transaction(() => this.syncJournal.recordInbound(change));
+  }
+  applyInboundSyncChange(change: InboundChange, attachmentChunkCount?: number): 'applied' | 'conflict' | 'ignored' | 'replay' {
+    if (change.objectKind === 'snapshot') {
+      this.applyInboundReplacementSnapshot(change);
+      return 'applied';
+    }
+    this.syncJournal.status(change.workspaceId);
+    const removeFiles: string[] = [];
+    const result = this.transaction(() => {
+      const outcome = this.syncJournal.recordInbound(change);
+      if (outcome === 'replay' || outcome === 'ignored') return outcome;
+      const head = this.syncJournal.head(change.workspaceId, change.objectId);
+      if (!head) return outcome;
+      if (head.operation === 'delete') {
+        const payload = change.payload as Record<string, unknown>,
+          cascadeIds = Array.isArray(payload?.cascadeIds) ? payload.cascadeIds.map(String) : [change.objectId];
+        if (cascadeIds.length > 10_000 || !cascadeIds.includes(change.objectId) || new Set(cascadeIds).size !== cascadeIds.length) throw new Error('Inbound cascade deletion is invalid');
+        for (const id of cascadeIds) {
+          this.syncJournal.cascadeTombstone(change.workspaceId, id, change.id);
+          this.materializeInboundDelete(change.workspaceId, id, id === change.objectId ? change.objectKind : 'any', removeFiles);
+        }
+      } else this.materializeInboundUpsert(change.workspaceId, change.objectId, String(head.objectKind), head.payload as Record<string, unknown>, String(head.changeId), attachmentChunkCount);
+      return outcome;
+    });
+    for (const file of removeFiles) rmSync(this.attachmentPath(file), { force: true });
+    return result;
+  }
+  readSyncAttachment(workspaceId: string, attachmentId: string): Uint8Array {
+    const row = this.db.prepare('SELECT relative_path FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId, workspaceId) as { relative_path: string } | undefined;
+    if (!row) throw new Error('Sync attachment not found');
+    return new Uint8Array(readFileSync(this.attachmentPath(row.relative_path)));
+  }
+  acceptInboundAttachmentChunk(workspaceId: string, transferId: string, index: number, total: number, plaintext: Uint8Array): boolean {
+    const result = this.syncJournal.acceptAttachmentChunk(workspaceId, transferId, index, total, plaintext);
+    if (!result.complete || !result.manifest || !result.bytes) return false;
+    const manifest = result.manifest,
+      id = String(manifest.attachment_id),
+      validated = validateAttachment(String(manifest.name), String(manifest.media_type), result.bytes);
+    if (validated.sha256 !== String(manifest.sha256) || validated.bytes !== Number(manifest.total_bytes)) throw new Error('Inbound attachment metadata mismatch');
+    const relativePath = `${id}-${validated.safeName}`,
+      target = this.attachmentPath(relativePath),
+      temporary = `${target}.sync-partial`;
+    writeFileSync(temporary, result.bytes, { flag: 'wx', mode: 0o600 });
+    try {
+      rmSync(target, { force: true });
+      renameSync(temporary, target);
+      this.transaction(() => {
+        this.assertInboundIdentityAvailable(workspaceId, id);
+        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET owner_id=excluded.owner_id,name=excluded.name,media_type=excluded.media_type,sha256=excluded.sha256,relative_path=excluded.relative_path').run(id, workspaceId, String(manifest.owner_id), validated.safeName, String(manifest.media_type), validated.sha256, relativePath, String(manifest.created_at));
+        this.syncJournal.finishAttachment(transferId);
+      });
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      rmSync(target, { force: true });
+      throw error;
+    }
+    return true;
+  }
+  missingInboundAttachmentChunks(workspaceId: string, transferId: string, total: number): number[] {
+    return this.syncJournal.missingAttachmentChunks(workspaceId, transferId, total);
+  }
+  recordOutboundAttachmentMissing(workspaceId: string, transferId: string, peerDeviceId: string, indices: number[]): void {
+    this.syncJournal.recordAttachmentMissing(workspaceId, transferId, peerDeviceId, indices);
+  }
+  requestedOutboundAttachmentChunks(workspaceId: string, transferId: string, peerDeviceId: string): number[] | undefined {
+    return this.syncJournal.requestedAttachmentChunks(workspaceId, transferId, peerDeviceId);
+  }
+  clearOutboundAttachmentRequest(transferId: string, peerDeviceId: string): void {
+    this.syncJournal.clearAttachmentRequest(transferId, peerDeviceId);
+  }
+  quarantineInboundEnvelope(workspaceId: string, envelopeId: string, senderDeviceId: string, reasonCode: string): void {
+    this.syncJournal.quarantine(workspaceId, envelopeId, senderDeviceId, reasonCode);
+  }
 
-  private materializeInboundUpsert(workspaceId:string,objectId:string,kind:string,payload:Record<string,unknown>,changeId:string,attachmentChunkCount?:number):void{const id=String(payload.id),createdAt=String(payload.createdAt??now()),updatedAt=String(payload.updatedAt??createdAt);if(id!==objectId||id.length<1||id.length>128)throw new Error('Inbound object identity is invalid');this.assertInboundIdentityAvailable(workspaceId,id);if(kind==='chat'){this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at').run(id,workspaceId,String(payload.title),createdAt,updatedAt);return}if(kind==='message'){const chatId=String(payload.chatId);if(!this.db.prepare('SELECT 1 FROM chats WHERE id=? AND workspace_id=?').get(chatId,workspaceId))throw new Error('Inbound message chat is unavailable');this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(id,chatId,String(payload.role),String(payload.body),createdAt);const title=String((this.db.prepare('SELECT title FROM chats WHERE id=?').get(chatId) as {title:string}).title);this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='message'").run(id);this.indexText(workspaceId,id,'message',undefined,title,String(payload.body));return}if(kind==='document'){const revisionId=String(payload.revisionId??changeId);this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,current_revision_id=excluded.current_revision_id,updated_at=excluded.updated_at').run(id,workspaceId,String(payload.title),revisionId,createdAt,updatedAt);this.db.prepare('INSERT OR REPLACE INTO revisions VALUES (?,?,?,?)').run(revisionId,id,String(payload.body),updatedAt);this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='document'").run(id);this.indexText(workspaceId,id,'document',revisionId,String(payload.title),String(payload.body));return}if(kind==='memory'){const sourceId=payload.sourceObjectId?String(payload.sourceObjectId):null;if(sourceId&&!this.objectKindInWorkspace(workspaceId,sourceId))throw new Error('Inbound memory source is unavailable');this.db.prepare('INSERT INTO memories VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,source_object_id=excluded.source_object_id,ownership=excluded.ownership,updated_at=excluded.updated_at').run(id,workspaceId,String(payload.title),String(payload.body),sourceId,String(payload.ownership??'workspace-owned'),createdAt,updatedAt);this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='memory'").run(id);this.indexText(workspaceId,id,'memory',undefined,String(payload.title),String(payload.body));return}if(kind==='relationship'){if(!this.objectKindInWorkspace(workspaceId,String(payload.fromId))||!this.objectKindInWorkspace(workspaceId,String(payload.toId)))throw new Error('Inbound relationship endpoint is unavailable');this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET from_id=excluded.from_id,to_id=excluded.to_id,type=excluded.type').run(id,workspaceId,String(payload.fromId),String(payload.toId),String(payload.type),createdAt);return}if(kind==='attachment'){if(!attachmentChunkCount||attachmentChunkCount>Math.ceil(MAX_ATTACHMENT_BYTES/(4*1024*1024))||!Number.isSafeInteger(payload.bytes)||Number(payload.bytes)<1||Number(payload.bytes)>MAX_ATTACHMENT_BYTES||!this.objectKindInWorkspace(workspaceId,String(payload.ownerId)))throw new Error('Inbound attachment manifest violates limits');const workspaceCount=Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=?').get(workspaceId) as {count:number}).count),ownerCount=Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=? AND owner_id=?').get(workspaceId,String(payload.ownerId)) as {count:number}).count);if(workspaceCount>=MAX_ATTACHMENTS_PER_WORKSPACE||ownerCount>=MAX_ATTACHMENTS_PER_OWNER)throw new Error('Inbound attachment count limit reached');this.syncJournal.stageAttachment(changeId,workspaceId,payload,attachmentChunkCount);return}throw new Error('Unsupported inbound object kind')}
-  private materializeInboundDelete(workspaceId:string,objectId:string,kind:string,removeFiles:string[]):void{const attachments=this.db.prepare('SELECT relative_path FROM attachments WHERE workspace_id=? AND (id=? OR owner_id=?)').all(workspaceId,objectId,objectId) as Array<{relative_path:string}>;removeFiles.push(...attachments.map((item)=>item.relative_path));this.db.prepare('DELETE FROM briefing_dismissals WHERE workspace_id=? AND source_id=?').run(workspaceId,objectId);this.db.prepare('DELETE FROM attachments WHERE workspace_id=? AND (id=? OR owner_id=?)').run(workspaceId,objectId,objectId);this.db.prepare('DELETE FROM relationships WHERE workspace_id=? AND (id=? OR from_id=? OR to_id=?)').run(workspaceId,objectId,objectId,objectId);this.db.prepare('DELETE FROM embeddings WHERE workspace_id=? AND object_id=?').run(workspaceId,objectId);this.db.prepare('DELETE FROM search_fts WHERE workspace_id=? AND object_id=?').run(workspaceId,objectId);if(kind==='message'||kind==='any')this.db.prepare('DELETE FROM messages WHERE id=? AND EXISTS(SELECT 1 FROM chats WHERE id=messages.chat_id AND workspace_id=?)').run(objectId,workspaceId);const selected=kind==='document'?'documents':kind==='chat'?'chats':kind==='memory'?'memories':kind==='relationship'?'relationships':kind==='attachment'?'attachments':undefined,tables=kind==='any'?['documents','chats','memories','relationships','attachments']:selected?[selected]:[];for(const table of tables)this.db.prepare(`DELETE FROM ${table} WHERE id=? AND workspace_id=?`).run(objectId,workspaceId);this.db.prepare('INSERT OR REPLACE INTO tombstones VALUES (?,?,?,?)').run(objectId,workspaceId,kind,now())}
-  private assertInboundIdentityAvailable(workspaceId:string,id:string):void{for(const table of['documents','chats','memories','relationships','attachments']){const row=this.db.prepare(`SELECT workspace_id workspaceId FROM ${table} WHERE id=?`).get(id) as {workspaceId:string}|undefined;if(row&&row.workspaceId!==workspaceId)throw new Error('Inbound object identity belongs to another workspace')}const message=this.db.prepare('SELECT c.workspace_id workspaceId FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as {workspaceId:string}|undefined;if(message&&message.workspaceId!==workspaceId)throw new Error('Inbound object identity belongs to another workspace')}
-  private canonicalObjectIds(workspaceId:string):string[]{const ids:string[]=[];for(const table of['documents','chats','attachments'])ids.push(...(this.db.prepare(`SELECT id FROM ${table} WHERE workspace_id=?`).all(workspaceId) as Array<{id:string}>).map((row)=>row.id));ids.push(...(this.db.prepare('SELECT id FROM memories WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=memories.source_object_id)').all(workspaceId) as Array<{id:string}>).map((row)=>row.id));ids.push(...(this.db.prepare('SELECT id FROM relationships r WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=r.from_id OR mt.id=r.to_id) AND NOT EXISTS (SELECT 1 FROM memories lm JOIN meetings mt ON mt.id=lm.source_object_id WHERE lm.id=r.from_id OR lm.id=r.to_id)').all(workspaceId) as Array<{id:string}>).map((row)=>row.id));ids.push(...(this.db.prepare('SELECT m.id FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?').all(workspaceId) as Array<{id:string}>).map((row)=>row.id));return ids}
+  private materializeInboundUpsert(workspaceId: string, objectId: string, kind: string, payload: Record<string, unknown>, changeId: string, attachmentChunkCount?: number): void {
+    const id = String(payload.id),
+      createdAt = String(payload.createdAt ?? now()),
+      updatedAt = String(payload.updatedAt ?? createdAt);
+    if (id !== objectId || id.length < 1 || id.length > 128) throw new Error('Inbound object identity is invalid');
+    this.assertInboundIdentityAvailable(workspaceId, id);
+    if (kind === 'chat') {
+      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at').run(id, workspaceId, String(payload.title), createdAt, updatedAt);
+      return;
+    }
+    if (kind === 'message') {
+      const chatId = String(payload.chatId);
+      if (!this.db.prepare('SELECT 1 FROM chats WHERE id=? AND workspace_id=?').get(chatId, workspaceId)) throw new Error('Inbound message chat is unavailable');
+      this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(id, chatId, String(payload.role), String(payload.body), createdAt);
+      const title = String(
+        (
+          this.db.prepare('SELECT title FROM chats WHERE id=?').get(chatId) as {
+            title: string;
+          }
+        ).title,
+      );
+      this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='message'").run(id);
+      this.indexText(workspaceId, id, 'message', undefined, title, String(payload.body));
+      return;
+    }
+    if (kind === 'document') {
+      const revisionId = String(payload.revisionId ?? changeId);
+      this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,current_revision_id=excluded.current_revision_id,updated_at=excluded.updated_at').run(id, workspaceId, String(payload.title), revisionId, createdAt, updatedAt);
+      this.db.prepare('INSERT OR REPLACE INTO revisions VALUES (?,?,?,?)').run(revisionId, id, String(payload.body), updatedAt);
+      this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='document'").run(id);
+      this.indexText(workspaceId, id, 'document', revisionId, String(payload.title), String(payload.body));
+      return;
+    }
+    if (kind === 'memory') {
+      const sourceId = payload.sourceObjectId ? String(payload.sourceObjectId) : null;
+      if (sourceId && !this.objectKindInWorkspace(workspaceId, sourceId)) throw new Error('Inbound memory source is unavailable');
+      this.db.prepare('INSERT INTO memories VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,body=excluded.body,source_object_id=excluded.source_object_id,ownership=excluded.ownership,updated_at=excluded.updated_at').run(id, workspaceId, String(payload.title), String(payload.body), sourceId, String(payload.ownership ?? 'workspace-owned'), createdAt, updatedAt);
+      this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='memory'").run(id);
+      this.indexText(workspaceId, id, 'memory', undefined, String(payload.title), String(payload.body));
+      return;
+    }
+    if (kind === 'relationship') {
+      if (!this.objectKindInWorkspace(workspaceId, String(payload.fromId)) || !this.objectKindInWorkspace(workspaceId, String(payload.toId))) throw new Error('Inbound relationship endpoint is unavailable');
+      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET from_id=excluded.from_id,to_id=excluded.to_id,type=excluded.type').run(id, workspaceId, String(payload.fromId), String(payload.toId), String(payload.type), createdAt);
+      return;
+    }
+    if (kind === 'attachment') {
+      if (!attachmentChunkCount || attachmentChunkCount > Math.ceil(MAX_ATTACHMENT_BYTES / (4 * 1024 * 1024)) || !Number.isSafeInteger(payload.bytes) || Number(payload.bytes) < 1 || Number(payload.bytes) > MAX_ATTACHMENT_BYTES || !this.objectKindInWorkspace(workspaceId, String(payload.ownerId))) throw new Error('Inbound attachment manifest violates limits');
+      const workspaceCount = Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=?').get(workspaceId) as { count: number }).count),
+        ownerCount = Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=? AND owner_id=?').get(workspaceId, String(payload.ownerId)) as { count: number }).count);
+      if (workspaceCount >= MAX_ATTACHMENTS_PER_WORKSPACE || ownerCount >= MAX_ATTACHMENTS_PER_OWNER) throw new Error('Inbound attachment count limit reached');
+      this.syncJournal.stageAttachment(changeId, workspaceId, payload, attachmentChunkCount);
+      return;
+    }
+    throw new Error('Unsupported inbound object kind');
+  }
+  private materializeInboundDelete(workspaceId: string, objectId: string, kind: string, removeFiles: string[]): void {
+    const attachments = this.db.prepare('SELECT relative_path FROM attachments WHERE workspace_id=? AND (id=? OR owner_id=?)').all(workspaceId, objectId, objectId) as Array<{ relative_path: string }>;
+    removeFiles.push(...attachments.map((item) => item.relative_path));
+    this.db.prepare('DELETE FROM briefing_dismissals WHERE workspace_id=? AND source_id=?').run(workspaceId, objectId);
+    this.db.prepare('DELETE FROM attachments WHERE workspace_id=? AND (id=? OR owner_id=?)').run(workspaceId, objectId, objectId);
+    this.db.prepare('DELETE FROM relationships WHERE workspace_id=? AND (id=? OR from_id=? OR to_id=?)').run(workspaceId, objectId, objectId, objectId);
+    this.db.prepare('DELETE FROM embeddings WHERE workspace_id=? AND object_id=?').run(workspaceId, objectId);
+    this.db.prepare('DELETE FROM search_fts WHERE workspace_id=? AND object_id=?').run(workspaceId, objectId);
+    if (kind === 'message' || kind === 'any') this.db.prepare('DELETE FROM messages WHERE id=? AND EXISTS(SELECT 1 FROM chats WHERE id=messages.chat_id AND workspace_id=?)').run(objectId, workspaceId);
+    const selected = kind === 'document' ? 'documents' : kind === 'chat' ? 'chats' : kind === 'memory' ? 'memories' : kind === 'relationship' ? 'relationships' : kind === 'attachment' ? 'attachments' : undefined,
+      tables = kind === 'any' ? ['documents', 'chats', 'memories', 'relationships', 'attachments'] : selected ? [selected] : [];
+    for (const table of tables) this.db.prepare(`DELETE FROM ${table} WHERE id=? AND workspace_id=?`).run(objectId, workspaceId);
+    this.db.prepare('INSERT OR REPLACE INTO tombstones VALUES (?,?,?,?)').run(objectId, workspaceId, kind, now());
+  }
+  private assertInboundIdentityAvailable(workspaceId: string, id: string): void {
+    for (const table of ['documents', 'chats', 'memories', 'relationships', 'attachments']) {
+      const row = this.db.prepare(`SELECT workspace_id workspaceId FROM ${table} WHERE id=?`).get(id) as { workspaceId: string } | undefined;
+      if (row && row.workspaceId !== workspaceId) throw new Error('Inbound object identity belongs to another workspace');
+    }
+    const message = this.db.prepare('SELECT c.workspace_id workspaceId FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as { workspaceId: string } | undefined;
+    if (message && message.workspaceId !== workspaceId) throw new Error('Inbound object identity belongs to another workspace');
+  }
+  private canonicalObjectIds(workspaceId: string): string[] {
+    const ids: string[] = [];
+    for (const table of ['documents', 'chats', 'attachments']) ids.push(...(this.db.prepare(`SELECT id FROM ${table} WHERE workspace_id=?`).all(workspaceId) as Array<{ id: string }>).map((row) => row.id));
+    ids.push(...(this.db.prepare('SELECT id FROM memories WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=memories.source_object_id)').all(workspaceId) as Array<{ id: string }>).map((row) => row.id));
+    ids.push(...(this.db.prepare('SELECT id FROM relationships r WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM meetings mt WHERE mt.id=r.from_id OR mt.id=r.to_id) AND NOT EXISTS (SELECT 1 FROM memories lm JOIN meetings mt ON mt.id=lm.source_object_id WHERE lm.id=r.from_id OR lm.id=r.to_id)').all(workspaceId) as Array<{ id: string }>).map((row) => row.id));
+    ids.push(...(this.db.prepare('SELECT m.id FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?').all(workspaceId) as Array<{ id: string }>).map((row) => row.id));
+    return ids;
+  }
 
   private createDefaultSecurityProfile(workspaceId: string, workspaceRoot: string): string {
-    const id = randomUUID(), executionRoot=path.join(path.resolve(workspaceRoot),'waypoint-workspaces',workspaceId)
-    mkdirSync(executionRoot,{recursive:true})
-    this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspaceId, 'Workspace — conservative', JSON.stringify([executionRoot]), 'read-only', 'provider-only', '[]', 'always', 120000, 1, 0, '[]', now())
-    return id
+    const id = randomUUID(),
+      executionRoot = path.join(path.resolve(workspaceRoot), 'waypoint-workspaces', workspaceId);
+    mkdirSync(executionRoot, { recursive: true });
+    this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspaceId, 'Workspace — conservative', JSON.stringify([executionRoot]), 'read-only', 'provider-only', '[]', 'always', 120000, 1, 0, '[]', now());
+    return id;
   }
 
-  listSecurityProfiles(workspaceId: string): Array<{id:string;name:string;roots:string[];filesystem:'read-only'|'workspace-write';network:'provider-only'|'disabled';tools:string[];approval:'always'|'on-write';maxDurationMs:number;maxConcurrency:number;peerEligible:boolean;secretNames:string[]}> {
-    const rows = this.db.prepare('SELECT id,name,roots_json roots,filesystem,network,tools_json tools,approval,max_duration_ms maxDurationMs,max_concurrency maxConcurrency,peer_eligible peerEligible,secret_names_json secretNames FROM security_profiles WHERE workspace_id=? ORDER BY created_at').all(workspaceId) as Array<Record<string,unknown>>
-    return rows.map((row) => ({...row, id:String(row.id),name:String(row.name),roots:JSON.parse(String(row.roots)),tools:JSON.parse(String(row.tools)),secretNames:JSON.parse(String(row.secretNames)),filesystem:row.filesystem as 'read-only'|'workspace-write',network:row.network as 'provider-only'|'disabled',approval:row.approval as 'always'|'on-write',maxDurationMs:Number(row.maxDurationMs),maxConcurrency:Number(row.maxConcurrency),peerEligible:Boolean(row.peerEligible)}))
+  listSecurityProfiles(workspaceId: string): Array<{
+    id: string;
+    name: string;
+    roots: string[];
+    filesystem: 'read-only' | 'workspace-write';
+    network: 'provider-only' | 'disabled';
+    tools: string[];
+    approval: 'always' | 'on-write';
+    maxDurationMs: number;
+    maxConcurrency: number;
+    peerEligible: boolean;
+    secretNames: string[];
+  }> {
+    const rows = this.db.prepare('SELECT id,name,roots_json roots,filesystem,network,tools_json tools,approval,max_duration_ms maxDurationMs,max_concurrency maxConcurrency,peer_eligible peerEligible,secret_names_json secretNames FROM security_profiles WHERE workspace_id=? ORDER BY created_at').all(workspaceId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      ...row,
+      id: String(row.id),
+      name: String(row.name),
+      roots: JSON.parse(String(row.roots)),
+      tools: JSON.parse(String(row.tools)),
+      secretNames: JSON.parse(String(row.secretNames)),
+      filesystem: row.filesystem as 'read-only' | 'workspace-write',
+      network: row.network as 'provider-only' | 'disabled',
+      approval: row.approval as 'always' | 'on-write',
+      maxDurationMs: Number(row.maxDurationMs),
+      maxConcurrency: Number(row.maxConcurrency),
+      peerEligible: Boolean(row.peerEligible),
+    }));
   }
 
-  createExecution(input: {workspaceId:string;chatId:string;sourceMessageId?:string;parentExecutionId?:string;cli:'codex'|'claude';model?:string;securityProfileId:string;prompt:string;depth?:number}): string {
-    this.assertObjectInWorkspace(input.workspaceId, input.chatId, 'chat')
-    const profile = this.db.prepare('SELECT id FROM security_profiles WHERE id=? AND workspace_id=?').get(input.securityProfileId,input.workspaceId)
-    if (!profile) throw new Error('Security profile not found in workspace')
-    if(input.sourceMessageId&&!this.db.prepare("SELECT 1 FROM messages WHERE id=? AND chat_id=? AND role='user'").get(input.sourceMessageId,input.chatId))throw new Error('Execution source message not found in chat')
+  createExecution(input: { workspaceId: string; chatId: string; sourceMessageId?: string; parentExecutionId?: string; cli: 'codex' | 'claude'; model?: string; securityProfileId: string; prompt: string; depth?: number }): string {
+    this.assertObjectInWorkspace(input.workspaceId, input.chatId, 'chat');
+    const profile = this.db.prepare('SELECT id FROM security_profiles WHERE id=? AND workspace_id=?').get(input.securityProfileId, input.workspaceId);
+    if (!profile) throw new Error('Security profile not found in workspace');
+    if (input.sourceMessageId && !this.db.prepare("SELECT 1 FROM messages WHERE id=? AND chat_id=? AND role='user'").get(input.sourceMessageId, input.chatId)) throw new Error('Execution source message not found in chat');
     if (input.parentExecutionId) {
-      const parent = this.db.prepare('SELECT depth FROM executions WHERE id=? AND workspace_id=? AND chat_id=?').get(input.parentExecutionId,input.workspaceId,input.chatId) as {depth:number}|undefined
-      if (!parent || (input.depth ?? 0) !== parent.depth + 1) throw new Error('Invalid execution lineage')
+      const parent = this.db.prepare('SELECT depth FROM executions WHERE id=? AND workspace_id=? AND chat_id=?').get(input.parentExecutionId, input.workspaceId, input.chatId) as { depth: number } | undefined;
+      if (!parent || (input.depth ?? 0) !== parent.depth + 1) throw new Error('Invalid execution lineage');
     }
-    const id=randomUUID(), timestamp=now()
-    this.transaction(()=>{
-      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,input.workspaceId,input.chatId,input.sourceMessageId??null,input.parentExecutionId??null,input.cli,input.model??null,'local',input.securityProfileId,createHash('sha256').update(input.prompt).digest('hex'),'queued',input.depth??0,timestamp)
-      this.activity(input.workspaceId,'ai','execution.queued',id,'execution',{cli:input.cli,device:'local'})
-    })
-    return id
+    const id = randomUUID(),
+      timestamp = now();
+    this.transaction(() => {
+      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, input.workspaceId, input.chatId, input.sourceMessageId ?? null, input.parentExecutionId ?? null, input.cli, input.model ?? null, 'local', input.securityProfileId, createHash('sha256').update(input.prompt).digest('hex'), 'queued', input.depth ?? 0, timestamp);
+      this.activity(input.workspaceId, 'ai', 'execution.queued', id, 'execution', { cli: input.cli, device: 'local' });
+    });
+    return id;
   }
 
-  startExecution(id:string, workspaceId:string, executable:string, version?:string): void {
-    const result=this.db.prepare("UPDATE executions SET status='running',executable=?,cli_version=?,started_at=? WHERE id=? AND workspace_id=? AND status='queued'").run(executable,version??null,now(),id,workspaceId)
-    if (!result.changes) throw new Error('Execution is not queued in workspace')
+  startExecution(id: string, workspaceId: string, executable: string, version?: string): void {
+    const result = this.db.prepare("UPDATE executions SET status='running',executable=?,cli_version=?,started_at=? WHERE id=? AND workspace_id=? AND status='queued'").run(executable, version ?? null, now(), id, workspaceId);
+    if (!result.changes) throw new Error('Execution is not queued in workspace');
   }
 
-  failQueuedExecution(id:string,workspaceId:string,error:string):void {
-    const changed=this.db.prepare("UPDATE executions SET status='failed',finished_at=?,error_code='startup_failed',error_message=? WHERE id=? AND workspace_id=? AND status='queued'").run(now(),error.slice(0,8192),id,workspaceId)
-    if(!changed.changes)throw new Error('Execution is not queued in workspace')
-    this.activity(workspaceId,'ai','execution.failed',id,'execution',{phase:'startup'})
+  failQueuedExecution(id: string, workspaceId: string, error: string): void {
+    const changed = this.db.prepare("UPDATE executions SET status='failed',finished_at=?,error_code='startup_failed',error_message=? WHERE id=? AND workspace_id=? AND status='queued'").run(now(), error.slice(0, 8192), id, workspaceId);
+    if (!changed.changes) throw new Error('Execution is not queued in workspace');
+    this.activity(workspaceId, 'ai', 'execution.failed', id, 'execution', {
+      phase: 'startup',
+    });
   }
 
-  appendExecutionEvent(id:string, workspaceId:string, event:{type:string;text?:string;name?:string;rawType?:string}): void {
-    const run=this.db.prepare('SELECT id FROM executions WHERE id=? AND workspace_id=?').get(id,workspaceId)
-    if (!run) throw new Error('Execution not found in workspace')
-    const sequence=(this.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 next FROM execution_events WHERE execution_id=?').get(id) as {next:number}).next
-    this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),id,sequence,event.type,event.text??null,event.name??null,event.rawType??null,now())
+  appendExecutionEvent(id: string, workspaceId: string, event: { type: string; text?: string; name?: string; rawType?: string }): void {
+    const run = this.db.prepare('SELECT id FROM executions WHERE id=? AND workspace_id=?').get(id, workspaceId);
+    if (!run) throw new Error('Execution not found in workspace');
+    const sequence = (this.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 next FROM execution_events WHERE execution_id=?').get(id) as { next: number }).next;
+    this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), id, sequence, event.type, event.text ?? null, event.name ?? null, event.rawType ?? null, now());
   }
 
-  finishExecution(id:string, workspaceId:string, result:{status:'completed'|'failed'|'canceled'|'timed_out';exitCode:number|null;error?:string}, assistantBody?:string): void {
-    this.transaction(()=>{
-      const execution=this.db.prepare('SELECT chat_id chatId FROM executions WHERE id=? AND workspace_id=?').get(id,workspaceId) as {chatId:string}|undefined
-      const changed=this.db.prepare("UPDATE executions SET status=?,finished_at=?,exit_code=?,error_code=?,error_message=? WHERE id=? AND workspace_id=? AND status='running'").run(result.status,now(),result.exitCode,result.status==='failed'||result.status==='timed_out'?result.status:null,result.error?.slice(0,8192)??null,id,workspaceId)
-      if (!changed.changes||!execution) throw new Error('Execution is not running in workspace')
-      if(result.status==='completed'&&assistantBody?.trim()){
-        const chat=this.db.prepare('SELECT title FROM chats WHERE id=? AND workspace_id=?').get(execution.chatId,workspaceId) as {title:string}|undefined
-        if(!chat)throw new Error('Execution chat was deleted')
-        const messageId=randomUUID(),timestamp=now(),body=assistantBody.trim()
-        this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId,execution.chatId,'assistant',body,timestamp)
-        this.syncJournal.enqueue(workspaceId,messageId,'message','upsert',{id:messageId,chatId:execution.chatId,role:'assistant',body,createdAt:timestamp,executionId:id})
-        this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp,execution.chatId)
-        this.indexText(workspaceId,messageId,'message',undefined,chat.title,body)
-        this.activity(workspaceId,'content','message.created',messageId,'message',{role:'assistant',executionId:id})
+  finishExecution(
+    id: string,
+    workspaceId: string,
+    result: {
+      status: 'completed' | 'failed' | 'canceled' | 'timed_out';
+      exitCode: number | null;
+      error?: string;
+    },
+    assistantBody?: string,
+  ): void {
+    this.transaction(() => {
+      const execution = this.db.prepare('SELECT chat_id chatId FROM executions WHERE id=? AND workspace_id=?').get(id, workspaceId) as { chatId: string } | undefined;
+      const changed = this.db.prepare("UPDATE executions SET status=?,finished_at=?,exit_code=?,error_code=?,error_message=? WHERE id=? AND workspace_id=? AND status='running'").run(result.status, now(), result.exitCode, result.status === 'failed' || result.status === 'timed_out' ? result.status : null, result.error?.slice(0, 8192) ?? null, id, workspaceId);
+      if (!changed.changes || !execution) throw new Error('Execution is not running in workspace');
+      if (result.status === 'completed' && assistantBody?.trim()) {
+        const chat = this.db.prepare('SELECT title FROM chats WHERE id=? AND workspace_id=?').get(execution.chatId, workspaceId) as { title: string } | undefined;
+        if (!chat) throw new Error('Execution chat was deleted');
+        const messageId = randomUUID(),
+          timestamp = now(),
+          body = assistantBody.trim();
+        this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, execution.chatId, 'assistant', body, timestamp);
+        this.syncJournal.enqueue(workspaceId, messageId, 'message', 'upsert', {
+          id: messageId,
+          chatId: execution.chatId,
+          role: 'assistant',
+          body,
+          createdAt: timestamp,
+          executionId: id,
+        });
+        this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp, execution.chatId);
+        this.indexText(workspaceId, messageId, 'message', undefined, chat.title, body);
+        this.activity(workspaceId, 'content', 'message.created', messageId, 'message', { role: 'assistant', executionId: id });
       }
-      this.activity(workspaceId,'ai',`execution.${result.status}`,id,'execution',{exitCode:result.exitCode})
-    })
+      this.activity(workspaceId, 'ai', `execution.${result.status}`, id, 'execution', { exitCode: result.exitCode });
+    });
   }
 
-  listExecutions(workspaceId:string, chatId?:string): Array<Record<string,unknown>> {
-    const rows=this.db.prepare(`SELECT e.id,e.chat_id chatId,e.source_message_id sourceMessageId,e.parent_execution_id parentExecutionId,e.cli,e.executable,e.cli_version cliVersion,e.model,e.device,e.security_profile_id securityProfileId,e.prompt_sha256 promptSha256,e.status,e.depth,e.started_at startedAt,e.finished_at finishedAt,e.exit_code exitCode,e.error_code errorCode,e.error_message errorMessage,e.created_at createdAt,p.name profileName FROM executions e JOIN security_profiles p ON p.id=e.security_profile_id WHERE e.workspace_id=? ${chatId?'AND e.chat_id=?':''} ORDER BY e.created_at DESC,e.rowid DESC`).all(...(chatId?[workspaceId,chatId]:[workspaceId])) as Array<Record<string,unknown>>
-    return rows.map((run)=>({...run,events:this.db.prepare('SELECT sequence,type,text,name,raw_type rawType,created_at createdAt FROM execution_events WHERE execution_id=? ORDER BY sequence').all(String(run.id))}))
+  listExecutions(workspaceId: string, chatId?: string): Array<Record<string, unknown>> {
+    const rows = this.db.prepare(`SELECT e.id,e.chat_id chatId,e.source_message_id sourceMessageId,e.parent_execution_id parentExecutionId,e.cli,e.executable,e.cli_version cliVersion,e.model,e.device,e.security_profile_id securityProfileId,e.prompt_sha256 promptSha256,e.status,e.depth,e.started_at startedAt,e.finished_at finishedAt,e.exit_code exitCode,e.error_code errorCode,e.error_message errorMessage,e.created_at createdAt,p.name profileName FROM executions e JOIN security_profiles p ON p.id=e.security_profile_id WHERE e.workspace_id=? ${chatId ? 'AND e.chat_id=?' : ''} ORDER BY e.created_at DESC,e.rowid DESC`).all(...(chatId ? [workspaceId, chatId] : [workspaceId])) as Array<Record<string, unknown>>;
+    return rows.map((run) => ({
+      ...run,
+      events: this.db.prepare('SELECT sequence,type,text,name,raw_type rawType,created_at createdAt FROM execution_events WHERE execution_id=? ORDER BY sequence').all(String(run.id)),
+    }));
   }
 
   executionExists(workspaceId: string, id: string): boolean {
-    return Boolean(this.db.prepare('SELECT 1 FROM executions WHERE id=? AND workspace_id=?').get(id,workspaceId))
+    return Boolean(this.db.prepare('SELECT 1 FROM executions WHERE id=? AND workspace_id=?').get(id, workspaceId));
   }
 
-  activeExecutionIds(workspaceId?:string,chatId?:string):string[]{
-    let sql="SELECT id FROM executions WHERE status IN ('queued','running')";const args:string[]=[]
-    if(workspaceId){sql+=' AND workspace_id=?';args.push(workspaceId)}
-    if(chatId){sql+=' AND chat_id=?';args.push(chatId)}
-    return (this.db.prepare(sql).all(...args) as Array<{id:string}>).map((row)=>row.id)
+  activeExecutionIds(workspaceId?: string, chatId?: string): string[] {
+    let sql = "SELECT id FROM executions WHERE status IN ('queued','running')";
+    const args: string[] = [];
+    if (workspaceId) {
+      sql += ' AND workspace_id=?';
+      args.push(workspaceId);
+    }
+    if (chatId) {
+      sql += ' AND chat_id=?';
+      args.push(chatId);
+    }
+    return (this.db.prepare(sql).all(...args) as Array<{ id: string }>).map((row) => row.id);
   }
 
-  private reconcileInterruptedExecutions():void{
-    const interrupted=this.db.prepare("SELECT id,workspace_id workspaceId,status FROM executions WHERE status IN ('queued','running')").all() as Array<{id:string;workspaceId:string;status:string}>
-    if(!interrupted.length)return
-    this.transaction(()=>{for(const run of interrupted){this.db.prepare("UPDATE executions SET status='failed',finished_at=?,error_code='interrupted',error_message='Waypoint stopped before this run reached a terminal state' WHERE id=?").run(now(),run.id);this.activity(run.workspaceId,'ai','execution.failed',run.id,'execution',{phase:'startup-reconciliation',priorStatus:run.status})}})
+  private reconcileInterruptedExecutions(): void {
+    const interrupted = this.db.prepare("SELECT id,workspace_id workspaceId,status FROM executions WHERE status IN ('queued','running')").all() as Array<{ id: string; workspaceId: string; status: string }>;
+    if (!interrupted.length) return;
+    this.transaction(() => {
+      for (const run of interrupted) {
+        this.db.prepare("UPDATE executions SET status='failed',finished_at=?,error_code='interrupted',error_message='Waypoint stopped before this run reached a terminal state' WHERE id=?").run(now(), run.id);
+        this.activity(run.workspaceId, 'ai', 'execution.failed', run.id, 'execution', { phase: 'startup-reconciliation', priorStatus: run.status });
+      }
+    });
   }
 
   listWorkspaces(): WorkspaceSummary[] {
-    return (this.db.prepare('SELECT id,name,local_path localPath,created_at createdAt FROM workspaces ORDER BY created_at').all() as unknown) as WorkspaceSummary[]
+    return this.db.prepare('SELECT id,name,local_path localPath,created_at createdAt FROM workspaces ORDER BY created_at').all() as unknown as WorkspaceSummary[];
   }
 
-  listDocuments(workspaceId: string): Array<{ id: string; title: string; body: string; revisionId: string; updatedAt: string }> {
-    return this.db.prepare('SELECT d.id,d.title,r.body,r.id revisionId,d.updated_at updatedAt FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=? ORDER BY d.updated_at DESC').all(workspaceId) as unknown as Array<{ id: string; title: string; body: string; revisionId: string; updatedAt: string }>
+  listDocuments(workspaceId: string): Array<{
+    id: string;
+    title: string;
+    body: string;
+    revisionId: string;
+    updatedAt: string;
+  }> {
+    return this.db.prepare('SELECT d.id,d.title,r.body,r.id revisionId,d.updated_at updatedAt FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=? ORDER BY d.updated_at DESC').all(workspaceId) as unknown as Array<{
+      id: string;
+      title: string;
+      body: string;
+      revisionId: string;
+      updatedAt: string;
+    }>;
   }
 
-  listChats(workspaceId: string): Array<{ id: string; title: string; updatedAt: string; messages: Array<{ id: string; role: string; body: string; createdAt: string }> }> {
-    const chats = this.db.prepare('SELECT id,title,updated_at updatedAt FROM chats WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as Array<{ id: string; title: string; updatedAt: string }>
-    return chats.map((chat) => ({ ...chat, messages: this.db.prepare('SELECT id,role,body,created_at createdAt FROM messages WHERE chat_id=? ORDER BY created_at').all(chat.id) as Array<{ id: string; role: string; body: string; createdAt: string }> }))
+  listChats(workspaceId: string): Array<{
+    id: string;
+    title: string;
+    updatedAt: string;
+    messages: Array<{
+      id: string;
+      role: string;
+      body: string;
+      createdAt: string;
+    }>;
+  }> {
+    const chats = this.db.prepare('SELECT id,title,updated_at updatedAt FROM chats WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as Array<{
+      id: string;
+      title: string;
+      updatedAt: string;
+    }>;
+    return chats.map((chat) => ({
+      ...chat,
+      messages: this.db.prepare('SELECT id,role,body,created_at createdAt FROM messages WHERE chat_id=? ORDER BY created_at').all(chat.id) as Array<{
+        id: string;
+        role: string;
+        body: string;
+        createdAt: string;
+      }>,
+    }));
   }
 
-  listMemories(workspaceId: string): Array<{ id: string; title: string; body: string; sourceObjectId?: string; ownership: string; updatedAt: string }> {
-    return this.db.prepare('SELECT id,title,body,source_object_id sourceObjectId,ownership,updated_at updatedAt FROM memories WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as unknown as Array<{ id: string; title: string; body: string; sourceObjectId?: string; ownership: string; updatedAt: string }>
+  listMemories(workspaceId: string): Array<{
+    id: string;
+    title: string;
+    body: string;
+    sourceObjectId?: string;
+    ownership: string;
+    updatedAt: string;
+  }> {
+    return this.db.prepare('SELECT id,title,body,source_object_id sourceObjectId,ownership,updated_at updatedAt FROM memories WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as unknown as Array<{
+      id: string;
+      title: string;
+      body: string;
+      sourceObjectId?: string;
+      ownership: string;
+      updatedAt: string;
+    }>;
   }
 
-  scanMemorySuggestions(workspaceId:string,chatId?:string):number{if(chatId)this.assertObjectInWorkspace(workspaceId,chatId,'chat');const rows=this.db.prepare(`SELECT m.id messageId,m.role,CASE WHEN length(m.body)<=? THEN m.body ELSE NULL END body,m.chat_id chatId FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? ${chatId?'AND c.id=?':''} AND m.role!='system' ORDER BY m.created_at DESC LIMIT ?`).all(SUGGESTION_SCAN_LIMITS.maxMessageCharacters,...(chatId?[workspaceId,chatId]:[workspaceId]),SUGGESTION_SCAN_LIMITS.maxMessages) as Array<{messageId:string;role:string;body:string|null;chatId:string}>;let created=0,scannedCharacters=0;this.transaction(()=>{for(const row of rows){if(row.body===null)continue;if(scannedCharacters+row.body.length>SUGGESTION_SCAN_LIMITS.maxTotalCharacters)break;scannedCharacters+=row.body.length;const digest=contentDigest(row.body);for(const candidate of extractSuggestions(row.messageId,row.body)){if(candidate.confidence<SUGGESTION_EXTRACTOR.threshold||(candidate.category==='commitment'&&row.role!=='user'))continue;const result=this.db.prepare("INSERT OR IGNORE INTO memory_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',NULL,NULL,?)").run(randomUUID(),workspaceId,row.chatId,row.messageId,row.role,candidate.category,candidate.title,candidate.body,candidate.sourceExcerpt,digest,candidate.startOffset,candidate.endOffset,candidate.confidence,SUGGESTION_EXTRACTOR.provider,SUGGESTION_EXTRACTOR.version,candidate.fingerprint,now());created+=Number(result.changes);if(created>=SUGGESTION_EXTRACTOR.maxPerScan)break}if(created>=SUGGESTION_EXTRACTOR.maxPerScan)break}if(created)this.activity(workspaceId,'knowledge','suggestions.scanned',workspaceId,'workspace',{created,extractor:SUGGESTION_EXTRACTOR.provider,version:SUGGESTION_EXTRACTOR.version,scannedCharacters})});return created}
-
-  listMemorySuggestions(workspaceId:string,status:'pending'|'accepted'|'rejected'='pending'):Array<Record<string,unknown>>{return this.db.prepare('SELECT id,chat_id chatId,source_message_id sourceMessageId,source_role sourceRole,category,title,body,source_excerpt sourceExcerpt,start_offset startOffset,end_offset endOffset,confidence,extractor,extractor_version extractorVersion,status,accepted_object_id acceptedObjectId,resolved_at resolvedAt,created_at createdAt FROM memory_suggestions WHERE workspace_id=? AND status=? ORDER BY confidence DESC,created_at DESC').all(workspaceId,status) as Array<Record<string,unknown>>}
-
-  resolveMemorySuggestion(workspaceId:string,suggestionId:string,action:'accept'|'reject',edited?:{title:string;body:string}):{acceptedObjectId?:string;kind?:'memory'|'commitment'}{
-    return this.transaction(()=>{
-      const suggestion=this.db.prepare("SELECT s.*,m.body source_body,m.role current_source_role,m.chat_id current_chat_id FROM memory_suggestions s JOIN messages m ON m.id=s.source_message_id JOIN chats c ON c.id=m.chat_id WHERE s.id=? AND s.workspace_id=? AND c.workspace_id=? AND s.status='pending'").get(suggestionId,workspaceId,workspaceId) as Record<string,unknown>|undefined
-      if(!suggestion)throw new Error('Pending suggestion or source not found')
-      const sourceId=String(suggestion.source_message_id),sourceBody=String(suggestion.source_body),start=Number(suggestion.start_offset),end=Number(suggestion.end_offset)
-      if(String(suggestion.source_digest)!==contentDigest(sourceBody)||String(suggestion.source_excerpt)!==sourceBody.slice(start,end)||String(suggestion.source_role)!==String(suggestion.current_source_role)||String(suggestion.chat_id)!==String(suggestion.current_chat_id))throw new Error('Suggestion source changed; scan the conversation again')
-      if(action==='reject'){this.db.prepare("UPDATE memory_suggestions SET status='rejected',resolved_at=? WHERE id=? AND workspace_id=? AND status='pending'").run(now(),suggestionId,workspaceId);this.activity(workspaceId,'knowledge','suggestion.rejected',suggestionId,'suggestion',{category:suggestion.category});return{}}
-      const title=(edited?.title??String(suggestion.title)).trim().slice(0,300)||'Memory',body=(edited?.body??String(suggestion.body)).slice(0,10_000),timestamp=now()
-      if(!body.trim())throw new Error('Accepted suggestion body is required')
-      if(String(suggestion.category)==='commitment'){const id=randomUUID();this.db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,NULL)').run(id,workspaceId,suggestionId,sourceId,title,body,'open',timestamp,timestamp);this.db.prepare("UPDATE memory_suggestions SET status='accepted',accepted_object_id=?,resolved_at=? WHERE id=? AND status='pending'").run(id,timestamp,suggestionId);this.activity(workspaceId,'knowledge','commitment.accepted',id,'commitment',{suggestionId,sourceMessageId:sourceId});return{acceptedObjectId:id,kind:'commitment'}}
-      const id=randomUUID(),relationshipId=randomUUID()
-      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,workspaceId,title,body,sourceId,'workspace-owned',timestamp,timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'memory','upsert',{id,title,body,sourceObjectId:sourceId,ownership:'workspace-owned',createdAt:timestamp,updatedAt:timestamp});this.indexText(workspaceId,id,'memory',undefined,title,body)
-      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId,workspaceId,sourceId,id,'derived_from',timestamp);this.syncJournal.enqueue(workspaceId,relationshipId,'relationship','upsert',{id:relationshipId,fromId:sourceId,toId:id,type:'derived_from',createdAt:timestamp})
-      this.db.prepare("UPDATE memory_suggestions SET status='accepted',accepted_object_id=?,resolved_at=? WHERE id=? AND status='pending'").run(id,timestamp,suggestionId);this.activity(workspaceId,'knowledge','suggestion.accepted',id,'memory',{suggestionId,category:suggestion.category,sourceMessageId:sourceId});return{acceptedObjectId:id,kind:'memory'}
-    })
+  scanMemorySuggestions(workspaceId: string, chatId?: string): number {
+    if (chatId) this.assertObjectInWorkspace(workspaceId, chatId, 'chat');
+    const rows = this.db.prepare(`SELECT m.id messageId,m.role,CASE WHEN length(m.body)<=? THEN m.body ELSE NULL END body,m.chat_id chatId FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? ${chatId ? 'AND c.id=?' : ''} AND m.role!='system' ORDER BY m.created_at DESC LIMIT ?`).all(SUGGESTION_SCAN_LIMITS.maxMessageCharacters, ...(chatId ? [workspaceId, chatId] : [workspaceId]), SUGGESTION_SCAN_LIMITS.maxMessages) as Array<{
+      messageId: string;
+      role: string;
+      body: string | null;
+      chatId: string;
+    }>;
+    let created = 0,
+      scannedCharacters = 0;
+    this.transaction(() => {
+      for (const row of rows) {
+        if (row.body === null) continue;
+        if (scannedCharacters + row.body.length > SUGGESTION_SCAN_LIMITS.maxTotalCharacters) break;
+        scannedCharacters += row.body.length;
+        const digest = contentDigest(row.body);
+        for (const candidate of extractSuggestions(row.messageId, row.body)) {
+          if (candidate.confidence < SUGGESTION_EXTRACTOR.threshold || (candidate.category === 'commitment' && row.role !== 'user')) continue;
+          const result = this.db.prepare("INSERT OR IGNORE INTO memory_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',NULL,NULL,?)").run(randomUUID(), workspaceId, row.chatId, row.messageId, row.role, candidate.category, candidate.title, candidate.body, candidate.sourceExcerpt, digest, candidate.startOffset, candidate.endOffset, candidate.confidence, SUGGESTION_EXTRACTOR.provider, SUGGESTION_EXTRACTOR.version, candidate.fingerprint, now());
+          created += Number(result.changes);
+          if (created >= SUGGESTION_EXTRACTOR.maxPerScan) break;
+        }
+        if (created >= SUGGESTION_EXTRACTOR.maxPerScan) break;
+      }
+      if (created)
+        this.activity(workspaceId, 'knowledge', 'suggestions.scanned', workspaceId, 'workspace', {
+          created,
+          extractor: SUGGESTION_EXTRACTOR.provider,
+          version: SUGGESTION_EXTRACTOR.version,
+          scannedCharacters,
+        });
+    });
+    return created;
   }
 
-  listCommitments(workspaceId:string):Array<Record<string,unknown>>{return this.db.prepare('SELECT c.id,c.suggestion_id suggestionId,c.source_message_id sourceMessageId,c.title,c.body,c.status,c.created_at createdAt,c.updated_at updatedAt,c.completed_at completedAt,s.source_excerpt sourceExcerpt FROM commitments c JOIN memory_suggestions s ON s.id=c.suggestion_id WHERE c.workspace_id=? ORDER BY CASE c.status WHEN \'open\' THEN 0 ELSE 1 END,c.updated_at DESC').all(workspaceId) as Array<Record<string,unknown>>}
-
-  setCommitmentCompleted(workspaceId:string,commitmentId:string,completed:boolean):void{const timestamp=now(),result=this.db.prepare("UPDATE commitments SET status=?,updated_at=?,completed_at=? WHERE id=? AND workspace_id=?").run(completed?'completed':'open',timestamp,completed?timestamp:null,commitmentId,workspaceId);if(!result.changes)throw new Error('Commitment not found');this.activity(workspaceId,'knowledge',completed?'commitment.completed':'commitment.reopened',commitmentId,'commitment',{})}
-
-  composeDailyBriefing(workspaceId:string,timezone:string,instant=now()):DailyBriefing{
-    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
-    const localDay=localDayAt(instant,timezone)
-    const commitments=this.db.prepare("SELECT c.id,'commitment' kind,c.title,substr(c.body,1,4000) detail,length(c.body)>4000 detailTruncated,0 missingSource,c.updated_at updatedAt FROM commitments c WHERE c.workspace_id=? AND c.status='open' AND NOT EXISTS(SELECT 1 FROM briefing_dismissals b WHERE b.workspace_id=c.workspace_id AND b.source_id=c.id AND b.source_kind='commitment' AND b.local_day=?) ORDER BY c.updated_at DESC,c.id ASC LIMIT 31").all(workspaceId,localDay) as unknown as BriefingSource[]
-    const documents=(this.db.prepare("SELECT d.id,'document' kind,d.title,substr(COALESCE(r.body,''),1,4000) detail,length(COALESCE(r.body,''))>4000 detailTruncated,r.id IS NULL missingSource,d.updated_at updatedAt FROM documents d LEFT JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=? AND NOT EXISTS(SELECT 1 FROM briefing_dismissals b WHERE b.workspace_id=d.workspace_id AND b.source_id=d.id AND b.source_kind='document' AND b.local_day=?) ORDER BY d.updated_at DESC,d.id ASC LIMIT 51").all(workspaceId,localDay) as unknown as Array<Omit<BriefingSource,'missingSource'|'detailTruncated'>&{missingSource:number;detailTruncated:number}>).map((item):BriefingSource=>({...item,missingSource:Boolean(item.missingSource),detailTruncated:Boolean(item.detailTruncated)}))
-    const memories=this.db.prepare("SELECT m.id,'memory' kind,m.title,substr(m.body,1,4000) detail,length(m.body)>4000 detailTruncated,0 missingSource,m.updated_at updatedAt FROM memories m WHERE m.workspace_id=? AND NOT EXISTS(SELECT 1 FROM briefing_dismissals b WHERE b.workspace_id=m.workspace_id AND b.source_id=m.id AND b.source_kind='memory' AND b.local_day=?) ORDER BY m.updated_at DESC,m.id ASC LIMIT 51").all(workspaceId,localDay) as unknown as BriefingSource[]
-    const briefing=composeDailyBriefing([...commitments,...documents,...memories],new Set(),instant,timezone)
-    const counts=this.db.prepare("SELECT (SELECT count(*) FROM commitments WHERE workspace_id=? AND status='open') openCommitments,(SELECT count(*) FROM documents WHERE workspace_id=?) documents,(SELECT count(*) FROM memories WHERE workspace_id=?) memories,(SELECT count(*) FROM documents d LEFT JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=? AND r.id IS NULL) missingSources,(SELECT count(*) FROM briefing_dismissals b WHERE b.workspace_id=? AND b.local_day=? AND ((b.source_kind='commitment' AND EXISTS(SELECT 1 FROM commitments c WHERE c.id=b.source_id AND c.workspace_id=b.workspace_id AND c.status='open')) OR (b.source_kind='document' AND EXISTS(SELECT 1 FROM documents d WHERE d.id=b.source_id AND d.workspace_id=b.workspace_id)) OR (b.source_kind='memory' AND EXISTS(SELECT 1 FROM memories m WHERE m.id=b.source_id AND m.workspace_id=b.workspace_id)))) dismissed").get(workspaceId,workspaceId,workspaceId,workspaceId,workspaceId,localDay) as {openCommitments:number;documents:number;memories:number;missingSources:number;dismissed:number}
-    briefing.coverage={...counts,omittedByLimit:Math.max(0,counts.openCommitments+counts.documents+counts.memories-counts.dismissed-briefing.items.length)}
-    if(counts.missingSources)briefing.omissions.push(`${counts.missingSources} local note source${counts.missingSources===1?' is':'s are'} missing its current revision; content could not be shown.`)
-    return briefing
+  listMemorySuggestions(workspaceId: string, status: 'pending' | 'accepted' | 'rejected' = 'pending'): Array<Record<string, unknown>> {
+    return this.db.prepare('SELECT id,chat_id chatId,source_message_id sourceMessageId,source_role sourceRole,category,title,body,source_excerpt sourceExcerpt,start_offset startOffset,end_offset endOffset,confidence,extractor,extractor_version extractorVersion,status,accepted_object_id acceptedObjectId,resolved_at resolvedAt,created_at createdAt FROM memory_suggestions WHERE workspace_id=? AND status=? ORDER BY confidence DESC,created_at DESC').all(workspaceId, status) as Array<Record<string, unknown>>;
   }
 
-  dismissBriefingItem(workspaceId:string,sourceId:string,sourceKind:'commitment'|'document'|'memory',localDay:string):void{const parsedDay=new Date(`${localDay}T12:00:00Z`);if(!/^\d{4}-\d{2}-\d{2}$/.test(localDay)||!Number.isFinite(parsedDay.valueOf())||parsedDay.toISOString().slice(0,10)!==localDay)throw new Error('Briefing day is invalid');const exists=sourceKind==='commitment'?this.db.prepare('SELECT 1 FROM commitments WHERE id=? AND workspace_id=?').get(sourceId,workspaceId):this.db.prepare(`SELECT 1 FROM ${sourceKind==='document'?'documents':'memories'} WHERE id=? AND workspace_id=?`).get(sourceId,workspaceId);if(!exists)throw new Error('Briefing source not found');this.transaction(()=>{const result=this.db.prepare('INSERT OR IGNORE INTO briefing_dismissals VALUES (?,?,?,?,?)').run(workspaceId,sourceId,sourceKind,localDay,now());if(result.changes)this.activity(workspaceId,'briefing','item.dismissed',sourceId,sourceKind,{localDay})})}
-
-  scanRuleSuggestions(workspaceId:string):number{
-    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
-    const rows=this.db.prepare("SELECT m.id messageId,m.chat_id chatId,CASE WHEN length(m.body)<=100000 THEN m.body ELSE NULL END body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? AND m.role='user' ORDER BY m.created_at DESC,m.id ASC LIMIT ?").all(workspaceId,RULE_EXTRACTOR.maxMessages) as Array<{messageId:string;chatId:string;body:string|null}>,groups=new Map<string,Array<{messageId:string;chatId:string;statement:string;excerpt:string;sourceDigest:string;startOffset:number;endOffset:number}>>()
-    let characters=0
-    for(const row of rows){if(row.body===null)continue;if(characters+row.body.length>RULE_EXTRACTOR.maxCharacters)break;characters+=row.body.length;for(const item of extractRuleDirectives(row.body)){const list=groups.get(item.normalized)??[];if(!list.some((source)=>source.messageId===row.messageId))list.push({...item,messageId:row.messageId,chatId:row.chatId});groups.set(item.normalized,list)}}
-    let created=0
-    this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);for(const [normalized,sources] of [...groups].sort(([left],[right])=>left.localeCompare(right))){if(sources.length<2||created>=RULE_EXTRACTOR.maxCandidates)continue;const fingerprint=contentDigest(JSON.stringify([workspaceId,RULE_EXTRACTOR.provider,RULE_EXTRACTOR.version,normalized])),proposedId=randomUUID(),timestamp=now(),result=this.db.prepare("INSERT OR IGNORE INTO rule_suggestions VALUES (?,?,?,?,?,'workspace',?,?,?,'pending',NULL,NULL,NULL,?)").run(proposedId,workspaceId,sources[0].statement,normalized,fingerprint,RULE_EXTRACTOR.confidence,RULE_EXTRACTOR.provider,RULE_EXTRACTOR.version,timestamp),suggestion=this.db.prepare('SELECT id,status FROM rule_suggestions WHERE fingerprint=? AND workspace_id=?').get(fingerprint,workspaceId) as {id:string;status:string}|undefined;if(!suggestion||suggestion.status==='rejected')continue;for(const source of sources)this.db.prepare('INSERT OR IGNORE INTO rule_suggestion_sources VALUES (?,?,?,?,?,?,?)').run(suggestion.id,source.messageId,source.chatId,source.excerpt,source.sourceDigest,source.startOffset,source.endOffset);if(result.changes)created++}if(created)this.activity(workspaceId,'rules','suggestions.scanned',workspaceId,'workspace',{created,extractor:RULE_EXTRACTOR.provider,version:RULE_EXTRACTOR.version})})
-    return created
+  resolveMemorySuggestion(workspaceId: string, suggestionId: string, action: 'accept' | 'reject', edited?: { title: string; body: string }): { acceptedObjectId?: string; kind?: 'memory' | 'commitment' } {
+    return this.transaction(() => {
+      const suggestion = this.db.prepare("SELECT s.*,m.body source_body,m.role current_source_role,m.chat_id current_chat_id FROM memory_suggestions s JOIN messages m ON m.id=s.source_message_id JOIN chats c ON c.id=m.chat_id WHERE s.id=? AND s.workspace_id=? AND c.workspace_id=? AND s.status='pending'").get(suggestionId, workspaceId, workspaceId) as Record<string, unknown> | undefined;
+      if (!suggestion) throw new Error('Pending suggestion or source not found');
+      const sourceId = String(suggestion.source_message_id),
+        sourceBody = String(suggestion.source_body),
+        start = Number(suggestion.start_offset),
+        end = Number(suggestion.end_offset);
+      if (String(suggestion.source_digest) !== contentDigest(sourceBody) || String(suggestion.source_excerpt) !== sourceBody.slice(start, end) || String(suggestion.source_role) !== String(suggestion.current_source_role) || String(suggestion.chat_id) !== String(suggestion.current_chat_id)) throw new Error('Suggestion source changed; scan the conversation again');
+      if (action === 'reject') {
+        this.db.prepare("UPDATE memory_suggestions SET status='rejected',resolved_at=? WHERE id=? AND workspace_id=? AND status='pending'").run(now(), suggestionId, workspaceId);
+        this.activity(workspaceId, 'knowledge', 'suggestion.rejected', suggestionId, 'suggestion', { category: suggestion.category });
+        return {};
+      }
+      const title = (edited?.title ?? String(suggestion.title)).trim().slice(0, 300) || 'Memory',
+        body = (edited?.body ?? String(suggestion.body)).slice(0, 10_000),
+        timestamp = now();
+      if (!body.trim()) throw new Error('Accepted suggestion body is required');
+      if (String(suggestion.category) === 'commitment') {
+        const id = randomUUID();
+        this.db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,NULL)').run(id, workspaceId, suggestionId, sourceId, title, body, 'open', timestamp, timestamp);
+        this.db.prepare("UPDATE memory_suggestions SET status='accepted',accepted_object_id=?,resolved_at=? WHERE id=? AND status='pending'").run(id, timestamp, suggestionId);
+        this.activity(workspaceId, 'knowledge', 'commitment.accepted', id, 'commitment', { suggestionId, sourceMessageId: sourceId });
+        return { acceptedObjectId: id, kind: 'commitment' };
+      }
+      const id = randomUUID(),
+        relationshipId = randomUUID();
+      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, title, body, sourceId, 'workspace-owned', timestamp, timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'memory', 'upsert', {
+        id,
+        title,
+        body,
+        sourceObjectId: sourceId,
+        ownership: 'workspace-owned',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.indexText(workspaceId, id, 'memory', undefined, title, body);
+      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspaceId, sourceId, id, 'derived_from', timestamp);
+      this.syncJournal.enqueue(workspaceId, relationshipId, 'relationship', 'upsert', {
+        id: relationshipId,
+        fromId: sourceId,
+        toId: id,
+        type: 'derived_from',
+        createdAt: timestamp,
+      });
+      this.db.prepare("UPDATE memory_suggestions SET status='accepted',accepted_object_id=?,resolved_at=? WHERE id=? AND status='pending'").run(id, timestamp, suggestionId);
+      this.activity(workspaceId, 'knowledge', 'suggestion.accepted', id, 'memory', {
+        suggestionId,
+        category: suggestion.category,
+        sourceMessageId: sourceId,
+      });
+      return { acceptedObjectId: id, kind: 'memory' };
+    });
   }
 
-  listRuleSuggestions(workspaceId:string):Array<Record<string,unknown>>{return this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);const rows=this.db.prepare("SELECT id,statement,scope,confidence,extractor,extractor_version extractorVersion,status,last_dry_run_at lastDryRunAt,created_at createdAt FROM rule_suggestions WHERE workspace_id=? AND status='pending' ORDER BY created_at DESC,id ASC").all(workspaceId) as Array<Record<string,unknown>>;return rows.map((row)=>({...row,sources:this.db.prepare('SELECT message_id messageId,chat_id chatId,excerpt,start_offset startOffset,end_offset endOffset FROM rule_suggestion_sources WHERE suggestion_id=? ORDER BY message_id').all(String(row.id))}))})}
+  listCommitments(workspaceId: string): Array<Record<string, unknown>> {
+    return this.db.prepare("SELECT c.id,c.suggestion_id suggestionId,c.source_message_id sourceMessageId,c.title,c.body,c.status,c.created_at createdAt,c.updated_at updatedAt,c.completed_at completedAt,s.source_excerpt sourceExcerpt FROM commitments c JOIN memory_suggestions s ON s.id=c.suggestion_id WHERE c.workspace_id=? ORDER BY CASE c.status WHEN 'open' THEN 0 ELSE 1 END,c.updated_at DESC").all(workspaceId) as Array<Record<string, unknown>>;
+  }
 
-  dryRunRuleSuggestion(workspaceId:string,suggestionId:string):{matchCount:number;sourceIds:string[]}{return this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);const suggestion=this.db.prepare("SELECT * FROM rule_suggestions WHERE id=? AND workspace_id=? AND status='pending'").get(suggestionId,workspaceId) as Record<string,unknown>|undefined;if(!suggestion)throw new Error('Pending rule suggestion not found');const sources=this.currentRuleSources(suggestionId,workspaceId);if(sources.length<2)throw new Error('Rule suggestion no longer has enough valid sources');const digest=contentDigest(JSON.stringify(sources.map((item)=>[item.messageId,item.sourceDigest]))),timestamp=now();this.db.prepare('UPDATE rule_suggestions SET last_dry_run_digest=?,last_dry_run_at=? WHERE id=?').run(digest,timestamp,suggestionId);this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),workspaceId,null,suggestionId,'dry_run',sources.length,1,timestamp);return{matchCount:sources.length,sourceIds:sources.map((item)=>item.messageId)}})}
+  setCommitmentCompleted(workspaceId: string, commitmentId: string, completed: boolean): void {
+    const timestamp = now(),
+      result = this.db.prepare('UPDATE commitments SET status=?,updated_at=?,completed_at=? WHERE id=? AND workspace_id=?').run(completed ? 'completed' : 'open', timestamp, completed ? timestamp : null, commitmentId, workspaceId);
+    if (!result.changes) throw new Error('Commitment not found');
+    this.activity(workspaceId, 'knowledge', completed ? 'commitment.completed' : 'commitment.reopened', commitmentId, 'commitment', {});
+  }
 
-  resolveRuleSuggestion(workspaceId:string,suggestionId:string,action:'approve'|'reject'):void{this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);const suggestion=this.db.prepare("SELECT * FROM rule_suggestions WHERE id=? AND workspace_id=? AND status='pending'").get(suggestionId,workspaceId) as Record<string,unknown>|undefined;if(!suggestion)throw new Error('Pending rule suggestion not found');const timestamp=now();if(action==='reject'){this.db.prepare("UPDATE rule_suggestions SET status='rejected',resolved_at=? WHERE id=?").run(timestamp,suggestionId);this.activity(workspaceId,'rules','suggestion.rejected',suggestionId,'rule_suggestion',{});return}const sources=this.currentRuleSources(suggestionId,workspaceId),digest=contentDigest(JSON.stringify(sources.map((item)=>[item.messageId,item.sourceDigest])));if(sources.length<2||!suggestion.last_dry_run_digest||String(suggestion.last_dry_run_digest)!==digest)throw new Error('Run a current dry run before approval');const ruleId=randomUUID();this.db.prepare('INSERT INTO learned_rules VALUES (?,?,?,?,?,?,?,?,?,?)').run(ruleId,workspaceId,suggestionId,String(suggestion.statement),'workspace',1,1,null,timestamp,timestamp);this.db.prepare("UPDATE rule_suggestions SET status='accepted',resolved_at=? WHERE id=?").run(timestamp,suggestionId);this.db.prepare('UPDATE rule_outcomes SET rule_id=? WHERE suggestion_id=? AND rule_id IS NULL').run(ruleId,suggestionId);this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),workspaceId,ruleId,suggestionId,'approved',sources.length,1,timestamp);this.activity(workspaceId,'rules','rule.approved',ruleId,'rule',{version:1,scope:'workspace'})})}
+  composeDailyBriefing(workspaceId: string, timezone: string, instant = now()): DailyBriefing {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    const localDay = localDayAt(instant, timezone);
+    const commitments = this.db.prepare("SELECT c.id,'commitment' kind,c.title,substr(c.body,1,4000) detail,length(c.body)>4000 detailTruncated,0 missingSource,c.updated_at updatedAt FROM commitments c WHERE c.workspace_id=? AND c.status='open' AND NOT EXISTS(SELECT 1 FROM briefing_dismissals b WHERE b.workspace_id=c.workspace_id AND b.source_id=c.id AND b.source_kind='commitment' AND b.local_day=?) ORDER BY c.updated_at DESC,c.id ASC LIMIT 31").all(workspaceId, localDay) as unknown as BriefingSource[];
+    const documents = (
+      this.db.prepare("SELECT d.id,'document' kind,d.title,substr(COALESCE(r.body,''),1,4000) detail,length(COALESCE(r.body,''))>4000 detailTruncated,r.id IS NULL missingSource,d.updated_at updatedAt FROM documents d LEFT JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=? AND NOT EXISTS(SELECT 1 FROM briefing_dismissals b WHERE b.workspace_id=d.workspace_id AND b.source_id=d.id AND b.source_kind='document' AND b.local_day=?) ORDER BY d.updated_at DESC,d.id ASC LIMIT 51").all(workspaceId, localDay) as unknown as Array<
+        Omit<BriefingSource, 'missingSource' | 'detailTruncated'> & {
+          missingSource: number;
+          detailTruncated: number;
+        }
+      >
+    ).map((item): BriefingSource => ({
+      ...item,
+      missingSource: Boolean(item.missingSource),
+      detailTruncated: Boolean(item.detailTruncated),
+    }));
+    const memories = this.db.prepare("SELECT m.id,'memory' kind,m.title,substr(m.body,1,4000) detail,length(m.body)>4000 detailTruncated,0 missingSource,m.updated_at updatedAt FROM memories m WHERE m.workspace_id=? AND NOT EXISTS(SELECT 1 FROM briefing_dismissals b WHERE b.workspace_id=m.workspace_id AND b.source_id=m.id AND b.source_kind='memory' AND b.local_day=?) ORDER BY m.updated_at DESC,m.id ASC LIMIT 51").all(workspaceId, localDay) as unknown as BriefingSource[];
+    const briefing = composeDailyBriefing([...commitments, ...documents, ...memories], new Set(), instant, timezone);
+    const counts = this.db.prepare("SELECT (SELECT count(*) FROM commitments WHERE workspace_id=? AND status='open') openCommitments,(SELECT count(*) FROM documents WHERE workspace_id=?) documents,(SELECT count(*) FROM memories WHERE workspace_id=?) memories,(SELECT count(*) FROM documents d LEFT JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=? AND r.id IS NULL) missingSources,(SELECT count(*) FROM briefing_dismissals b WHERE b.workspace_id=? AND b.local_day=? AND ((b.source_kind='commitment' AND EXISTS(SELECT 1 FROM commitments c WHERE c.id=b.source_id AND c.workspace_id=b.workspace_id AND c.status='open')) OR (b.source_kind='document' AND EXISTS(SELECT 1 FROM documents d WHERE d.id=b.source_id AND d.workspace_id=b.workspace_id)) OR (b.source_kind='memory' AND EXISTS(SELECT 1 FROM memories m WHERE m.id=b.source_id AND m.workspace_id=b.workspace_id)))) dismissed").get(workspaceId, workspaceId, workspaceId, workspaceId, workspaceId, localDay) as {
+      openCommitments: number;
+      documents: number;
+      memories: number;
+      missingSources: number;
+      dismissed: number;
+    };
+    briefing.coverage = {
+      ...counts,
+      omittedByLimit: Math.max(0, counts.openCommitments + counts.documents + counts.memories - counts.dismissed - briefing.items.length),
+    };
+    if (counts.missingSources) briefing.omissions.push(`${counts.missingSources} local note source${counts.missingSources === 1 ? ' is' : 's are'} missing its current revision; content could not be shown.`);
+    return briefing;
+  }
 
-  listLearnedRules(workspaceId:string):Array<Record<string,unknown>>{return this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);return(this.db.prepare('SELECT id,suggestion_id suggestionId,statement,scope,version,enabled,prior_enabled priorEnabled,created_at createdAt,updated_at updatedAt FROM learned_rules WHERE workspace_id=? ORDER BY updated_at DESC,id ASC').all(workspaceId) as Array<Record<string,unknown>>).map((row)=>({...row,enabled:Boolean(row.enabled),priorEnabled:row.priorEnabled==null?null:Boolean(row.priorEnabled),outcomes:this.db.prepare('SELECT action,match_count matchCount,version,created_at createdAt FROM rule_outcomes WHERE rule_id=? ORDER BY rowid DESC').all(String(row.id))}))})}
+  dismissBriefingItem(workspaceId: string, sourceId: string, sourceKind: 'commitment' | 'document' | 'memory', localDay: string): void {
+    const parsedDay = new Date(`${localDay}T12:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(localDay) || !Number.isFinite(parsedDay.valueOf()) || parsedDay.toISOString().slice(0, 10) !== localDay) throw new Error('Briefing day is invalid');
+    const exists = sourceKind === 'commitment' ? this.db.prepare('SELECT 1 FROM commitments WHERE id=? AND workspace_id=?').get(sourceId, workspaceId) : this.db.prepare(`SELECT 1 FROM ${sourceKind === 'document' ? 'documents' : 'memories'} WHERE id=? AND workspace_id=?`).get(sourceId, workspaceId);
+    if (!exists) throw new Error('Briefing source not found');
+    this.transaction(() => {
+      const result = this.db.prepare('INSERT OR IGNORE INTO briefing_dismissals VALUES (?,?,?,?,?)').run(workspaceId, sourceId, sourceKind, localDay, now());
+      if (result.changes) this.activity(workspaceId, 'briefing', 'item.dismissed', sourceId, sourceKind, { localDay });
+    });
+  }
 
-  setLearnedRuleEnabled(workspaceId:string,ruleId:string,enabled:boolean):void{this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);const rule=this.db.prepare('SELECT enabled,version FROM learned_rules WHERE id=? AND workspace_id=?').get(ruleId,workspaceId) as {enabled:number;version:number}|undefined;if(!rule)throw new Error('Learned rule not found');if(Boolean(rule.enabled)===enabled)return;const timestamp=now();this.db.prepare('UPDATE learned_rules SET prior_enabled=enabled,enabled=?,updated_at=? WHERE id=?').run(enabled?1:0,timestamp,ruleId);this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),workspaceId,ruleId,null,enabled?'enabled':'disabled',0,rule.version,timestamp);this.activity(workspaceId,'rules',enabled?'rule.enabled':'rule.disabled',ruleId,'rule',{version:rule.version})})}
+  scanRuleSuggestions(workspaceId: string): number {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    const rows = this.db.prepare("SELECT m.id messageId,m.chat_id chatId,CASE WHEN length(m.body)<=100000 THEN m.body ELSE NULL END body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? AND m.role='user' ORDER BY m.created_at DESC,m.id ASC LIMIT ?").all(workspaceId, RULE_EXTRACTOR.maxMessages) as Array<{
+        messageId: string;
+        chatId: string;
+        body: string | null;
+      }>,
+      groups = new Map<
+        string,
+        Array<{
+          messageId: string;
+          chatId: string;
+          statement: string;
+          excerpt: string;
+          sourceDigest: string;
+          startOffset: number;
+          endOffset: number;
+        }>
+      >();
+    let characters = 0;
+    for (const row of rows) {
+      if (row.body === null) continue;
+      if (characters + row.body.length > RULE_EXTRACTOR.maxCharacters) break;
+      characters += row.body.length;
+      for (const item of extractRuleDirectives(row.body)) {
+        const list = groups.get(item.normalized) ?? [];
+        if (!list.some((source) => source.messageId === row.messageId)) list.push({ ...item, messageId: row.messageId, chatId: row.chatId });
+        groups.set(item.normalized, list);
+      }
+    }
+    let created = 0;
+    this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      for (const [normalized, sources] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
+        if (sources.length < 2 || created >= RULE_EXTRACTOR.maxCandidates) continue;
+        const fingerprint = contentDigest(JSON.stringify([workspaceId, RULE_EXTRACTOR.provider, RULE_EXTRACTOR.version, normalized])),
+          proposedId = randomUUID(),
+          timestamp = now(),
+          result = this.db.prepare("INSERT OR IGNORE INTO rule_suggestions VALUES (?,?,?,?,?,'workspace',?,?,?,'pending',NULL,NULL,NULL,?)").run(proposedId, workspaceId, sources[0].statement, normalized, fingerprint, RULE_EXTRACTOR.confidence, RULE_EXTRACTOR.provider, RULE_EXTRACTOR.version, timestamp),
+          suggestion = this.db.prepare('SELECT id,status FROM rule_suggestions WHERE fingerprint=? AND workspace_id=?').get(fingerprint, workspaceId) as { id: string; status: string } | undefined;
+        if (!suggestion || suggestion.status === 'rejected') continue;
+        for (const source of sources) this.db.prepare('INSERT OR IGNORE INTO rule_suggestion_sources VALUES (?,?,?,?,?,?,?)').run(suggestion.id, source.messageId, source.chatId, source.excerpt, source.sourceDigest, source.startOffset, source.endOffset);
+        if (result.changes) created++;
+      }
+      if (created)
+        this.activity(workspaceId, 'rules', 'suggestions.scanned', workspaceId, 'workspace', {
+          created,
+          extractor: RULE_EXTRACTOR.provider,
+          version: RULE_EXTRACTOR.version,
+        });
+    });
+    return created;
+  }
 
-  revertLearnedRule(workspaceId:string,ruleId:string):void{this.transaction(()=>{this.reconcileRuleProvenance(workspaceId);const rule=this.db.prepare('SELECT enabled,prior_enabled priorEnabled,version FROM learned_rules WHERE id=? AND workspace_id=?').get(ruleId,workspaceId) as {enabled:number;priorEnabled:number|null;version:number}|undefined;if(!rule||rule.priorEnabled==null)throw new Error('No learned rule state to revert');const timestamp=now();this.db.prepare('UPDATE learned_rules SET enabled=?,prior_enabled=NULL,updated_at=? WHERE id=?').run(rule.priorEnabled,timestamp,ruleId);this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),workspaceId,ruleId,null,'reverted',0,rule.version,timestamp);this.activity(workspaceId,'rules','rule.reverted',ruleId,'rule',{version:rule.version})})}
+  listRuleSuggestions(workspaceId: string): Array<Record<string, unknown>> {
+    return this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      const rows = this.db.prepare("SELECT id,statement,scope,confidence,extractor,extractor_version extractorVersion,status,last_dry_run_at lastDryRunAt,created_at createdAt FROM rule_suggestions WHERE workspace_id=? AND status='pending' ORDER BY created_at DESC,id ASC").all(workspaceId) as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        ...row,
+        sources: this.db.prepare('SELECT message_id messageId,chat_id chatId,excerpt,start_offset startOffset,end_offset endOffset FROM rule_suggestion_sources WHERE suggestion_id=? ORDER BY message_id').all(String(row.id)),
+      }));
+    });
+  }
 
-  private reconcileRuleProvenance(workspaceId:string):void{const sources=this.db.prepare('SELECT rs.suggestion_id suggestionId,rs.message_id messageId,rs.source_digest sourceDigest,rs.excerpt,rs.start_offset startOffset,rs.end_offset endOffset,rs.chat_id sourceChatId,m.body,m.role,m.chat_id chatId FROM rule_suggestion_sources rs JOIN rule_suggestions s ON s.id=rs.suggestion_id LEFT JOIN messages m ON m.id=rs.message_id WHERE s.workspace_id=?').all(workspaceId) as Array<Record<string,unknown>>;for(const item of sources){const valid=item.body!=null&&item.role==='user'&&item.chatId===item.sourceChatId&&contentDigest(String(item.body))===item.sourceDigest&&String(item.body).slice(Number(item.startOffset),Number(item.endOffset))===item.excerpt;if(!valid)this.db.prepare('DELETE FROM rule_suggestion_sources WHERE suggestion_id=? AND message_id=?').run(String(item.suggestionId),String(item.messageId))}}
+  dryRunRuleSuggestion(workspaceId: string, suggestionId: string): { matchCount: number; sourceIds: string[] } {
+    return this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      const suggestion = this.db.prepare("SELECT * FROM rule_suggestions WHERE id=? AND workspace_id=? AND status='pending'").get(suggestionId, workspaceId) as Record<string, unknown> | undefined;
+      if (!suggestion) throw new Error('Pending rule suggestion not found');
+      const sources = this.currentRuleSources(suggestionId, workspaceId);
+      if (sources.length < 2) throw new Error('Rule suggestion no longer has enough valid sources');
+      const digest = contentDigest(JSON.stringify(sources.map((item) => [item.messageId, item.sourceDigest]))),
+        timestamp = now();
+      this.db.prepare('UPDATE rule_suggestions SET last_dry_run_digest=?,last_dry_run_at=? WHERE id=?').run(digest, timestamp, suggestionId);
+      this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, null, suggestionId, 'dry_run', sources.length, 1, timestamp);
+      return {
+        matchCount: sources.length,
+        sourceIds: sources.map((item) => item.messageId),
+      };
+    });
+  }
 
-  private currentRuleSources(suggestionId:string,workspaceId:string):Array<{messageId:string;sourceDigest:string}>{const sources=this.db.prepare('SELECT rs.message_id messageId,rs.source_digest sourceDigest,rs.excerpt,rs.start_offset startOffset,rs.end_offset endOffset,m.body,m.role,m.chat_id chatId,rs.chat_id sourceChatId FROM rule_suggestion_sources rs JOIN messages m ON m.id=rs.message_id JOIN chats c ON c.id=m.chat_id WHERE rs.suggestion_id=? AND c.workspace_id=? ORDER BY rs.message_id').all(suggestionId,workspaceId) as Array<Record<string,unknown>>;return sources.filter((item)=>item.role==='user'&&item.chatId===item.sourceChatId&&contentDigest(String(item.body))===item.sourceDigest&&String(item.body).slice(Number(item.startOffset),Number(item.endOffset))===item.excerpt).map((item)=>({messageId:String(item.messageId),sourceDigest:String(item.sourceDigest)}))}
+  resolveRuleSuggestion(workspaceId: string, suggestionId: string, action: 'approve' | 'reject'): void {
+    this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      const suggestion = this.db.prepare("SELECT * FROM rule_suggestions WHERE id=? AND workspace_id=? AND status='pending'").get(suggestionId, workspaceId) as Record<string, unknown> | undefined;
+      if (!suggestion) throw new Error('Pending rule suggestion not found');
+      const timestamp = now();
+      if (action === 'reject') {
+        this.db.prepare("UPDATE rule_suggestions SET status='rejected',resolved_at=? WHERE id=?").run(timestamp, suggestionId);
+        this.activity(workspaceId, 'rules', 'suggestion.rejected', suggestionId, 'rule_suggestion', {});
+        return;
+      }
+      const sources = this.currentRuleSources(suggestionId, workspaceId),
+        digest = contentDigest(JSON.stringify(sources.map((item) => [item.messageId, item.sourceDigest])));
+      if (sources.length < 2 || !suggestion.last_dry_run_digest || String(suggestion.last_dry_run_digest) !== digest) throw new Error('Run a current dry run before approval');
+      const ruleId = randomUUID();
+      this.db.prepare('INSERT INTO learned_rules VALUES (?,?,?,?,?,?,?,?,?,?)').run(ruleId, workspaceId, suggestionId, String(suggestion.statement), 'workspace', 1, 1, null, timestamp, timestamp);
+      this.db.prepare("UPDATE rule_suggestions SET status='accepted',resolved_at=? WHERE id=?").run(timestamp, suggestionId);
+      this.db.prepare('UPDATE rule_outcomes SET rule_id=? WHERE suggestion_id=? AND rule_id IS NULL').run(ruleId, suggestionId);
+      this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, ruleId, suggestionId, 'approved', sources.length, 1, timestamp);
+      this.activity(workspaceId, 'rules', 'rule.approved', ruleId, 'rule', {
+        version: 1,
+        scope: 'workspace',
+      });
+    });
+  }
+
+  listLearnedRules(workspaceId: string): Array<Record<string, unknown>> {
+    return this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      return (this.db.prepare('SELECT id,suggestion_id suggestionId,statement,scope,version,enabled,prior_enabled priorEnabled,created_at createdAt,updated_at updatedAt FROM learned_rules WHERE workspace_id=? ORDER BY updated_at DESC,id ASC').all(workspaceId) as Array<Record<string, unknown>>).map((row) => ({
+        ...row,
+        enabled: Boolean(row.enabled),
+        priorEnabled: row.priorEnabled == null ? null : Boolean(row.priorEnabled),
+        outcomes: this.db.prepare('SELECT action,match_count matchCount,version,created_at createdAt FROM rule_outcomes WHERE rule_id=? ORDER BY rowid DESC').all(String(row.id)),
+      }));
+    });
+  }
+
+  setLearnedRuleEnabled(workspaceId: string, ruleId: string, enabled: boolean): void {
+    this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      const rule = this.db.prepare('SELECT enabled,version FROM learned_rules WHERE id=? AND workspace_id=?').get(ruleId, workspaceId) as { enabled: number; version: number } | undefined;
+      if (!rule) throw new Error('Learned rule not found');
+      if (Boolean(rule.enabled) === enabled) return;
+      const timestamp = now();
+      this.db.prepare('UPDATE learned_rules SET prior_enabled=enabled,enabled=?,updated_at=? WHERE id=?').run(enabled ? 1 : 0, timestamp, ruleId);
+      this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, ruleId, null, enabled ? 'enabled' : 'disabled', 0, rule.version, timestamp);
+      this.activity(workspaceId, 'rules', enabled ? 'rule.enabled' : 'rule.disabled', ruleId, 'rule', { version: rule.version });
+    });
+  }
+
+  revertLearnedRule(workspaceId: string, ruleId: string): void {
+    this.transaction(() => {
+      this.reconcileRuleProvenance(workspaceId);
+      const rule = this.db.prepare('SELECT enabled,prior_enabled priorEnabled,version FROM learned_rules WHERE id=? AND workspace_id=?').get(ruleId, workspaceId) as { enabled: number; priorEnabled: number | null; version: number } | undefined;
+      if (!rule || rule.priorEnabled == null) throw new Error('No learned rule state to revert');
+      const timestamp = now();
+      this.db.prepare('UPDATE learned_rules SET enabled=?,prior_enabled=NULL,updated_at=? WHERE id=?').run(rule.priorEnabled, timestamp, ruleId);
+      this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, ruleId, null, 'reverted', 0, rule.version, timestamp);
+      this.activity(workspaceId, 'rules', 'rule.reverted', ruleId, 'rule', {
+        version: rule.version,
+      });
+    });
+  }
+
+  private reconcileRuleProvenance(workspaceId: string): void {
+    const sources = this.db.prepare('SELECT rs.suggestion_id suggestionId,rs.message_id messageId,rs.source_digest sourceDigest,rs.excerpt,rs.start_offset startOffset,rs.end_offset endOffset,rs.chat_id sourceChatId,m.body,m.role,m.chat_id chatId FROM rule_suggestion_sources rs JOIN rule_suggestions s ON s.id=rs.suggestion_id LEFT JOIN messages m ON m.id=rs.message_id WHERE s.workspace_id=?').all(workspaceId) as Array<Record<string, unknown>>;
+    for (const item of sources) {
+      const valid = item.body != null && item.role === 'user' && item.chatId === item.sourceChatId && contentDigest(String(item.body)) === item.sourceDigest && String(item.body).slice(Number(item.startOffset), Number(item.endOffset)) === item.excerpt;
+      if (!valid) this.db.prepare('DELETE FROM rule_suggestion_sources WHERE suggestion_id=? AND message_id=?').run(String(item.suggestionId), String(item.messageId));
+    }
+  }
+
+  private currentRuleSources(suggestionId: string, workspaceId: string): Array<{ messageId: string; sourceDigest: string }> {
+    const sources = this.db.prepare('SELECT rs.message_id messageId,rs.source_digest sourceDigest,rs.excerpt,rs.start_offset startOffset,rs.end_offset endOffset,m.body,m.role,m.chat_id chatId,rs.chat_id sourceChatId FROM rule_suggestion_sources rs JOIN messages m ON m.id=rs.message_id JOIN chats c ON c.id=m.chat_id WHERE rs.suggestion_id=? AND c.workspace_id=? ORDER BY rs.message_id').all(suggestionId, workspaceId) as Array<Record<string, unknown>>;
+    return sources
+      .filter((item) => item.role === 'user' && item.chatId === item.sourceChatId && contentDigest(String(item.body)) === item.sourceDigest && String(item.body).slice(Number(item.startOffset), Number(item.endOffset)) === item.excerpt)
+      .map((item) => ({
+        messageId: String(item.messageId),
+        sourceDigest: String(item.sourceDigest),
+      }));
+  }
 
   createDocument(workspaceId: string, title: string, body: string): { id: string; revisionId: string } {
-    const id = randomUUID(), revisionId = randomUUID(), timestamp = now()
+    const id = randomUUID(),
+      revisionId = randomUUID(),
+      timestamp = now();
     return this.transaction(() => {
-      this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id, workspaceId, title.trim() || 'Untitled', revisionId, timestamp, timestamp)
-      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId, id, body, timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'document','upsert',{id,title:title.trim()||'Untitled',revisionId,body,createdAt:timestamp,updatedAt:timestamp})
-      this.indexText(workspaceId, id, 'document', revisionId, title, body)
-      this.activity(workspaceId, 'content', 'document.created', id, 'document', {})
-      return { id, revisionId }
-    })
+      this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id, workspaceId, title.trim() || 'Untitled', revisionId, timestamp, timestamp);
+      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId, id, body, timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'document', 'upsert', {
+        id,
+        title: title.trim() || 'Untitled',
+        revisionId,
+        body,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.indexText(workspaceId, id, 'document', revisionId, title, body);
+      this.activity(workspaceId, 'content', 'document.created', id, 'document', {});
+      return { id, revisionId };
+    });
   }
 
-  captureMessageAsDocument(workspaceId:string,messageId:string):{id:string;revisionId:string}{
-    const message=this.db.prepare("SELECT m.body,c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=? AND m.role='assistant'").get(messageId,workspaceId) as {body:string;title:string}|undefined
-    if(!message)throw new Error('Assistant message not found in workspace')
-    const id=randomUUID(),revisionId=randomUUID(),relationshipId=randomUUID(),timestamp=now(),title=`From ${message.title}`
-    return this.transaction(()=>{
-      this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id,workspaceId,title,revisionId,timestamp,timestamp)
-      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId,id,message.body,timestamp)
-      this.indexText(workspaceId,id,'document',revisionId,title,message.body)
-      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId,workspaceId,messageId,id,'captured_as',timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'document','upsert',{id,title,revisionId,body:message.body,createdAt:timestamp,updatedAt:timestamp})
-      this.syncJournal.enqueue(workspaceId,relationshipId,'relationship','upsert',{id:relationshipId,fromId:messageId,toId:id,type:'captured_as'})
-      this.activity(workspaceId,'content','document.created',id,'document',{})
-      this.activity(workspaceId,'graph','relationship.created',relationshipId,'relationship',{fromId:messageId,toId:id,type:'captured_as'})
-      return{id,revisionId}
-    })
+  captureMessageAsDocument(workspaceId: string, messageId: string): { id: string; revisionId: string } {
+    const message = this.db.prepare("SELECT m.body,c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=? AND m.role='assistant'").get(messageId, workspaceId) as { body: string; title: string } | undefined;
+    if (!message) throw new Error('Assistant message not found in workspace');
+    const id = randomUUID(),
+      revisionId = randomUUID(),
+      relationshipId = randomUUID(),
+      timestamp = now(),
+      title = `From ${message.title}`;
+    return this.transaction(() => {
+      this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id, workspaceId, title, revisionId, timestamp, timestamp);
+      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId, id, message.body, timestamp);
+      this.indexText(workspaceId, id, 'document', revisionId, title, message.body);
+      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspaceId, messageId, id, 'captured_as', timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'document', 'upsert', {
+        id,
+        title,
+        revisionId,
+        body: message.body,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.syncJournal.enqueue(workspaceId, relationshipId, 'relationship', 'upsert', {
+        id: relationshipId,
+        fromId: messageId,
+        toId: id,
+        type: 'captured_as',
+      });
+      this.activity(workspaceId, 'content', 'document.created', id, 'document', {});
+      this.activity(workspaceId, 'graph', 'relationship.created', relationshipId, 'relationship', { fromId: messageId, toId: id, type: 'captured_as' });
+      return { id, revisionId };
+    });
   }
 
   updateDocument(workspaceId: string, documentId: string, title: string, body: string): string {
-    this.assertObjectInWorkspace(workspaceId, documentId, 'document')
-    const document = this.db.prepare('SELECT workspace_id FROM documents WHERE id=?').get(documentId) as { workspace_id: string } | undefined
-    if (!document) throw new Error('Document not found')
-    const revisionId = randomUUID(), timestamp = now()
+    this.assertObjectInWorkspace(workspaceId, documentId, 'document');
+    const document = this.db.prepare('SELECT workspace_id FROM documents WHERE id=?').get(documentId) as { workspace_id: string } | undefined;
+    if (!document) throw new Error('Document not found');
+    const revisionId = randomUUID(),
+      timestamp = now();
     return this.transaction(() => {
-      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId, documentId, body, timestamp)
-      this.db.prepare('UPDATE documents SET title=?,current_revision_id=?,updated_at=? WHERE id=?').run(title.trim() || 'Untitled', revisionId, timestamp, documentId)
-      this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='document'").run(documentId)
-      this.indexText(document.workspace_id, documentId, 'document', revisionId, title, body)
-      this.db.prepare('DELETE FROM embeddings WHERE object_id=?').run(documentId)
-      this.syncJournal.enqueue(workspaceId,documentId,'document','upsert',{id:documentId,title:title.trim()||'Untitled',revisionId,body,updatedAt:timestamp})
-      this.activity(document.workspace_id, 'content', 'document.updated', documentId, 'document', { revisionId })
-      return revisionId
-    })
+      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId, documentId, body, timestamp);
+      this.db.prepare('UPDATE documents SET title=?,current_revision_id=?,updated_at=? WHERE id=?').run(title.trim() || 'Untitled', revisionId, timestamp, documentId);
+      this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='document'").run(documentId);
+      this.indexText(document.workspace_id, documentId, 'document', revisionId, title, body);
+      this.db.prepare('DELETE FROM embeddings WHERE object_id=?').run(documentId);
+      this.syncJournal.enqueue(workspaceId, documentId, 'document', 'upsert', {
+        id: documentId,
+        title: title.trim() || 'Untitled',
+        revisionId,
+        body,
+        updatedAt: timestamp,
+      });
+      this.activity(document.workspace_id, 'content', 'document.updated', documentId, 'document', { revisionId });
+      return revisionId;
+    });
   }
 
   createChat(workspaceId: string, title: string): string {
-    const id = randomUUID(), timestamp = now()
+    const id = randomUUID(),
+      timestamp = now();
     this.transaction(() => {
-      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, title.trim() || 'New chat', timestamp, timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'chat','upsert',{id,title:title.trim()||'New chat',createdAt:timestamp,updatedAt:timestamp})
-      this.activity(workspaceId, 'content', 'chat.created', id, 'chat', {})
-    })
-    return id
+      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, title.trim() || 'New chat', timestamp, timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'chat', 'upsert', {
+        id,
+        title: title.trim() || 'New chat',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.activity(workspaceId, 'content', 'chat.created', id, 'chat', {});
+    });
+    return id;
   }
 
   captureChat(workspaceId: string, title: string, body: string): string {
-    const id = randomUUID(), messageId = randomUUID(), timestamp = now(), normalizedTitle = title.trim() || 'New chat'
+    const id = randomUUID(),
+      messageId = randomUUID(),
+      timestamp = now(),
+      normalizedTitle = title.trim() || 'New chat';
     this.transaction(() => {
-      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, normalizedTitle, timestamp, timestamp)
-      this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, id, 'user', body, timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'chat','upsert',{id,title:normalizedTitle,createdAt:timestamp,updatedAt:timestamp})
-      this.syncJournal.enqueue(workspaceId,messageId,'message','upsert',{id:messageId,chatId:id,role:'user',body,createdAt:timestamp})
-      this.indexText(workspaceId, messageId, 'message', undefined, normalizedTitle, body)
-      this.activity(workspaceId, 'content', 'chat.created', id, 'chat', {})
-      this.activity(workspaceId, 'content', 'message.created', messageId, 'message', { role: 'user' })
-    })
-    return id
+      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, normalizedTitle, timestamp, timestamp);
+      this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, id, 'user', body, timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'chat', 'upsert', {
+        id,
+        title: normalizedTitle,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.syncJournal.enqueue(workspaceId, messageId, 'message', 'upsert', {
+        id: messageId,
+        chatId: id,
+        role: 'user',
+        body,
+        createdAt: timestamp,
+      });
+      this.indexText(workspaceId, messageId, 'message', undefined, normalizedTitle, body);
+      this.activity(workspaceId, 'content', 'chat.created', id, 'chat', {});
+      this.activity(workspaceId, 'content', 'message.created', messageId, 'message', { role: 'user' });
+    });
+    return id;
   }
 
   addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string, attachmentIds: string[] = []): string {
-    this.assertObjectInWorkspace(workspaceId, chatId, 'chat')
-    const chat = this.db.prepare('SELECT workspace_id,title FROM chats WHERE id=?').get(chatId) as { workspace_id: string; title: string } | undefined
-    if (!chat) throw new Error('Chat not found')
-    const id = randomUUID(), timestamp = now()
+    this.assertObjectInWorkspace(workspaceId, chatId, 'chat');
+    const chat = this.db.prepare('SELECT workspace_id,title FROM chats WHERE id=?').get(chatId) as { workspace_id: string; title: string } | undefined;
+    if (!chat) throw new Error('Chat not found');
+    const id = randomUUID(),
+      timestamp = now();
     this.transaction(() => {
-      if(attachmentIds.length>MAX_ATTACHMENTS_PER_OWNER||new Set(attachmentIds).size!==attachmentIds.length)throw new Error('Invalid message attachment selection')
-      for(const attachmentId of attachmentIds){
-        const attachment=this.db.prepare('SELECT id,name,media_type mediaType,sha256 FROM attachments WHERE id=? AND workspace_id=? AND owner_id=?').get(attachmentId,workspaceId,chatId) as {id:string;name:string;mediaType:string;sha256:string}|undefined
-        if(!attachment)throw new Error('Pending chat attachment not found')
-        this.db.prepare('UPDATE attachments SET owner_id=? WHERE id=?').run(id,attachmentId)
-        this.syncJournal.enqueue(workspaceId,attachmentId,'attachment','upsert',{...attachment,ownerId:id})
+      if (attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER || new Set(attachmentIds).size !== attachmentIds.length) throw new Error('Invalid message attachment selection');
+      for (const attachmentId of attachmentIds) {
+        const attachment = this.db.prepare('SELECT id,name,media_type mediaType,sha256 FROM attachments WHERE id=? AND workspace_id=? AND owner_id=?').get(attachmentId, workspaceId, chatId) as { id: string; name: string; mediaType: string; sha256: string } | undefined;
+        if (!attachment) throw new Error('Pending chat attachment not found');
+        this.db.prepare('UPDATE attachments SET owner_id=? WHERE id=?').run(id, attachmentId);
+        this.syncJournal.enqueue(workspaceId, attachmentId, 'attachment', 'upsert', { ...attachment, ownerId: id });
       }
-      this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(id, chatId, role, body, timestamp)
-      this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp, chatId)
-      this.syncJournal.enqueue(workspaceId,id,'message','upsert',{id,chatId,role,body,createdAt:timestamp})
-      this.indexText(chat.workspace_id, id, 'message', undefined, chat.title, body)
-      this.activity(chat.workspace_id, 'content', 'message.created', id, 'message', { role })
-    })
-    return id
+      this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(id, chatId, role, body, timestamp);
+      this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp, chatId);
+      this.syncJournal.enqueue(workspaceId, id, 'message', 'upsert', {
+        id,
+        chatId,
+        role,
+        body,
+        createdAt: timestamp,
+      });
+      this.indexText(chat.workspace_id, id, 'message', undefined, chat.title, body);
+      this.activity(chat.workspace_id, 'content', 'message.created', id, 'message', { role });
+    });
+    return id;
   }
 
-  createMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, ownership: 'workspace-owned'|'source-owned' = 'workspace-owned'): string {
-    if (sourceObjectId) this.assertObjectInWorkspace(workspaceId, sourceObjectId)
-    if (ownership === 'source-owned' && !sourceObjectId) throw new Error('Source-owned memory requires a source')
-    const id = randomUUID(), timestamp = now()
+  createMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, ownership: 'workspace-owned' | 'source-owned' = 'workspace-owned'): string {
+    if (sourceObjectId) this.assertObjectInWorkspace(workspaceId, sourceObjectId);
+    if (ownership === 'source-owned' && !sourceObjectId) throw new Error('Source-owned memory requires a source');
+    const id = randomUUID(),
+      timestamp = now();
     this.transaction(() => {
-      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, title.trim() || 'Memory', body, sourceObjectId ?? null, ownership, timestamp, timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'memory','upsert',{id,title:title.trim()||'Memory',body,sourceObjectId:sourceObjectId??null,ownership,createdAt:timestamp,updatedAt:timestamp})
-      this.indexText(workspaceId, id, 'memory', undefined, title, body)
-      this.activity(workspaceId, 'content', 'memory.created', id, 'memory', { sourceObjectId: sourceObjectId ?? null })
-    })
-    return id
+      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, title.trim() || 'Memory', body, sourceObjectId ?? null, ownership, timestamp, timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'memory', 'upsert', {
+        id,
+        title: title.trim() || 'Memory',
+        body,
+        sourceObjectId: sourceObjectId ?? null,
+        ownership,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.indexText(workspaceId, id, 'memory', undefined, title, body);
+      this.activity(workspaceId, 'content', 'memory.created', id, 'memory', {
+        sourceObjectId: sourceObjectId ?? null,
+      });
+    });
+    return id;
   }
 
-  captureMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, ownership: 'workspace-owned'|'source-owned' = 'workspace-owned'): string {
-    if (sourceObjectId) this.assertObjectInWorkspace(workspaceId, sourceObjectId)
-    if (ownership === 'source-owned' && !sourceObjectId) throw new Error('Source-owned memory requires a source')
-    const id = randomUUID(), timestamp = now(), normalizedTitle = title.trim() || 'Memory'
+  captureMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, ownership: 'workspace-owned' | 'source-owned' = 'workspace-owned'): string {
+    if (sourceObjectId) this.assertObjectInWorkspace(workspaceId, sourceObjectId);
+    if (ownership === 'source-owned' && !sourceObjectId) throw new Error('Source-owned memory requires a source');
+    const id = randomUUID(),
+      timestamp = now(),
+      normalizedTitle = title.trim() || 'Memory';
     this.transaction(() => {
-      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, normalizedTitle, body, sourceObjectId ?? null, ownership, timestamp, timestamp)
-      this.syncJournal.enqueue(workspaceId,id,'memory','upsert',{id,title:normalizedTitle,body,sourceObjectId:sourceObjectId??null,ownership,createdAt:timestamp,updatedAt:timestamp})
-      this.indexText(workspaceId, id, 'memory', undefined, normalizedTitle, body)
-      this.activity(workspaceId, 'content', 'memory.created', id, 'memory', { sourceObjectId: sourceObjectId ?? null })
+      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, normalizedTitle, body, sourceObjectId ?? null, ownership, timestamp, timestamp);
+      this.syncJournal.enqueue(workspaceId, id, 'memory', 'upsert', {
+        id,
+        title: normalizedTitle,
+        body,
+        sourceObjectId: sourceObjectId ?? null,
+        ownership,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      this.indexText(workspaceId, id, 'memory', undefined, normalizedTitle, body);
+      this.activity(workspaceId, 'content', 'memory.created', id, 'memory', {
+        sourceObjectId: sourceObjectId ?? null,
+      });
       if (sourceObjectId) {
-        const relationshipId = randomUUID()
-        this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspaceId, sourceObjectId, id, 'supports', timestamp)
-        this.syncJournal.enqueue(workspaceId,relationshipId,'relationship','upsert',{id:relationshipId,fromId:sourceObjectId,toId:id,type:'supports',createdAt:timestamp})
-        this.activity(workspaceId, 'graph', 'relationship.created', relationshipId, 'relationship', { fromId: sourceObjectId, toId: id, type: 'supports' })
+        const relationshipId = randomUUID();
+        this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspaceId, sourceObjectId, id, 'supports', timestamp);
+        this.syncJournal.enqueue(workspaceId, relationshipId, 'relationship', 'upsert', {
+          id: relationshipId,
+          fromId: sourceObjectId,
+          toId: id,
+          type: 'supports',
+          createdAt: timestamp,
+        });
+        this.activity(workspaceId, 'graph', 'relationship.created', relationshipId, 'relationship', { fromId: sourceObjectId, toId: id, type: 'supports' });
       }
-    })
-    return id
+    });
+    return id;
   }
 
   createRelationship(workspaceId: string, fromId: string, toId: string, type: string): string {
-    this.assertObjectInWorkspace(workspaceId, fromId)
-    this.assertObjectInWorkspace(workspaceId, toId)
-    const id = randomUUID()
+    this.assertObjectInWorkspace(workspaceId, fromId);
+    this.assertObjectInWorkspace(workspaceId, toId);
+    const id = randomUUID();
     this.transaction(() => {
-      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(id, workspaceId, fromId, toId, type, now())
-      this.syncJournal.enqueue(workspaceId,id,'relationship','upsert',{id,fromId,toId,type})
-      this.activity(workspaceId, 'graph', 'relationship.created', id, 'relationship', { fromId, toId, type })
-    })
-    return id
+      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(id, workspaceId, fromId, toId, type, now());
+      this.syncJournal.enqueue(workspaceId, id, 'relationship', 'upsert', {
+        id,
+        fromId,
+        toId,
+        type,
+      });
+      this.activity(workspaceId, 'graph', 'relationship.created', id, 'relationship', { fromId, toId, type });
+    });
+    return id;
   }
 
   addAttachment(workspaceId: string, ownerId: string, name: string, mediaType: string, sourcePath: string): string {
-    this.assertObjectInWorkspace(workspaceId, ownerId)
-    const ownerCount=Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=? AND owner_id=?').get(workspaceId,ownerId) as {count:number}).count),workspaceCount=Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=?').get(workspaceId) as {count:number}).count)
-    if(ownerCount>=MAX_ATTACHMENTS_PER_OWNER)throw new Error(`Attachment owner limit of ${MAX_ATTACHMENTS_PER_OWNER} reached`)
-    if(workspaceCount>=MAX_ATTACHMENTS_PER_WORKSPACE)throw new Error(`Workspace attachment limit of ${MAX_ATTACHMENTS_PER_WORKSPACE} reached`)
-    const validated=readAndValidateAttachment(sourcePath,name,mediaType),{bytes,sha256,safeName}=validated
-    const id = randomUUID(), relativePath = `${id}-${safeName}`,createdAt=now()
-    writeFileSync(this.attachmentPath(relativePath),bytes,{flag:'wx',mode:0o600})
+    this.assertObjectInWorkspace(workspaceId, ownerId);
+    const ownerCount = Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=? AND owner_id=?').get(workspaceId, ownerId) as { count: number }).count),
+      workspaceCount = Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=?').get(workspaceId) as { count: number }).count);
+    if (ownerCount >= MAX_ATTACHMENTS_PER_OWNER) throw new Error(`Attachment owner limit of ${MAX_ATTACHMENTS_PER_OWNER} reached`);
+    if (workspaceCount >= MAX_ATTACHMENTS_PER_WORKSPACE) throw new Error(`Workspace attachment limit of ${MAX_ATTACHMENTS_PER_WORKSPACE} reached`);
+    const validated = readAndValidateAttachment(sourcePath, name, mediaType),
+      { bytes, sha256, safeName } = validated;
+    const id = randomUUID(),
+      relativePath = `${id}-${safeName}`,
+      createdAt = now();
+    writeFileSync(this.attachmentPath(relativePath), bytes, {
+      flag: 'wx',
+      mode: 0o600,
+    });
     try {
-      this.transaction(()=>{
-        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, ownerId, safeName, mediaType, sha256, relativePath, createdAt)
-        this.syncJournal.enqueue(workspaceId,id,'attachment','upsert',{id,ownerId,name:safeName,mediaType,sha256,bytes:bytes.byteLength,createdAt})
-      })
-    } catch (error) { rmSync(path.join(this.attachmentRoot, relativePath), { force: true }); throw error }
-    return id
+      this.transaction(() => {
+        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, ownerId, safeName, mediaType, sha256, relativePath, createdAt);
+        this.syncJournal.enqueue(workspaceId, id, 'attachment', 'upsert', {
+          id,
+          ownerId,
+          name: safeName,
+          mediaType,
+          sha256,
+          bytes: bytes.byteLength,
+          createdAt,
+        });
+      });
+    } catch (error) {
+      rmSync(path.join(this.attachmentRoot, relativePath), { force: true });
+      throw error;
+    }
+    return id;
   }
 
-  listAttachments(workspaceId:string,ownerId?:string):AttachmentMetadata[]{
-    if(ownerId)this.assertObjectInWorkspace(workspaceId,ownerId)
-    const rows=this.db.prepare(`SELECT id,workspace_id workspaceId,owner_id ownerId,name,media_type mediaType,sha256,relative_path relativePath,created_at createdAt FROM attachments WHERE workspace_id=? ${ownerId?'AND owner_id=?':''} ORDER BY created_at`).all(...(ownerId?[workspaceId,ownerId]:[workspaceId])) as Array<Record<string,unknown>>
-    return rows.map((row)=>{const ownerKind=this.objectKindInWorkspace(workspaceId,String(row.ownerId));if(!ownerKind)throw new Error('Attachment owner is missing');const file=this.attachmentPath(String(row.relativePath));if(!existsSync(file))throw new Error('Stored attachment file is missing');return{id:String(row.id),workspaceId,ownerId:String(row.ownerId),ownerKind,name:String(row.name),mediaType:String(row.mediaType),sha256:String(row.sha256),bytes:statSync(file).size,createdAt:String(row.createdAt)}})
+  listAttachments(workspaceId: string, ownerId?: string): AttachmentMetadata[] {
+    if (ownerId) this.assertObjectInWorkspace(workspaceId, ownerId);
+    const rows = this.db.prepare(`SELECT id,workspace_id workspaceId,owner_id ownerId,name,media_type mediaType,sha256,relative_path relativePath,created_at createdAt FROM attachments WHERE workspace_id=? ${ownerId ? 'AND owner_id=?' : ''} ORDER BY created_at`).all(...(ownerId ? [workspaceId, ownerId] : [workspaceId])) as Array<Record<string, unknown>>;
+    return rows.map((row) => {
+      const ownerKind = this.objectKindInWorkspace(workspaceId, String(row.ownerId));
+      if (!ownerKind) throw new Error('Attachment owner is missing');
+      const file = this.attachmentPath(String(row.relativePath));
+      if (!existsSync(file)) throw new Error('Stored attachment file is missing');
+      return {
+        id: String(row.id),
+        workspaceId,
+        ownerId: String(row.ownerId),
+        ownerKind,
+        name: String(row.name),
+        mediaType: String(row.mediaType),
+        sha256: String(row.sha256),
+        bytes: statSync(file).size,
+        createdAt: String(row.createdAt),
+      };
+    });
   }
 
-  listChatAttachments(workspaceId:string,chatId:string):AttachmentMetadata[]{
-    this.assertObjectInWorkspace(workspaceId,chatId,'chat')
-    const owners=[chatId,...(this.db.prepare('SELECT id FROM messages WHERE chat_id=?').all(chatId) as Array<{id:string}>).map((row)=>row.id)]
-    const ownerSet=new Set(owners)
-    return this.listAttachments(workspaceId).filter((attachment)=>ownerSet.has(attachment.ownerId))
+  listChatAttachments(workspaceId: string, chatId: string): AttachmentMetadata[] {
+    this.assertObjectInWorkspace(workspaceId, chatId, 'chat');
+    const owners = [chatId, ...(this.db.prepare('SELECT id FROM messages WHERE chat_id=?').all(chatId) as Array<{ id: string }>).map((row) => row.id)];
+    const ownerSet = new Set(owners);
+    return this.listAttachments(workspaceId).filter((attachment) => ownerSet.has(attachment.ownerId));
   }
 
-  deleteAttachment(workspaceId:string,attachmentId:string):void{
-    const row=this.db.prepare('SELECT relative_path relativePath FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId,workspaceId) as {relativePath:string}|undefined
-    if(!row)throw new Error('Attachment not found in workspace')
-    const source=this.attachmentPath(row.relativePath),staged=`${source}.deleting-${randomUUID()}`
-    renameSync(source,staged)
-    try{this.transaction(()=>{
-      this.db.prepare('DELETE FROM attachments WHERE id=? AND workspace_id=?').run(attachmentId,workspaceId)
-      this.syncJournal.enqueue(workspaceId,attachmentId,'attachment','delete',{id:attachmentId},[attachmentId])
-      this.activity(workspaceId,'lifecycle','attachment.deleted',attachmentId,'attachment',{})
-    })}catch(error){renameSync(staged,source);throw error}
-    rmSync(staged,{force:true})
+  deleteAttachment(workspaceId: string, attachmentId: string): void {
+    const row = this.db.prepare('SELECT relative_path relativePath FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId, workspaceId) as { relativePath: string } | undefined;
+    if (!row) throw new Error('Attachment not found in workspace');
+    const source = this.attachmentPath(row.relativePath),
+      staged = `${source}.deleting-${randomUUID()}`;
+    renameSync(source, staged);
+    try {
+      this.transaction(() => {
+        this.db.prepare('DELETE FROM attachments WHERE id=? AND workspace_id=?').run(attachmentId, workspaceId);
+        this.syncJournal.enqueue(workspaceId, attachmentId, 'attachment', 'delete', { id: attachmentId }, [attachmentId]);
+        this.activity(workspaceId, 'lifecycle', 'attachment.deleted', attachmentId, 'attachment', {});
+      });
+    } catch (error) {
+      renameSync(staged, source);
+      throw error;
+    }
+    rmSync(staged, { force: true });
   }
 
-  prepareAttachmentForProvider(workspaceId:string,attachmentId:string,capabilities:{inlineText:boolean;filePaths:boolean;acceptedMediaTypes:readonly string[];maxBytes:number}):ProviderAttachmentPreparation{
-    const row=this.db.prepare('SELECT relative_path relativePath,owner_id ownerId FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId,workspaceId) as {relativePath:string;ownerId:string}|undefined
-    if(!row)throw new Error('Attachment not found in workspace')
-    const metadata=this.listAttachments(workspaceId,row.ownerId).find((item)=>item.id===attachmentId)!
-    return prepareProviderAttachment({metadata,absolutePath:this.attachmentPath(row.relativePath),capabilities})
+  prepareAttachmentForProvider(
+    workspaceId: string,
+    attachmentId: string,
+    capabilities: {
+      inlineText: boolean;
+      filePaths: boolean;
+      acceptedMediaTypes: readonly string[];
+      maxBytes: number;
+    },
+  ): ProviderAttachmentPreparation {
+    const row = this.db.prepare('SELECT relative_path relativePath,owner_id ownerId FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId, workspaceId) as { relativePath: string; ownerId: string } | undefined;
+    if (!row) throw new Error('Attachment not found in workspace');
+    const metadata = this.listAttachments(workspaceId, row.ownerId).find((item) => item.id === attachmentId)!;
+    return prepareProviderAttachment({
+      metadata,
+      absolutePath: this.attachmentPath(row.relativePath),
+      capabilities,
+    });
   }
 
   searchText(workspaceId: string, query: string, limit = 20): SearchResult[] {
-    if (!query.trim()) return []
-    const expression = query.trim().split(/\s+/).map((token) => `"${token.replaceAll('"', '""')}"`).join(' AND ')
-    const rows = this.db.prepare('SELECT object_id,object_kind,revision_id,title,snippet(search_fts,5,\'\',\'\',\'…\',16) excerpt,bm25(search_fts) rank FROM search_fts WHERE search_fts MATCH ? AND workspace_id=? ORDER BY rank LIMIT ?').all(expression, workspaceId, limit) as Array<Record<string, unknown>>
-    return rows.map((row) => ({ objectId: String(row.object_id), objectKind: row.object_kind as ObjectKind, revisionId: row.revision_id ? String(row.revision_id) : undefined, title: String(row.title), excerpt: String(row.excerpt), score: -Number(row.rank), method: 'text' }))
+    if (!query.trim()) return [];
+    const expression = query
+      .trim()
+      .split(/\s+/)
+      .map((token) => `"${token.replaceAll('"', '""')}"`)
+      .join(' AND ');
+    const rows = this.db.prepare("SELECT object_id,object_kind,revision_id,title,snippet(search_fts,5,'','','…',16) excerpt,bm25(search_fts) rank FROM search_fts WHERE search_fts MATCH ? AND workspace_id=? ORDER BY rank LIMIT ?").all(expression, workspaceId, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      objectId: String(row.object_id),
+      objectKind: row.object_kind as ObjectKind,
+      revisionId: row.revision_id ? String(row.revision_id) : undefined,
+      title: String(row.title),
+      excerpt: String(row.excerpt),
+      score: -Number(row.rank),
+      method: 'text',
+    }));
   }
 
-  indexEmbedding(workspaceId: string, source: { objectId: string; objectKind: ObjectKind; revisionId?: string }, vector: number[], provenance: { provider: string; providerVersion: string; model: string; modelDigest: string; chunkingDigest: string }): void {
-    this.assertObjectInWorkspace(workspaceId, source.objectId)
-    if (vector.length === 0 || vector.some((value) => !Number.isFinite(value))) throw new Error('Valid embedding vector required')
+  indexEmbedding(
+    workspaceId: string,
+    source: { objectId: string; objectKind: ObjectKind; revisionId?: string },
+    vector: number[],
+    provenance: {
+      provider: string;
+      providerVersion: string;
+      model: string;
+      modelDigest: string;
+      chunkingDigest: string;
+    },
+  ): void {
+    this.assertObjectInWorkspace(workspaceId, source.objectId);
+    if (vector.length === 0 || vector.some((value) => !Number.isFinite(value))) throw new Error('Valid embedding vector required');
     this.transaction(() => {
-      this.db.prepare('DELETE FROM embeddings WHERE workspace_id=? AND object_id=?').run(workspaceId, source.objectId)
-      this.db.prepare('INSERT INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, source.objectId, source.objectKind, source.revisionId ?? null, provenance.provider, provenance.providerVersion, provenance.model, provenance.modelDigest, vector.length, provenance.chunkingDigest, JSON.stringify(vector), now())
-    })
+      this.db.prepare('DELETE FROM embeddings WHERE workspace_id=? AND object_id=?').run(workspaceId, source.objectId);
+      this.db.prepare('INSERT INTO embeddings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, source.objectId, source.objectKind, source.revisionId ?? null, provenance.provider, provenance.providerVersion, provenance.model, provenance.modelDigest, vector.length, provenance.chunkingDigest, JSON.stringify(vector), now());
+    });
   }
 
-  semanticSearch(workspaceId: string, queryVector: number[], provenance: { provider: string; providerVersion: string; model: string; modelDigest: string; chunkingDigest: string }, limit = 20): SearchResult[] {
-    const rows = this.db.prepare('SELECT * FROM embeddings WHERE workspace_id=? AND provider=? AND provider_version=? AND model=? AND model_digest=? AND chunking_digest=?').all(workspaceId, provenance.provider, provenance.providerVersion, provenance.model, provenance.modelDigest, provenance.chunkingDigest) as Array<Record<string, unknown>>
-    return rows.map((row) => {
-      const vector = JSON.parse(String(row.vector_json)) as number[]
-      const score = cosine(queryVector, vector)
-      const source = this.sourceTitle(String(row.object_id), String(row.object_kind) as ObjectKind)
-      return { objectId: String(row.object_id), objectKind: row.object_kind as ObjectKind, revisionId: row.revision_id ? String(row.revision_id) : undefined, title: source.title, excerpt: source.excerpt, score, method: 'semantic' as const }
-    }).filter((result) => Number.isFinite(result.score)).sort((a, b) => b.score - a.score).slice(0, limit)
+  semanticSearch(
+    workspaceId: string,
+    queryVector: number[],
+    provenance: {
+      provider: string;
+      providerVersion: string;
+      model: string;
+      modelDigest: string;
+      chunkingDigest: string;
+    },
+    limit = 20,
+  ): SearchResult[] {
+    const rows = this.db.prepare('SELECT * FROM embeddings WHERE workspace_id=? AND provider=? AND provider_version=? AND model=? AND model_digest=? AND chunking_digest=?').all(workspaceId, provenance.provider, provenance.providerVersion, provenance.model, provenance.modelDigest, provenance.chunkingDigest) as Array<Record<string, unknown>>;
+    return rows
+      .map((row) => {
+        const vector = JSON.parse(String(row.vector_json)) as number[];
+        const score = cosine(queryVector, vector);
+        const source = this.sourceTitle(String(row.object_id), String(row.object_kind) as ObjectKind);
+        return {
+          objectId: String(row.object_id),
+          objectKind: row.object_kind as ObjectKind,
+          revisionId: row.revision_id ? String(row.revision_id) : undefined,
+          title: source.title,
+          excerpt: source.excerpt,
+          score,
+          method: 'semantic' as const,
+        };
+      })
+      .filter((result) => Number.isFinite(result.score))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
   graph(workspaceId: string): { nodes: GraphNode[]; edges: GraphEdge[] } {
-    const edges = this.db.prepare('SELECT id,from_id fromId,to_id toId,type FROM relationships WHERE workspace_id=?').all(workspaceId) as unknown as GraphEdge[]
-    const ids = new Set(edges.flatMap((edge) => [edge.fromId, edge.toId]))
-    const nodes = [...ids].map((id) => this.graphNode(id)).filter((node): node is GraphNode => Boolean(node))
-    const surviving = new Set(nodes.map((node) => node.id))
-    return { nodes, edges: edges.filter((edge) => surviving.has(edge.fromId) && surviving.has(edge.toId)) }
+    const edges = this.db.prepare('SELECT id,from_id fromId,to_id toId,type FROM relationships WHERE workspace_id=?').all(workspaceId) as unknown as GraphEdge[];
+    const ids = new Set(edges.flatMap((edge) => [edge.fromId, edge.toId]));
+    const nodes = [...ids].map((id) => this.graphNode(id)).filter((node): node is GraphNode => Boolean(node));
+    const surviving = new Set(nodes.map((node) => node.id));
+    return {
+      nodes,
+      edges: edges.filter((edge) => surviving.has(edge.fromId) && surviving.has(edge.toId)),
+    };
   }
 
-  deleteMessage(workspaceId:string,messageId:string):void{
-    this.assertObjectInWorkspace(workspaceId,messageId,'message')
-    const stagedFiles:Array<{source:string;staged:string}>=[]
-    try{this.transaction(()=>{
-      const ownedIds=[messageId]
-      for(;;){const placeholders=ownedIds.map(()=>'?').join(','),dependents=this.db.prepare(`SELECT id FROM memories WHERE workspace_id=? AND ownership='source-owned' AND source_object_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string}>,additions=dependents.map((row)=>row.id).filter((id)=>!ownedIds.includes(id));if(!additions.length)break;ownedIds.push(...additions)}
-      const placeholders=ownedIds.map(()=>'?').join(','),attachments=this.db.prepare(`SELECT id,relative_path relativePath FROM attachments WHERE workspace_id=? AND owner_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string;relativePath:string}>
-      const relationships=(this.db.prepare(`SELECT id FROM relationships WHERE workspace_id=? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`).all(workspaceId,...ownedIds,...ownedIds) as Array<{id:string}>).map((row)=>row.id)
-      const commitmentIds=(this.db.prepare(`SELECT id FROM commitments WHERE workspace_id=? AND source_message_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string}>).map((row)=>row.id)
-      for(const attachment of attachments){const source=this.attachmentPath(attachment.relativePath),staged=`${source}.deleting-${randomUUID()}`;renameSync(source,staged);stagedFiles.push({source,staged})}
-      this.db.prepare(`DELETE FROM relationships WHERE workspace_id=? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`).run(workspaceId,...ownedIds,...ownedIds)
-      this.db.prepare(`DELETE FROM embeddings WHERE workspace_id=? AND object_id IN (${placeholders})`).run(workspaceId,...ownedIds)
-      this.db.prepare(`DELETE FROM queued_work WHERE workspace_id=? AND context_object_id IN (${placeholders})`).run(workspaceId,...ownedIds)
-      this.db.prepare(`DELETE FROM search_fts WHERE workspace_id=? AND object_id IN (${placeholders})`).run(workspaceId,...ownedIds)
-      this.db.prepare(`DELETE FROM briefing_dismissals WHERE workspace_id=? AND source_id IN (${[...ownedIds,...commitmentIds].map(()=>'?').join(',')})`).run(workspaceId,...ownedIds,...commitmentIds)
-      this.db.prepare(`DELETE FROM attachments WHERE workspace_id=? AND owner_id IN (${placeholders})`).run(workspaceId,...ownedIds)
-      const detached=this.db.prepare(`SELECT id,title,body,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string;title:string;body:string;ownership:string;createdAt:string;updatedAt:string}>
-      this.db.prepare(`UPDATE memories SET source_object_id=NULL WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).run(workspaceId,...ownedIds);for(const memory of detached)this.syncJournal.enqueue(workspaceId,memory.id,'memory','upsert',{...memory,sourceObjectId:null})
-      const dependentMemoryIds=ownedIds.filter((id)=>id!==messageId);if(dependentMemoryIds.length)this.db.prepare(`DELETE FROM memories WHERE workspace_id=? AND id IN (${dependentMemoryIds.map(()=>'?').join(',')})`).run(workspaceId,...dependentMemoryIds)
-      this.db.prepare('DELETE FROM messages WHERE id=?').run(messageId)
-      for(const dependentId of dependentMemoryIds){this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId,workspaceId,'memory',now());this.syncJournal.enqueue(workspaceId,dependentId,'memory','delete',{id:dependentId},[dependentId]);this.activity(workspaceId,'lifecycle','deleted',dependentId,'memory',{})}
-      this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(messageId,workspaceId,'message',now())
-      const cascadeIds=[...ownedIds,...commitmentIds,...attachments.map((item)=>item.id),...relationships];this.syncJournal.enqueue(workspaceId,messageId,'message','delete',{id:messageId,cascade:true,cascadeIds},cascadeIds)
-      this.activity(workspaceId,'lifecycle','deleted',messageId,'message',{})
-    })}catch(error){for(const file of stagedFiles.reverse())renameSync(file.staged,file.source);throw error}
-    for(const file of stagedFiles)rmSync(file.staged,{force:true})
+  deleteMessage(workspaceId: string, messageId: string): void {
+    this.assertObjectInWorkspace(workspaceId, messageId, 'message');
+    const stagedFiles: Array<{ source: string; staged: string }> = [];
+    try {
+      this.transaction(() => {
+        const ownedIds = [messageId];
+        for (;;) {
+          const placeholders = ownedIds.map(() => '?').join(','),
+            dependents = this.db.prepare(`SELECT id FROM memories WHERE workspace_id=? AND ownership='source-owned' AND source_object_id IN (${placeholders})`).all(workspaceId, ...ownedIds) as Array<{ id: string }>,
+            additions = dependents.map((row) => row.id).filter((id) => !ownedIds.includes(id));
+          if (!additions.length) break;
+          ownedIds.push(...additions);
+        }
+        const placeholders = ownedIds.map(() => '?').join(','),
+          attachments = this.db.prepare(`SELECT id,relative_path relativePath FROM attachments WHERE workspace_id=? AND owner_id IN (${placeholders})`).all(workspaceId, ...ownedIds) as Array<{
+            id: string;
+            relativePath: string;
+          }>;
+        const relationships = (this.db.prepare(`SELECT id FROM relationships WHERE workspace_id=? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`).all(workspaceId, ...ownedIds, ...ownedIds) as Array<{ id: string }>).map((row) => row.id);
+        const commitmentIds = (this.db.prepare(`SELECT id FROM commitments WHERE workspace_id=? AND source_message_id IN (${placeholders})`).all(workspaceId, ...ownedIds) as Array<{ id: string }>).map((row) => row.id);
+        for (const attachment of attachments) {
+          const source = this.attachmentPath(attachment.relativePath),
+            staged = `${source}.deleting-${randomUUID()}`;
+          renameSync(source, staged);
+          stagedFiles.push({ source, staged });
+        }
+        this.db.prepare(`DELETE FROM relationships WHERE workspace_id=? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`).run(workspaceId, ...ownedIds, ...ownedIds);
+        this.db.prepare(`DELETE FROM embeddings WHERE workspace_id=? AND object_id IN (${placeholders})`).run(workspaceId, ...ownedIds);
+        this.db.prepare(`DELETE FROM queued_work WHERE workspace_id=? AND context_object_id IN (${placeholders})`).run(workspaceId, ...ownedIds);
+        this.db.prepare(`DELETE FROM search_fts WHERE workspace_id=? AND object_id IN (${placeholders})`).run(workspaceId, ...ownedIds);
+        this.db.prepare(`DELETE FROM briefing_dismissals WHERE workspace_id=? AND source_id IN (${[...ownedIds, ...commitmentIds].map(() => '?').join(',')})`).run(workspaceId, ...ownedIds, ...commitmentIds);
+        this.db.prepare(`DELETE FROM attachments WHERE workspace_id=? AND owner_id IN (${placeholders})`).run(workspaceId, ...ownedIds);
+        const detached = this.db.prepare(`SELECT id,title,body,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).all(workspaceId, ...ownedIds) as Array<{
+          id: string;
+          title: string;
+          body: string;
+          ownership: string;
+          createdAt: string;
+          updatedAt: string;
+        }>;
+        this.db.prepare(`UPDATE memories SET source_object_id=NULL WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).run(workspaceId, ...ownedIds);
+        for (const memory of detached)
+          this.syncJournal.enqueue(workspaceId, memory.id, 'memory', 'upsert', {
+            ...memory,
+            sourceObjectId: null,
+          });
+        const dependentMemoryIds = ownedIds.filter((id) => id !== messageId);
+        if (dependentMemoryIds.length) this.db.prepare(`DELETE FROM memories WHERE workspace_id=? AND id IN (${dependentMemoryIds.map(() => '?').join(',')})`).run(workspaceId, ...dependentMemoryIds);
+        this.db.prepare('DELETE FROM messages WHERE id=?').run(messageId);
+        for (const dependentId of dependentMemoryIds) {
+          this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId, workspaceId, 'memory', now());
+          this.syncJournal.enqueue(workspaceId, dependentId, 'memory', 'delete', { id: dependentId }, [dependentId]);
+          this.activity(workspaceId, 'lifecycle', 'deleted', dependentId, 'memory', {});
+        }
+        this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(messageId, workspaceId, 'message', now());
+        const cascadeIds = [...ownedIds, ...commitmentIds, ...attachments.map((item) => item.id), ...relationships];
+        this.syncJournal.enqueue(workspaceId, messageId, 'message', 'delete', { id: messageId, cascade: true, cascadeIds }, cascadeIds);
+        this.activity(workspaceId, 'lifecycle', 'deleted', messageId, 'message', {});
+      });
+    } catch (error) {
+      for (const file of stagedFiles.reverse()) renameSync(file.staged, file.source);
+      throw error;
+    }
+    for (const file of stagedFiles) rmSync(file.staged, { force: true });
   }
 
   deleteObject(workspaceId: string, objectKind: 'document' | 'chat' | 'memory', objectId: string): void {
-    const stagedFiles: Array<{ source: string; staged: string }> = []
-    try { this.transaction(() => {
-      this.assertObjectInWorkspace(workspaceId, objectId, objectKind)
-      const ownedIds = objectKind === 'chat'
-        ? [objectId, ...(this.db.prepare('SELECT id FROM messages WHERE chat_id=?').all(objectId) as Array<{ id: string }>).map((message) => message.id)]
-        : [objectId]
-      for (;;) {
-        const placeholders = ownedIds.map(() => '?').join(',')
-        const dependents = this.db.prepare(`SELECT id FROM memories WHERE ownership='source-owned' AND source_object_id IN (${placeholders})`).all(...ownedIds) as Array<{ id: string }>
-        const additions = dependents.map((row) => row.id).filter((id) => !ownedIds.includes(id))
-        if (!additions.length) break
-        ownedIds.push(...additions)
-      }
-      const placeholders = ownedIds.map(() => '?').join(',')
-      const attachmentRows = this.db.prepare(`SELECT id,relative_path FROM attachments WHERE owner_id IN (${placeholders})`).all(...ownedIds) as Array<{ id:string;relative_path: string }>
-      const relationshipIds=(this.db.prepare(`SELECT id FROM relationships WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).all(...ownedIds,...ownedIds) as Array<{id:string}>).map((row)=>row.id)
-      const commitmentIds=(this.db.prepare(`SELECT id FROM commitments WHERE workspace_id=? AND source_message_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string}>).map((row)=>row.id)
-      for (const attachment of attachmentRows) {
-        const source = path.join(this.attachmentRoot, attachment.relative_path), staged = `${source}.deleting-${randomUUID()}`
-        renameSync(source, staged); stagedFiles.push({ source, staged })
-      }
-      this.db.prepare(`DELETE FROM relationships WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...ownedIds, ...ownedIds)
-      this.db.prepare(`DELETE FROM embeddings WHERE object_id IN (${placeholders})`).run(...ownedIds)
-      this.db.prepare(`DELETE FROM queued_work WHERE context_object_id IN (${placeholders})`).run(...ownedIds)
-      this.db.prepare(`DELETE FROM search_fts WHERE object_id IN (${placeholders})`).run(...ownedIds)
-      this.db.prepare(`DELETE FROM briefing_dismissals WHERE workspace_id=? AND source_id IN (${[...ownedIds,...commitmentIds].map(()=>'?').join(',')})`).run(workspaceId,...ownedIds,...commitmentIds)
-      this.db.prepare(`DELETE FROM attachments WHERE owner_id IN (${placeholders})`).run(...ownedIds)
-      const dependentMemoryIds = ownedIds.filter((id) => id !== objectId && this.objectWorkspace(id, 'memory') === workspaceId)
-      const detachedMemories=this.db.prepare(`SELECT id,title,body,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string;title:string;body:string;ownership:string;createdAt:string;updatedAt:string}>
-      this.db.prepare(`UPDATE memories SET source_object_id=NULL WHERE ownership='workspace-owned' AND source_object_id IN (${placeholders})`).run(...ownedIds)
-      for(const memory of detachedMemories)this.syncJournal.enqueue(workspaceId,memory.id,'memory','upsert',{...memory,sourceObjectId:null})
-      if (dependentMemoryIds.length) this.db.prepare(`DELETE FROM memories WHERE id IN (${dependentMemoryIds.map(() => '?').join(',')})`).run(...dependentMemoryIds)
-      this.db.prepare(`DELETE FROM ${objectKind === 'document' ? 'documents' : objectKind === 'chat' ? 'chats' : 'memories'} WHERE id=?`).run(objectId)
-      for (const dependentId of dependentMemoryIds) { this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId, workspaceId, 'memory', now());this.syncJournal.enqueue(workspaceId,dependentId,'memory','delete',{id:dependentId},[dependentId]); this.activity(workspaceId, 'lifecycle', 'deleted', dependentId, 'memory', {}) }
-      this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(objectId, workspaceId, objectKind, now())
-      const cascadeIds=[...ownedIds,...commitmentIds,...relationshipIds,...attachmentRows.map((row)=>row.id)];this.syncJournal.enqueue(workspaceId,objectId,objectKind,'delete',{id:objectId,cascade:true,cascadeIds},cascadeIds)
-      this.activity(workspaceId, 'lifecycle', 'deleted', objectId, objectKind, {})
-    }) } catch (error) {
-      for (const file of stagedFiles.reverse()) renameSync(file.staged, file.source)
-      throw error
+    const stagedFiles: Array<{ source: string; staged: string }> = [];
+    try {
+      this.transaction(() => {
+        this.assertObjectInWorkspace(workspaceId, objectId, objectKind);
+        const ownedIds = objectKind === 'chat' ? [objectId, ...(this.db.prepare('SELECT id FROM messages WHERE chat_id=?').all(objectId) as Array<{ id: string }>).map((message) => message.id)] : [objectId];
+        for (;;) {
+          const placeholders = ownedIds.map(() => '?').join(',');
+          const dependents = this.db.prepare(`SELECT id FROM memories WHERE ownership='source-owned' AND source_object_id IN (${placeholders})`).all(...ownedIds) as Array<{ id: string }>;
+          const additions = dependents.map((row) => row.id).filter((id) => !ownedIds.includes(id));
+          if (!additions.length) break;
+          ownedIds.push(...additions);
+        }
+        const placeholders = ownedIds.map(() => '?').join(',');
+        const attachmentRows = this.db.prepare(`SELECT id,relative_path FROM attachments WHERE owner_id IN (${placeholders})`).all(...ownedIds) as Array<{ id: string; relative_path: string }>;
+        const relationshipIds = (this.db.prepare(`SELECT id FROM relationships WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).all(...ownedIds, ...ownedIds) as Array<{ id: string }>).map((row) => row.id);
+        const commitmentIds = (this.db.prepare(`SELECT id FROM commitments WHERE workspace_id=? AND source_message_id IN (${placeholders})`).all(workspaceId, ...ownedIds) as Array<{ id: string }>).map((row) => row.id);
+        for (const attachment of attachmentRows) {
+          const source = path.join(this.attachmentRoot, attachment.relative_path),
+            staged = `${source}.deleting-${randomUUID()}`;
+          renameSync(source, staged);
+          stagedFiles.push({ source, staged });
+        }
+        this.db.prepare(`DELETE FROM relationships WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...ownedIds, ...ownedIds);
+        this.db.prepare(`DELETE FROM embeddings WHERE object_id IN (${placeholders})`).run(...ownedIds);
+        this.db.prepare(`DELETE FROM queued_work WHERE context_object_id IN (${placeholders})`).run(...ownedIds);
+        this.db.prepare(`DELETE FROM search_fts WHERE object_id IN (${placeholders})`).run(...ownedIds);
+        this.db.prepare(`DELETE FROM briefing_dismissals WHERE workspace_id=? AND source_id IN (${[...ownedIds, ...commitmentIds].map(() => '?').join(',')})`).run(workspaceId, ...ownedIds, ...commitmentIds);
+        this.db.prepare(`DELETE FROM attachments WHERE owner_id IN (${placeholders})`).run(...ownedIds);
+        const dependentMemoryIds = ownedIds.filter((id) => id !== objectId && this.objectWorkspace(id, 'memory') === workspaceId);
+        const detachedMemories = this.db.prepare(`SELECT id,title,body,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).all(workspaceId, ...ownedIds) as Array<{
+          id: string;
+          title: string;
+          body: string;
+          ownership: string;
+          createdAt: string;
+          updatedAt: string;
+        }>;
+        this.db.prepare(`UPDATE memories SET source_object_id=NULL WHERE ownership='workspace-owned' AND source_object_id IN (${placeholders})`).run(...ownedIds);
+        for (const memory of detachedMemories)
+          this.syncJournal.enqueue(workspaceId, memory.id, 'memory', 'upsert', {
+            ...memory,
+            sourceObjectId: null,
+          });
+        if (dependentMemoryIds.length) this.db.prepare(`DELETE FROM memories WHERE id IN (${dependentMemoryIds.map(() => '?').join(',')})`).run(...dependentMemoryIds);
+        this.db.prepare(`DELETE FROM ${objectKind === 'document' ? 'documents' : objectKind === 'chat' ? 'chats' : 'memories'} WHERE id=?`).run(objectId);
+        for (const dependentId of dependentMemoryIds) {
+          this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId, workspaceId, 'memory', now());
+          this.syncJournal.enqueue(workspaceId, dependentId, 'memory', 'delete', { id: dependentId }, [dependentId]);
+          this.activity(workspaceId, 'lifecycle', 'deleted', dependentId, 'memory', {});
+        }
+        this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(objectId, workspaceId, objectKind, now());
+        const cascadeIds = [...ownedIds, ...commitmentIds, ...relationshipIds, ...attachmentRows.map((row) => row.id)];
+        this.syncJournal.enqueue(workspaceId, objectId, objectKind, 'delete', { id: objectId, cascade: true, cascadeIds }, cascadeIds);
+        this.activity(workspaceId, 'lifecycle', 'deleted', objectId, objectKind, {});
+      });
+    } catch (error) {
+      for (const file of stagedFiles.reverse()) renameSync(file.staged, file.source);
+      throw error;
     }
-    for (const file of stagedFiles) rmSync(file.staged, { force: true })
+    for (const file of stagedFiles) rmSync(file.staged, { force: true });
   }
 
-  createMeeting(workspaceId:string,title:string,consentVersion='local-consent-v1'):string{
-    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
-    const cleanTitle=title.trim();if(!cleanTitle||cleanTitle.length>300)throw new Error('Meeting title is invalid')
-    const id=randomUUID(),timestamp=now();this.transaction(()=>{this.db.prepare("INSERT INTO meetings VALUES (?,?,?,'recording',?,?,NULL,NULL,0,NULL,NULL,'none','uncertain',NULL,?,NULL)").run(id,workspaceId,cleanTitle,timestamp,consentVersion,timestamp);this.activity(workspaceId,'meeting','recording.started',id,'meeting',{version:1})});return id
+  createMeeting(workspaceId: string, title: string, consentVersion = 'local-consent-v1'): string {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    const cleanTitle = title.trim();
+    if (!cleanTitle || cleanTitle.length > 300) throw new Error('Meeting title is invalid');
+    const id = randomUUID(),
+      timestamp = now();
+    this.transaction(() => {
+      this.db.prepare("INSERT INTO meetings VALUES (?,?,?,'recording',?,?,NULL,NULL,0,NULL,NULL,'none','uncertain',NULL,?,NULL)").run(id, workspaceId, cleanTitle, timestamp, consentVersion, timestamp);
+      this.activity(workspaceId, 'meeting', 'recording.started', id, 'meeting', { version: 1 });
+    });
+    return id;
   }
 
-  finalizeMeetingAudio(workspaceId:string,meetingId:string,mediaType:string,bytes:Buffer):void{
-    const meeting=this.db.prepare("SELECT status FROM meetings WHERE id=? AND workspace_id=?").get(meetingId,workspaceId) as {status:string}|undefined;if(!meeting||meeting.status!=='recording')throw new Error('Active meeting recording not found')
-    const validated=validateMeetingAudio(mediaType,bytes),relativePath=`${meetingId}.${validated.extension}`,target=this.meetingAudioPath(relativePath);writeFileSync(target,bytes,{flag:'wx',mode:0o600})
-    try{this.transaction(()=>{this.db.prepare("UPDATE meetings SET status='ready',audio_relative_path=?,media_type=?,bytes=?,sha256=?,ended_at=? WHERE id=? AND workspace_id=? AND status='recording'").run(relativePath,mediaType,bytes.length,validated.sha256,now(),meetingId,workspaceId);this.activity(workspaceId,'meeting','recording.completed',meetingId,'meeting',{version:1})})}catch(error){rmSync(target,{force:true});throw error}
+  createFixturePlaybook(workspaceId: string, title: string, timezone: string, hour: number, minute: number): string {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    const clean = title.trim();
+    if (!clean || clean.length > 200) throw new Error('Playbook title is invalid');
+    nextDailyOccurrence(timezone, hour, minute, now());
+    const id = randomUUID(),
+      timestamp = now(),
+      version = 1,
+      definition = playbookDefinitionJson(),
+      definitionDigest = playbookDefinitionDigest({
+        workspaceId,
+        version,
+        timezone,
+        hour,
+        minute,
+        definition,
+      }),
+      permission = JSON.stringify(FIXTURE_CONNECTOR);
+    this.transaction(() => {
+      this.db.prepare("INSERT INTO fixture_playbooks VALUES (?,?,?,?,'paused',?,?,?,?,?,?,NULL,NULL,?,?)").run(id, workspaceId, clean, version, timezone, hour, minute, definition, definitionDigest, permission, timestamp, timestamp);
+      this.activity(workspaceId, 'automation', 'playbook.created', id, 'playbook', { version });
+    });
+    return id;
   }
 
-  failMeeting(workspaceId:string,meetingId:string,failureCode:'permission_denied'|'device_lost'|'interrupted'|'disk_pressure'|'capture_failed'|'size_limit'):void{this.transaction(()=>{const result=this.db.prepare("UPDATE meetings SET status='failed',failure_code=?,ended_at=? WHERE id=? AND workspace_id=? AND status='recording'").run(failureCode,now(),meetingId,workspaceId);if(result.changes)this.activity(workspaceId,'meeting','recording.failed',meetingId,'meeting',{})})}
-
-  listMeetings(workspaceId:string):MeetingView[]{return(this.db.prepare('SELECT id,workspace_id workspaceId,title,status,consent_acknowledged_at consentAcknowledgedAt,consent_version consentVersion,media_type mediaType,bytes,sha256,transcript,transcript_status transcriptStatus,speaker_handling speakerHandling,failure_code failureCode,created_at createdAt,ended_at endedAt FROM meetings WHERE workspace_id=? ORDER BY created_at DESC').all(workspaceId) as unknown as MeetingView[])}
-
-  updateMeetingTranscript(workspaceId:string,meetingId:string,transcript:string,reviewed:boolean):void{const meeting=this.db.prepare("SELECT status FROM meetings WHERE id=? AND workspace_id=?").get(meetingId,workspaceId) as {status:string}|undefined;if(!meeting||meeting.status!=='ready')throw new Error('Completed meeting not found');const value=validateTranscript(transcript),status=reviewed?'reviewed':'draft',result=this.db.prepare('UPDATE meetings SET transcript=?,transcript_status=? WHERE id=? AND workspace_id=?').run(value,status,meetingId,workspaceId);if(!result.changes)throw new Error('Meeting not found');this.activity(workspaceId,'meeting',reviewed?'transcript.reviewed':'transcript.draft_saved',meetingId,'meeting',{version:1})}
-
-  saveMeetingTranscriptToMemory(workspaceId:string,meetingId:string):string{const meeting=this.db.prepare("SELECT title,transcript FROM meetings WHERE id=? AND workspace_id=? AND transcript_status='reviewed'").get(meetingId,workspaceId) as {title:string;transcript:string}|undefined;if(!meeting)throw new Error('Review the transcript before saving it to knowledge');const existing=this.db.prepare("SELECT id FROM memories WHERE workspace_id=? AND source_object_id=? AND ownership='source-owned'").get(workspaceId,meetingId) as {id:string}|undefined,id=existing?.id??randomUUID(),timestamp=now(),title=`Meeting: ${meeting.title}`;this.transaction(()=>{if(existing){this.db.prepare('UPDATE memories SET title=?,body=?,updated_at=? WHERE id=?').run(title,meeting.transcript,timestamp,id);this.db.prepare('DELETE FROM search_fts WHERE workspace_id=? AND object_id=?').run(workspaceId,id)}else{this.db.prepare("INSERT INTO memories VALUES (?,?,?,?,?,'source-owned',?,?)").run(id,workspaceId,title,meeting.transcript,meetingId,timestamp,timestamp);this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(randomUUID(),workspaceId,meetingId,id,'transcribed_as',timestamp)}this.indexText(workspaceId,id,'memory',undefined,title,meeting.transcript);this.activity(workspaceId,'meeting',existing?'transcript.knowledge_updated':'transcript.saved_to_knowledge',id,'memory',{version:1})});return id}
-
-  meetingAudio(workspaceId:string,meetingId:string):{path:string;mediaType:string;title:string}{const row=this.db.prepare("SELECT title,audio_relative_path relativePath,media_type mediaType,sha256 FROM meetings WHERE id=? AND workspace_id=? AND status='ready'").get(meetingId,workspaceId) as {title:string;relativePath:string;mediaType:string;sha256:string}|undefined;if(!row||!row.relativePath)throw new Error('Meeting audio not found');const file=this.meetingAudioPath(row.relativePath);if(!existsSync(file))throw new Error('Stored meeting audio file is missing');const validated=validateMeetingAudio(row.mediaType,readFileSync(file));if(validated.sha256!==row.sha256)throw new Error('Stored meeting audio integrity check failed');return{path:file,mediaType:row.mediaType,title:row.title}}
-
-  deleteMeeting(workspaceId:string,meetingId:string):void{const row=this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE id=? AND workspace_id=?').get(meetingId,workspaceId) as {relativePath:string|null}|undefined;if(!row)throw new Error('Meeting not found');const source=row.relativePath?this.meetingAudioPath(row.relativePath):undefined,staged=source?`${source}.deleting-${randomUUID()}`:undefined;if(source&&existsSync(source))renameSync(source,staged!);try{this.transaction(()=>{const memories=this.db.prepare("SELECT id FROM memories WHERE workspace_id=? AND source_object_id=? AND ownership='source-owned'").all(workspaceId,meetingId) as Array<{id:string}>;for(const memory of memories){this.db.prepare('DELETE FROM search_fts WHERE workspace_id=? AND object_id=?').run(workspaceId,memory.id);this.db.prepare('DELETE FROM relationships WHERE workspace_id=? AND (from_id=? OR to_id=?)').run(workspaceId,memory.id,memory.id);this.db.prepare('DELETE FROM memories WHERE id=?').run(memory.id)}this.db.prepare('DELETE FROM relationships WHERE workspace_id=? AND (from_id=? OR to_id=?)').run(workspaceId,meetingId,meetingId);this.db.prepare('DELETE FROM meetings WHERE id=? AND workspace_id=?').run(meetingId,workspaceId);this.activity(workspaceId,'meeting','meeting.deleted',meetingId,'meeting',{})})}catch(error){if(source&&staged&&existsSync(staged))renameSync(staged,source);throw error}if(staged)rmSync(staged,{force:true})}
-
-  listActivity(workspaceId:string,filters:{families?:ActivityFamily[];query?:string;limit?:number}={}):ActivityTimelineItem[] {
-    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
-    if(filters.limit!==undefined&&!Number.isFinite(filters.limit))throw new Error('Activity limit is invalid')
-    if(filters.families?.some((family)=>!ACTIVITY_FAMILIES.includes(family)))throw new Error('Activity family is invalid')
-    const limit=Math.min(Math.max(Math.trunc(filters.limit??250),1),500),query=(filters.query??'').trim().toLocaleLowerCase(),families=new Set(filters.families??[])
-    const rows=this.db.prepare('SELECT id,category,action,object_id objectId,object_kind objectKind,metadata_json metadata,created_at createdAt FROM activities WHERE workspace_id=? ORDER BY created_at DESC,id DESC LIMIT 500').all(workspaceId) as Array<Record<string,unknown>>
-    const timeline:ActivityTimelineItem[]=[]
-    for(const row of rows){const family=activityFamily(String(row.category));if(families.size&&!families.has(family))continue;const objectId=row.objectId?String(row.objectId):undefined,objectKind=String(row.objectKind),object=this.activityObject(workspaceId,objectId,objectKind),action=String(row.action);if(query&&![family,String(row.category),action,objectKind,object.title??''].some((value)=>value.toLocaleLowerCase().includes(query)))continue;timeline.push({id:String(row.id),category:String(row.category),family,action,objectId,objectKind,objectState:action==='deleted'||action.endsWith('.deleted')?'deleted':object.title?'available':'historical',objectTitle:object.title,targetId:object.targetId,targetKind:object.targetKind,details:safeActivityDetails(String(row.metadata)),createdAt:String(row.createdAt)});if(timeline.length>=limit)break}
-    return timeline
+  listFixturePlaybooks(workspaceId: string, afterIso = now()): FixturePlaybookView[] {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    const rows = this.db.prepare('SELECT id,workspace_id workspaceId,title,version,status,timezone,hour,minute,definition_json definitionJson,definition_digest definitionDigest,permission_json permissionJson,last_dry_run_at lastDryRunAt,created_at createdAt,updated_at updatedAt FROM fixture_playbooks WHERE workspace_id=? ORDER BY created_at DESC').all(workspaceId) as Array<Record<string, unknown>>;
+    return rows.map((row) => {
+      assertPlaybookDefinition(String(row.definitionJson));
+      if (String(row.permissionJson) !== JSON.stringify(FIXTURE_CONNECTOR) || String(row.definitionDigest) !== playbookDefinitionDigest({ workspaceId, version: Number(row.version), timezone: String(row.timezone), hour: Number(row.hour), minute: Number(row.minute), definition: String(row.definitionJson) })) throw new Error('Stored playbook authority or provenance is invalid');
+      return {
+        id: String(row.id),
+        workspaceId,
+        title: String(row.title),
+        version: Number(row.version),
+        definition: JSON.parse(String(row.definitionJson)) as FixturePlaybookView['definition'],
+        permission: JSON.parse(String(row.permissionJson)) as FixturePlaybookView['permission'],
+        status: String(row.status) as 'paused' | 'killed',
+        timezone: String(row.timezone),
+        hour: Number(row.hour),
+        minute: Number(row.minute),
+        nextOccurrence: nextDailyOccurrence(String(row.timezone), Number(row.hour), Number(row.minute), afterIso),
+        lastDryRunAt: row.lastDryRunAt == null ? undefined : String(row.lastDryRunAt),
+        createdAt: String(row.createdAt),
+        updatedAt: String(row.updatedAt),
+        runs: this.db.prepare('SELECT id,status,attempt,input_count inputCount,output_count outputCount,proposed_effects proposedEffects,created_at createdAt,finished_at finishedAt FROM fixture_playbook_runs WHERE playbook_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 50').all(String(row.id), workspaceId) as unknown as FixturePlaybookView['runs'],
+      };
+    });
   }
 
-  recordSyncActivity(workspaceId:string,action:'device.initialized'|'device.enrolled'|'device.approved'|'device.revoked'|'key.rotated'|'sync.completed',details:Record<string,unknown>={}):void {
-    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
-    this.activity(workspaceId,'sync',action,workspaceId,'workspace',details)
+  dryRunFixturePlaybook(workspaceId: string, playbookId: string): ReturnType<typeof fixtureDryRun> {
+    const row = this.db.prepare('SELECT version,timezone,hour,minute,definition_json definitionJson,definition_digest definitionDigest,permission_json permissionJson,status FROM fixture_playbooks WHERE id=? AND workspace_id=?').get(playbookId, workspaceId) as { version:number;timezone:string;hour:number;minute:number;definitionJson: string; definitionDigest: string; permissionJson:string;status: string } | undefined;
+    if (!row) throw new Error('Playbook not found');
+    assertPlaybookDefinition(row.definitionJson);
+    if(row.permissionJson!==JSON.stringify(FIXTURE_CONNECTOR)||row.definitionDigest!==playbookDefinitionDigest({workspaceId,version:row.version,timezone:row.timezone,hour:row.hour,minute:row.minute,definition:row.definitionJson}))throw new Error('Stored playbook authority or provenance is invalid');
+    if (row.status === 'killed') throw new Error('Playbook kill switch is active');
+    const preview = fixtureDryRun(),
+      digest = contentDigest(JSON.stringify([row.definitionDigest, preview.digest])),
+      timestamp = now();
+    this.transaction(() => {
+      this.db.prepare('UPDATE fixture_playbooks SET last_dry_run_digest=?,last_dry_run_at=?,updated_at=? WHERE id=?').run(digest, timestamp, timestamp, playbookId);
+      this.db.prepare("INSERT INTO fixture_playbook_runs VALUES (?,?,?,?, 'dry_run',1,?,?,0,?,?,?)").run(randomUUID(), workspaceId, playbookId, null, preview.inputCount, preview.deduplicatedCount, JSON.stringify(preview.permissionSnapshot), timestamp, timestamp);
+      this.activity(workspaceId, 'automation', 'playbook.dry_run', playbookId, 'playbook', { version: 1 });
+    });
+    return { ...preview, digest };
+  }
+
+  runFixturePlaybook(
+    workspaceId: string,
+    playbookId: string,
+    dryRunDigest: string,
+    simulateFailure = false,
+  ): {
+    runId: string;
+    status: 'completed' | 'retrying' | 'dead_letter';
+    idempotent: boolean;
+  } {
+    const row = this.db.prepare('SELECT version,timezone,hour,minute,status,last_dry_run_digest lastDryRunDigest,definition_json definitionJson,definition_digest definitionDigest,permission_json permissionJson FROM fixture_playbooks WHERE id=? AND workspace_id=?').get(playbookId, workspaceId) as
+      | {
+          version:number;timezone:string;hour:number;minute:number;
+          status: string;
+          lastDryRunDigest: string | null;
+          definitionJson: string;
+          definitionDigest:string;
+          permissionJson: string;
+        }
+      | undefined;
+    if (!row) throw new Error('Playbook not found');
+    assertPlaybookDefinition(row.definitionJson);
+    if(row.permissionJson!==JSON.stringify(FIXTURE_CONNECTOR)||row.definitionDigest!==playbookDefinitionDigest({workspaceId,version:row.version,timezone:row.timezone,hour:row.hour,minute:row.minute,definition:row.definitionJson}))throw new Error('Stored playbook authority or provenance is invalid');
+    if (row.status === 'killed') throw new Error('Playbook kill switch is active');
+    if (!row.lastDryRunDigest || row.lastDryRunDigest !== dryRunDigest) throw new Error('Run a current dry run before manual execution');
+    if (row.permissionJson !== JSON.stringify(FIXTURE_CONNECTOR)) throw new Error('Playbook permission snapshot is invalid');
+    const existing = this.db.prepare('SELECT id,status,attempt FROM fixture_playbook_runs WHERE playbook_id=? AND idempotency_key=?').get(playbookId, dryRunDigest) as { id: string; status: string; attempt: number } | undefined;
+    if (existing?.status === 'completed' || existing?.status === 'dead_letter')
+      return {
+        runId: existing.id,
+        status: existing.status,
+        idempotent: true,
+      } as {
+        runId: string;
+        status: 'completed' | 'dead_letter';
+        idempotent: true;
+      };
+    const preview = fixtureDryRun(),
+      runId = existing?.id ?? randomUUID(),
+      attempt = (existing?.attempt ?? 0) + 1,
+      status = simulateFailure ? (attempt >= 3 ? 'dead_letter' : 'retrying') : 'completed',
+      timestamp = now();
+    this.transaction(() => {
+      if (existing) this.db.prepare('UPDATE fixture_playbook_runs SET status=?,attempt=?,finished_at=? WHERE id=?').run(status, attempt, status === 'retrying' ? null : timestamp, runId);
+      else this.db.prepare('INSERT INTO fixture_playbook_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(runId, workspaceId, playbookId, dryRunDigest, status, attempt, preview.inputCount, status === 'completed' ? preview.deduplicatedCount : 0, 0, JSON.stringify(preview.permissionSnapshot), timestamp, status === 'retrying' ? null : timestamp);
+      this.activity(workspaceId, 'automation', `playbook.${status}`, playbookId, 'playbook', { version: 1 });
+    });
+    return { runId, status, idempotent: false };
+  }
+
+  killFixturePlaybook(workspaceId: string, playbookId: string): void {
+    const timestamp = now(),
+      result = this.db.prepare("UPDATE fixture_playbooks SET status='killed',last_dry_run_digest=NULL,updated_at=? WHERE id=? AND workspace_id=?").run(timestamp, playbookId, workspaceId);
+    if (!result.changes) throw new Error('Playbook not found');
+    this.activity(workspaceId, 'automation', 'playbook.killed', playbookId, 'playbook', { version: 1 });
+  }
+  enableFixtureSchedule(): never {
+    throw new Error('Background schedule activation requires separate user authorization and is unavailable in the fixture lab');
+  }
+  deleteFixturePlaybook(workspaceId: string, playbookId: string): void {
+    const result = this.db.prepare('DELETE FROM fixture_playbooks WHERE id=? AND workspace_id=?').run(playbookId, workspaceId);
+    if (!result.changes) throw new Error('Playbook not found');
+    this.activity(workspaceId, 'automation', 'playbook.deleted', playbookId, 'playbook', {});
+  }
+
+  finalizeMeetingAudio(workspaceId: string, meetingId: string, mediaType: string, bytes: Buffer): void {
+    const meeting = this.db.prepare('SELECT status FROM meetings WHERE id=? AND workspace_id=?').get(meetingId, workspaceId) as { status: string } | undefined;
+    if (!meeting || meeting.status !== 'recording') throw new Error('Active meeting recording not found');
+    const validated = validateMeetingAudio(mediaType, bytes),
+      relativePath = `${meetingId}.${validated.extension}`,
+      target = this.meetingAudioPath(relativePath);
+    writeFileSync(target, bytes, { flag: 'wx', mode: 0o600 });
+    try {
+      this.transaction(() => {
+        this.db.prepare("UPDATE meetings SET status='ready',audio_relative_path=?,media_type=?,bytes=?,sha256=?,ended_at=? WHERE id=? AND workspace_id=? AND status='recording'").run(relativePath, mediaType, bytes.length, validated.sha256, now(), meetingId, workspaceId);
+        this.activity(workspaceId, 'meeting', 'recording.completed', meetingId, 'meeting', { version: 1 });
+      });
+    } catch (error) {
+      rmSync(target, { force: true });
+      throw error;
+    }
+  }
+
+  failMeeting(workspaceId: string, meetingId: string, failureCode: 'permission_denied' | 'device_lost' | 'interrupted' | 'disk_pressure' | 'capture_failed' | 'size_limit'): void {
+    this.transaction(() => {
+      const result = this.db.prepare("UPDATE meetings SET status='failed',failure_code=?,ended_at=? WHERE id=? AND workspace_id=? AND status='recording'").run(failureCode, now(), meetingId, workspaceId);
+      if (result.changes) this.activity(workspaceId, 'meeting', 'recording.failed', meetingId, 'meeting', {});
+    });
+  }
+
+  listMeetings(workspaceId: string): MeetingView[] {
+    return this.db.prepare('SELECT id,workspace_id workspaceId,title,status,consent_acknowledged_at consentAcknowledgedAt,consent_version consentVersion,media_type mediaType,bytes,sha256,transcript,transcript_status transcriptStatus,speaker_handling speakerHandling,failure_code failureCode,created_at createdAt,ended_at endedAt FROM meetings WHERE workspace_id=? ORDER BY created_at DESC').all(workspaceId) as unknown as MeetingView[];
+  }
+
+  updateMeetingTranscript(workspaceId: string, meetingId: string, transcript: string, reviewed: boolean): void {
+    const meeting = this.db.prepare('SELECT status FROM meetings WHERE id=? AND workspace_id=?').get(meetingId, workspaceId) as { status: string } | undefined;
+    if (!meeting || meeting.status !== 'ready') throw new Error('Completed meeting not found');
+    const value = validateTranscript(transcript),
+      status = reviewed ? 'reviewed' : 'draft',
+      result = this.db.prepare('UPDATE meetings SET transcript=?,transcript_status=? WHERE id=? AND workspace_id=?').run(value, status, meetingId, workspaceId);
+    if (!result.changes) throw new Error('Meeting not found');
+    this.activity(workspaceId, 'meeting', reviewed ? 'transcript.reviewed' : 'transcript.draft_saved', meetingId, 'meeting', { version: 1 });
+  }
+
+  saveMeetingTranscriptToMemory(workspaceId: string, meetingId: string): string {
+    const meeting = this.db.prepare("SELECT title,transcript FROM meetings WHERE id=? AND workspace_id=? AND transcript_status='reviewed'").get(meetingId, workspaceId) as { title: string; transcript: string } | undefined;
+    if (!meeting) throw new Error('Review the transcript before saving it to knowledge');
+    const existing = this.db.prepare("SELECT id FROM memories WHERE workspace_id=? AND source_object_id=? AND ownership='source-owned'").get(workspaceId, meetingId) as { id: string } | undefined,
+      id = existing?.id ?? randomUUID(),
+      timestamp = now(),
+      title = `Meeting: ${meeting.title}`;
+    this.transaction(() => {
+      if (existing) {
+        this.db.prepare('UPDATE memories SET title=?,body=?,updated_at=? WHERE id=?').run(title, meeting.transcript, timestamp, id);
+        this.db.prepare('DELETE FROM search_fts WHERE workspace_id=? AND object_id=?').run(workspaceId, id);
+      } else {
+        this.db.prepare("INSERT INTO memories VALUES (?,?,?,?,?,'source-owned',?,?)").run(id, workspaceId, title, meeting.transcript, meetingId, timestamp, timestamp);
+        this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(randomUUID(), workspaceId, meetingId, id, 'transcribed_as', timestamp);
+      }
+      this.indexText(workspaceId, id, 'memory', undefined, title, meeting.transcript);
+      this.activity(workspaceId, 'meeting', existing ? 'transcript.knowledge_updated' : 'transcript.saved_to_knowledge', id, 'memory', { version: 1 });
+    });
+    return id;
+  }
+
+  meetingAudio(workspaceId: string, meetingId: string): { path: string; mediaType: string; title: string } {
+    const row = this.db.prepare("SELECT title,audio_relative_path relativePath,media_type mediaType,sha256 FROM meetings WHERE id=? AND workspace_id=? AND status='ready'").get(meetingId, workspaceId) as
+      | {
+          title: string;
+          relativePath: string;
+          mediaType: string;
+          sha256: string;
+        }
+      | undefined;
+    if (!row || !row.relativePath) throw new Error('Meeting audio not found');
+    const file = this.meetingAudioPath(row.relativePath);
+    if (!existsSync(file)) throw new Error('Stored meeting audio file is missing');
+    const validated = validateMeetingAudio(row.mediaType, readFileSync(file));
+    if (validated.sha256 !== row.sha256) throw new Error('Stored meeting audio integrity check failed');
+    return { path: file, mediaType: row.mediaType, title: row.title };
+  }
+
+  deleteMeeting(workspaceId: string, meetingId: string): void {
+    const row = this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE id=? AND workspace_id=?').get(meetingId, workspaceId) as { relativePath: string | null } | undefined;
+    if (!row) throw new Error('Meeting not found');
+    const source = row.relativePath ? this.meetingAudioPath(row.relativePath) : undefined,
+      staged = source ? `${source}.deleting-${randomUUID()}` : undefined;
+    if (source && existsSync(source)) renameSync(source, staged!);
+    try {
+      this.transaction(() => {
+        const memories = this.db.prepare("SELECT id FROM memories WHERE workspace_id=? AND source_object_id=? AND ownership='source-owned'").all(workspaceId, meetingId) as Array<{ id: string }>;
+        for (const memory of memories) {
+          this.db.prepare('DELETE FROM search_fts WHERE workspace_id=? AND object_id=?').run(workspaceId, memory.id);
+          this.db.prepare('DELETE FROM relationships WHERE workspace_id=? AND (from_id=? OR to_id=?)').run(workspaceId, memory.id, memory.id);
+          this.db.prepare('DELETE FROM memories WHERE id=?').run(memory.id);
+        }
+        this.db.prepare('DELETE FROM relationships WHERE workspace_id=? AND (from_id=? OR to_id=?)').run(workspaceId, meetingId, meetingId);
+        this.db.prepare('DELETE FROM meetings WHERE id=? AND workspace_id=?').run(meetingId, workspaceId);
+        this.activity(workspaceId, 'meeting', 'meeting.deleted', meetingId, 'meeting', {});
+      });
+    } catch (error) {
+      if (source && staged && existsSync(staged)) renameSync(staged, source);
+      throw error;
+    }
+    if (staged) rmSync(staged, { force: true });
+  }
+
+  listActivity(
+    workspaceId: string,
+    filters: {
+      families?: ActivityFamily[];
+      query?: string;
+      limit?: number;
+    } = {},
+  ): ActivityTimelineItem[] {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    if (filters.limit !== undefined && !Number.isFinite(filters.limit)) throw new Error('Activity limit is invalid');
+    if (filters.families?.some((family) => !ACTIVITY_FAMILIES.includes(family))) throw new Error('Activity family is invalid');
+    const limit = Math.min(Math.max(Math.trunc(filters.limit ?? 250), 1), 500),
+      query = (filters.query ?? '').trim().toLocaleLowerCase(),
+      families = new Set(filters.families ?? []);
+    const rows = this.db.prepare('SELECT id,category,action,object_id objectId,object_kind objectKind,metadata_json metadata,created_at createdAt FROM activities WHERE workspace_id=? ORDER BY created_at DESC,id DESC LIMIT 500').all(workspaceId) as Array<Record<string, unknown>>;
+    const timeline: ActivityTimelineItem[] = [];
+    for (const row of rows) {
+      const family = activityFamily(String(row.category));
+      if (families.size && !families.has(family)) continue;
+      const objectId = row.objectId ? String(row.objectId) : undefined,
+        objectKind = String(row.objectKind),
+        object = this.activityObject(workspaceId, objectId, objectKind),
+        action = String(row.action);
+      if (query && ![family, String(row.category), action, objectKind, object.title ?? ''].some((value) => value.toLocaleLowerCase().includes(query))) continue;
+      timeline.push({
+        id: String(row.id),
+        category: String(row.category),
+        family,
+        action,
+        objectId,
+        objectKind,
+        objectState: action === 'deleted' || action.endsWith('.deleted') ? 'deleted' : object.title ? 'available' : 'historical',
+        objectTitle: object.title,
+        targetId: object.targetId,
+        targetKind: object.targetKind,
+        details: safeActivityDetails(String(row.metadata)),
+        createdAt: String(row.createdAt),
+      });
+      if (timeline.length >= limit) break;
+    }
+    return timeline;
+  }
+
+  recordSyncActivity(workspaceId: string, action: 'device.initialized' | 'device.enrolled' | 'device.approved' | 'device.revoked' | 'key.rotated' | 'sync.completed', details: Record<string, unknown> = {}): void {
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    this.activity(workspaceId, 'sync', action, workspaceId, 'workspace', details);
   }
 
   exportWorkspace(workspaceId: string): ExportArchive {
-    const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId) as Record<string, unknown> | undefined
-    if (!workspace) throw new Error('Workspace not found')
-    const tables = ['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','meetings','activities','tombstones','security_profiles','executions','execution_events']
-    const objects: Record<string, unknown[]> = {}
-    for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId)
+    const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId) as Record<string, unknown> | undefined;
+    if (!workspace) throw new Error('Workspace not found');
+    const tables = ['documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'meetings', 'fixture_playbooks', 'fixture_playbook_runs', 'activities', 'tombstones', 'security_profiles', 'executions', 'execution_events'];
+    const objects: Record<string, unknown[]> = {};
+    for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId);
     objects.attachments = (objects.attachments ?? []).map((value) => {
-      const row = value as Record<string, unknown>
-      const bytes=readFileSync(this.attachmentPath(String(row.relative_path))),validated=validateAttachment(String(row.name),String(row.media_type),bytes)
-      if(validated.sha256!==String(row.sha256))throw new Error('Stored attachment integrity check failed')
-      return { ...row, data_base64: bytes.toString('base64') }
-    })
-    objects.meetings=(objects.meetings??[]).map((value)=>{const row=value as Record<string,unknown>;if(!row.audio_relative_path)return row;const bytes=readFileSync(this.meetingAudioPath(String(row.audio_relative_path))),validated=validateMeetingAudio(String(row.media_type),bytes);if(validated.sha256!==String(row.sha256))throw new Error('Stored meeting audio integrity check failed');return{...row,audio_data_base64:bytes.toString('base64')}})
-    const archive = { version: 3 as const, exportedAt: now(), workspace, objects }
-    return { ...archive, integrity: archiveIntegrity(archive) }
+      const row = value as Record<string, unknown>;
+      const bytes = readFileSync(this.attachmentPath(String(row.relative_path))),
+        validated = validateAttachment(String(row.name), String(row.media_type), bytes);
+      if (validated.sha256 !== String(row.sha256)) throw new Error('Stored attachment integrity check failed');
+      return { ...row, data_base64: bytes.toString('base64') };
+    });
+    objects.meetings = (objects.meetings ?? []).map((value) => {
+      const row = value as Record<string, unknown>;
+      if (!row.audio_relative_path) return row;
+      const bytes = readFileSync(this.meetingAudioPath(String(row.audio_relative_path))),
+        validated = validateMeetingAudio(String(row.media_type), bytes);
+      if (validated.sha256 !== String(row.sha256)) throw new Error('Stored meeting audio integrity check failed');
+      return { ...row, audio_data_base64: bytes.toString('base64') };
+    });
+    const archive = {
+      version: 3 as const,
+      exportedAt: now(),
+      workspace,
+      objects,
+    };
+    return { ...archive, integrity: archiveIntegrity(archive) };
   }
 
   restoreWorkspace(archive: ExportArchive, newName: string, newLocalPath: string): WorkspaceSummary {
-    archive = validateArchive(archive)
-    if (!newName.trim() || !path.isAbsolute(newLocalPath)) throw new Error('Workspace name and absolute local path are required')
-    const workspace = { id: randomUUID(), name: newName.trim(), localPath: path.resolve(newLocalPath), createdAt: now() }
-    const writtenFiles: string[] = []
-    try { this.transaction(() => {
-      this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt)
-      this.syncJournal.ensureWorkspace(workspace.id,'snapshot_required')
-      this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
-      const idMap = new Map<string, string>()
-      for (const table of ['documents','chats','memories'] as const) {
-        for (const row of archive.objects[table] ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      }
-      for (const row of archive.objects.messages ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      for (const row of archive.objects.memory_suggestions ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      for (const row of archive.objects.commitments ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      for (const row of archive.objects.rule_suggestions ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      for (const row of archive.objects.learned_rules ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      for (const row of archive.objects.meetings ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
-      for (const row of archive.objects.tombstones ?? []) idMap.set(String((row as Record<string, unknown>).object_id), randomUUID())
-      for (const row of archive.objects.executions ?? []) idMap.set(String((row as Record<string,unknown>).id),randomUUID())
-      if((archive.objects.security_profiles??[]).length){
-        this.db.prepare('DELETE FROM security_profiles WHERE workspace_id=?').run(workspace.id)
-        const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
-        for(const value of archive.objects.security_profiles){const row=value as Record<string,unknown>,id=randomUUID();idMap.set(String(row.id),id);this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,String(row.name),JSON.stringify([executionRoot]),String(row.filesystem),String(row.network),String(row.tools_json),String(row.approval),Number(row.max_duration_ms),Number(row.max_concurrency),Number(row.peer_eligible),String(row.secret_names_json),String(row.created_at))}
-      } else {
-        const profile=this.db.prepare('SELECT id FROM security_profiles WHERE workspace_id=?').get(workspace.id) as {id:string};
-        for(const run of archive.objects.executions??[]){const row=run as Record<string,unknown>;idMap.set(String(row.security_profile_id),profile.id)}
-      }
-      for (const rowValue of archive.objects.documents ?? []) {
-        const row = rowValue as Record<string, unknown>, id = idMap.get(String(row.id))!
-        const revisions = (archive.objects.revisions ?? []).filter((candidate) => String((candidate as Record<string, unknown>).document_id) === String(row.id)) as Array<Record<string, unknown>>
-        const revisionMap = new Map(revisions.map((revision) => [String(revision.id), randomUUID()]))
-        for (const [oldId, newId] of revisionMap) idMap.set(oldId, newId)
-        const currentRevisionId = revisionMap.get(String(row.current_revision_id)) ?? revisionMap.values().next().value ?? randomUUID()
-        this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id, workspace.id, String(row.title), currentRevisionId, String(row.created_at), String(row.updated_at))
-        if (revisions.length === 0) this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(currentRevisionId, id, '', workspace.createdAt)
-        for (const revision of revisions) this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionMap.get(String(revision.id))!, id, String(revision.body), String(revision.created_at))
-        const current = revisions.find((revision) => String(revision.id) === String(row.current_revision_id))
-        this.indexText(workspace.id, id, 'document', currentRevisionId, String(row.title), String(current?.body ?? ''))
-      }
-      for (const rowValue of archive.objects.chats ?? []) {
-        const row = rowValue as Record<string, unknown>, id = idMap.get(String(row.id))!
-        this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.created_at), String(row.updated_at))
-        for (const messageValue of archive.objects.messages ?? []) {
-          const message = messageValue as Record<string, unknown>
-          if (String(message.chat_id) !== String(row.id)) continue
-          const messageId = idMap.get(String(message.id))!
-          this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, id, String(message.role), String(message.body), String(message.created_at))
-          this.indexText(workspace.id, messageId, 'message', undefined, String(row.title), String(message.body))
+    archive = validateArchive(archive);
+    if (!newName.trim() || !path.isAbsolute(newLocalPath)) throw new Error('Workspace name and absolute local path are required');
+    const workspace = {
+      id: randomUUID(),
+      name: newName.trim(),
+      localPath: path.resolve(newLocalPath),
+      createdAt: now(),
+    };
+    const writtenFiles: string[] = [];
+    try {
+      this.transaction(() => {
+        this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt);
+        this.syncJournal.ensureWorkspace(workspace.id, 'snapshot_required');
+        this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+        const idMap = new Map<string, string>();
+        for (const table of ['documents', 'chats', 'memories'] as const) {
+          for (const row of archive.objects[table] ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
         }
-      }
-      for(const value of [...(archive.objects.executions??[])].sort((left,right)=>Number((left as Record<string,unknown>).depth)-Number((right as Record<string,unknown>).depth))){
-        const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,chatId=idMap.get(String(row.chat_id)),profileId=idMap.get(String(row.security_profile_id))
-        if(!chatId||!profileId)continue
-        const active=['queued','running'].includes(String(row.status)),status=active?'failed':String(row.status)
-        this.db.prepare('INSERT INTO executions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,chatId,row.source_message_id?idMap.get(String(row.source_message_id))??null:null,row.parent_execution_id?idMap.get(String(row.parent_execution_id))??null:null,String(row.cli),row.executable==null?null:String(row.executable),row.cli_version==null?null:String(row.cli_version),row.model==null?null:String(row.model),String(row.device),profileId,String(row.prompt_sha256),status,Number(row.depth),row.started_at==null?null:String(row.started_at),active?now():row.finished_at==null?null:String(row.finished_at),row.exit_code==null?null:Number(row.exit_code),active?'restored_interrupted':row.error_code==null?null:String(row.error_code),active?'Archive captured a non-terminal run':row.error_message==null?null:String(row.error_message),String(row.created_at))
-      }
-      for(const value of archive.objects.execution_events??[]){const row=value as Record<string,unknown>,executionId=idMap.get(String(row.execution_id));if(executionId)this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),executionId,Number(row.sequence),String(row.type),row.text==null?null:String(row.text),row.name==null?null:String(row.name),row.raw_type==null?null:String(row.raw_type),String(row.created_at))}
-      for(const value of archive.objects.meetings??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,audio=row.audio_data_base64==null?undefined:Buffer.from(String(row.audio_data_base64),'base64'),archivedStatus=String(row.status);if(!['recording','ready','failed'].includes(archivedStatus))throw new Error('Meeting archive status is invalid');if(archivedStatus==='ready'&&!audio)throw new Error('Ready meeting archive audio is missing');let relativePath:string|null=null;if(audio){const validated=validateMeetingAudio(String(row.media_type),audio);if(validated.sha256!==String(row.sha256))throw new Error('Meeting archive integrity check failed');relativePath=`${id}.${validated.extension}`;const target=this.meetingAudioPath(relativePath);writeFileSync(target,audio,{flag:'wx',mode:0o600});writtenFiles.push(target)}const status=archivedStatus==='recording'?'failed':archivedStatus,failureCode=archivedStatus==='recording'?'interrupted':row.failure_code==null?null:String(row.failure_code);this.db.prepare('INSERT INTO meetings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,String(row.title),status,String(row.consent_acknowledged_at),String(row.consent_version),relativePath,row.media_type==null?null:String(row.media_type),audio?.length??0,row.sha256==null?null:String(row.sha256),row.transcript==null?null:String(row.transcript),String(row.transcript_status),String(row.speaker_handling),failureCode,String(row.created_at),archivedStatus==='recording'?now():row.ended_at==null?null:String(row.ended_at))}
-      for (const rowValue of archive.objects.memories ?? []) {
-        const row = rowValue as Record<string, unknown>, id = idMap.get(String(row.id))!
-        this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.body), row.source_object_id ? idMap.get(String(row.source_object_id)) ?? null : null, String(row.ownership ?? 'workspace-owned'), String(row.created_at), String(row.updated_at))
-        this.indexText(workspace.id, id, 'memory', undefined, String(row.title), String(row.body))
-      }
-      for(const value of archive.objects.memory_suggestions??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,chatId=idMap.get(String(row.chat_id)),messageId=idMap.get(String(row.source_message_id));if(!chatId||!messageId)continue;this.db.prepare('INSERT INTO memory_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,chatId,messageId,String(row.source_role),String(row.category),String(row.title),String(row.body),String(row.source_excerpt),String(row.source_digest),Number(row.start_offset),Number(row.end_offset),Number(row.confidence),String(row.extractor),String(row.extractor_version),createHash('sha256').update(`${workspace.id}:${String(row.fingerprint)}`).digest('hex'),String(row.status),row.accepted_object_id?idMap.get(String(row.accepted_object_id))??null:null,row.resolved_at==null?null:String(row.resolved_at),String(row.created_at))}
-      for(const value of archive.objects.commitments??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,suggestionId=idMap.get(String(row.suggestion_id)),messageId=idMap.get(String(row.source_message_id));if(!suggestionId||!messageId)continue;this.db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,suggestionId,messageId,String(row.title),String(row.body),String(row.status),String(row.created_at),String(row.updated_at),row.completed_at==null?null:String(row.completed_at))}
-      for(const value of archive.objects.rule_suggestions??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!;this.db.prepare('INSERT INTO rule_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)').run(id,workspace.id,String(row.statement),String(row.normalized),contentDigest(JSON.stringify([workspace.id,RULE_EXTRACTOR.provider,RULE_EXTRACTOR.version,String(row.normalized)])),String(row.scope),Number(row.confidence),String(row.extractor),String(row.extractor_version),String(row.status),row.resolved_at==null?null:String(row.resolved_at),String(row.created_at))}
-      for(const value of archive.objects.rule_suggestion_sources??[]){const row=value as Record<string,unknown>,suggestionId=idMap.get(String(row.suggestion_id)),messageId=idMap.get(String(row.message_id)),chatId=idMap.get(String(row.chat_id));if(suggestionId&&messageId&&chatId)this.db.prepare('INSERT INTO rule_suggestion_sources VALUES (?,?,?,?,?,?,?)').run(suggestionId,messageId,chatId,String(row.excerpt),String(row.source_digest),Number(row.start_offset),Number(row.end_offset))}
-      for(const value of archive.objects.learned_rules??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,suggestionId=idMap.get(String(row.suggestion_id));if(suggestionId)this.db.prepare('INSERT INTO learned_rules VALUES (?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,suggestionId,String(row.statement),String(row.scope),Number(row.version),Number(row.enabled),row.prior_enabled==null?null:Number(row.prior_enabled),String(row.created_at),String(row.updated_at))}
-      for(const value of archive.objects.rule_outcomes??[]){const row=value as Record<string,unknown>,ruleId=row.rule_id?idMap.get(String(row.rule_id))??null:null,suggestionId=row.suggestion_id?idMap.get(String(row.suggestion_id))??null:null;if(ruleId||suggestionId)this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),workspace.id,ruleId,suggestionId,String(row.action),Number(row.match_count),Number(row.version),String(row.created_at))}
-      for (const edgeValue of archive.objects.relationships ?? []) {
-        const edge = edgeValue as Record<string, unknown>, from = idMap.get(String(edge.from_id)), to = idMap.get(String(edge.to_id))
-        if (from && to) { const relationshipId = randomUUID(); idMap.set(String(edge.id), relationshipId); this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspace.id, from, to, String(edge.type), String(edge.created_at)) }
-      }
-      if((archive.objects.attachments??[]).length>MAX_ATTACHMENTS_PER_WORKSPACE)throw new Error(`Workspace attachment limit of ${MAX_ATTACHMENTS_PER_WORKSPACE} exceeded`)
-      const restoredOwnerCounts=new Map<string,number>()
-      for (const attachmentValue of archive.objects.attachments ?? []) {
-        const attachment = attachmentValue as Record<string, unknown>
-        const owner = idMap.get(String(attachment.owner_id))
-        if (!owner) throw new Error('Attachment archive owner is missing')
-        const ownerCount=(restoredOwnerCounts.get(owner)??0)+1;if(ownerCount>MAX_ATTACHMENTS_PER_OWNER)throw new Error(`Attachment owner limit of ${MAX_ATTACHMENTS_PER_OWNER} exceeded`);restoredOwnerCounts.set(owner,ownerCount)
-        const bytes = Buffer.from(String(attachment.data_base64 ?? ''), 'base64')
-        const validated=validateAttachment(String(attachment.name),String(attachment.media_type),bytes),sha256 = validated.sha256
-        if (sha256 !== String(attachment.sha256)) throw new Error('Attachment archive integrity check failed')
-        const id = randomUUID(), relativePath = `${id}-${validated.safeName}`;idMap.set(String(attachment.id),id)
-        const targetPath = path.join(this.attachmentRoot, relativePath)
-        writeFileSync(targetPath, bytes, { flag: 'wx',mode:0o600 })
-        writtenFiles.push(targetPath)
-        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, owner, validated.safeName, String(attachment.media_type), sha256, relativePath, String(attachment.created_at))
-      }
-      for (const tombstoneValue of archive.objects.tombstones ?? []) {
-        const tombstone = tombstoneValue as Record<string, unknown>, mapped = idMap.get(String(tombstone.object_id))!
-        this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(mapped, workspace.id, String(tombstone.object_kind), String(tombstone.deleted_at))
-      }
-      for (const activityValue of archive.objects.activities ?? []) {
-        const archived = activityValue as Record<string, unknown>, oldObjectId = archived.object_id ? String(archived.object_id) : undefined
-        const mappedObjectId = oldObjectId === String((archive.workspace as Record<string, unknown>).id) ? workspace.id : oldObjectId ? idMap.get(oldObjectId) ?? null : null
-        const metadata = remapArchiveValue(JSON.parse(String(archived.metadata_json ?? '{}')) as unknown, idMap, String((archive.workspace as Record<string, unknown>).id), workspace.id)
-        this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspace.id, String(archived.category), String(archived.action), mappedObjectId, archived.object_kind ? String(archived.object_kind) : null, JSON.stringify(metadata), String(archived.created_at))
-      }
-      this.activity(workspace.id, 'lifecycle', 'workspace.restored', workspace.id, 'workspace', { archiveVersion: archive.version })
-    }) } catch (error) {
-      for (const file of writtenFiles) rmSync(file, { force: true })
-      throw error
+        for (const row of archive.objects.messages ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.memory_suggestions ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.commitments ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.rule_suggestions ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.learned_rules ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.meetings ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.fixture_playbooks ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        for (const row of archive.objects.tombstones ?? []) idMap.set(String((row as Record<string, unknown>).object_id), randomUUID());
+        for (const row of archive.objects.executions ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
+        if ((archive.objects.security_profiles ?? []).length) {
+          this.db.prepare('DELETE FROM security_profiles WHERE workspace_id=?').run(workspace.id);
+          const executionRoot = path.join(workspace.localPath, 'waypoint-workspaces', workspace.id);
+          mkdirSync(executionRoot, { recursive: true });
+          for (const value of archive.objects.security_profiles) {
+            const row = value as Record<string, unknown>,
+              id = randomUUID();
+            idMap.set(String(row.id), id);
+            this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspace.id, String(row.name), JSON.stringify([executionRoot]), String(row.filesystem), String(row.network), String(row.tools_json), String(row.approval), Number(row.max_duration_ms), Number(row.max_concurrency), Number(row.peer_eligible), String(row.secret_names_json), String(row.created_at));
+          }
+        } else {
+          const profile = this.db.prepare('SELECT id FROM security_profiles WHERE workspace_id=?').get(workspace.id) as { id: string };
+          for (const run of archive.objects.executions ?? []) {
+            const row = run as Record<string, unknown>;
+            idMap.set(String(row.security_profile_id), profile.id);
+          }
+        }
+        for (const rowValue of archive.objects.documents ?? []) {
+          const row = rowValue as Record<string, unknown>,
+            id = idMap.get(String(row.id))!;
+          const revisions = (archive.objects.revisions ?? []).filter((candidate) => String((candidate as Record<string, unknown>).document_id) === String(row.id)) as Array<Record<string, unknown>>;
+          const revisionMap = new Map(revisions.map((revision) => [String(revision.id), randomUUID()]));
+          for (const [oldId, newId] of revisionMap) idMap.set(oldId, newId);
+          const currentRevisionId = revisionMap.get(String(row.current_revision_id)) ?? revisionMap.values().next().value ?? randomUUID();
+          this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id, workspace.id, String(row.title), currentRevisionId, String(row.created_at), String(row.updated_at));
+          if (revisions.length === 0) this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(currentRevisionId, id, '', workspace.createdAt);
+          for (const revision of revisions) this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionMap.get(String(revision.id))!, id, String(revision.body), String(revision.created_at));
+          const current = revisions.find((revision) => String(revision.id) === String(row.current_revision_id));
+          this.indexText(workspace.id, id, 'document', currentRevisionId, String(row.title), String(current?.body ?? ''));
+        }
+        for (const rowValue of archive.objects.chats ?? []) {
+          const row = rowValue as Record<string, unknown>,
+            id = idMap.get(String(row.id))!;
+          this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.created_at), String(row.updated_at));
+          for (const messageValue of archive.objects.messages ?? []) {
+            const message = messageValue as Record<string, unknown>;
+            if (String(message.chat_id) !== String(row.id)) continue;
+            const messageId = idMap.get(String(message.id))!;
+            this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, id, String(message.role), String(message.body), String(message.created_at));
+            this.indexText(workspace.id, messageId, 'message', undefined, String(row.title), String(message.body));
+          }
+        }
+        for (const value of [...(archive.objects.executions ?? [])].sort((left, right) => Number((left as Record<string, unknown>).depth) - Number((right as Record<string, unknown>).depth))) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!,
+            chatId = idMap.get(String(row.chat_id)),
+            profileId = idMap.get(String(row.security_profile_id));
+          if (!chatId || !profileId) continue;
+          const active = ['queued', 'running'].includes(String(row.status)),
+            status = active ? 'failed' : String(row.status);
+          this.db.prepare('INSERT INTO executions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspace.id, chatId, row.source_message_id ? (idMap.get(String(row.source_message_id)) ?? null) : null, row.parent_execution_id ? (idMap.get(String(row.parent_execution_id)) ?? null) : null, String(row.cli), row.executable == null ? null : String(row.executable), row.cli_version == null ? null : String(row.cli_version), row.model == null ? null : String(row.model), String(row.device), profileId, String(row.prompt_sha256), status, Number(row.depth), row.started_at == null ? null : String(row.started_at), active ? now() : row.finished_at == null ? null : String(row.finished_at), row.exit_code == null ? null : Number(row.exit_code), active ? 'restored_interrupted' : row.error_code == null ? null : String(row.error_code), active ? 'Archive captured a non-terminal run' : row.error_message == null ? null : String(row.error_message), String(row.created_at));
+        }
+        for (const value of archive.objects.execution_events ?? []) {
+          const row = value as Record<string, unknown>,
+            executionId = idMap.get(String(row.execution_id));
+          if (executionId) this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), executionId, Number(row.sequence), String(row.type), row.text == null ? null : String(row.text), row.name == null ? null : String(row.name), row.raw_type == null ? null : String(row.raw_type), String(row.created_at));
+        }
+        for (const value of archive.objects.fixture_playbooks ?? []) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!,
+            status = String(row.status),
+            timezone = String(row.timezone),
+            hour = Number(row.hour),
+            minute = Number(row.minute),
+            version = Number(row.version);
+          if (!['paused', 'killed'].includes(status) || String(row.definition_json) !== playbookDefinitionJson() || String(row.permission_json) !== JSON.stringify(FIXTURE_CONNECTOR)) throw new Error('Fixture playbook archive authority is invalid');
+          nextDailyOccurrence(timezone, hour, minute, now());
+          const definitionDigest = playbookDefinitionDigest({
+            workspaceId: workspace.id,
+            version,
+            timezone,
+            hour,
+            minute,
+            definition: playbookDefinitionJson(),
+          });
+          this.db.prepare('INSERT INTO fixture_playbooks VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)').run(id, workspace.id, String(row.title), version, status, timezone, hour, minute, playbookDefinitionJson(), definitionDigest, JSON.stringify(FIXTURE_CONNECTOR), String(row.created_at), String(row.updated_at));
+        }
+        for (const value of archive.objects.fixture_playbook_runs ?? []) {
+          const row = value as Record<string, unknown>,
+            playbookId = idMap.get(String(row.playbook_id)),
+            status = String(row.status);
+          if (!playbookId || !['dry_run', 'completed', 'retrying', 'dead_letter'].includes(status) || Number(row.proposed_effects) !== 0 || String(row.permission_json) !== JSON.stringify(fixtureDryRun().permissionSnapshot)) throw new Error('Fixture playbook run archive is invalid');
+          this.db.prepare('INSERT INTO fixture_playbook_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(), workspace.id, playbookId, null, status, Number(row.attempt), Number(row.input_count), Number(row.output_count), 0, String(row.permission_json), String(row.created_at), row.finished_at == null ? null : String(row.finished_at));
+        }
+        for (const value of archive.objects.meetings ?? []) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!,
+            audio = row.audio_data_base64 == null ? undefined : Buffer.from(String(row.audio_data_base64), 'base64'),
+            archivedStatus = String(row.status);
+          if (!['recording', 'ready', 'failed'].includes(archivedStatus)) throw new Error('Meeting archive status is invalid');
+          if (archivedStatus === 'ready' && !audio) throw new Error('Ready meeting archive audio is missing');
+          let relativePath: string | null = null;
+          if (audio) {
+            const validated = validateMeetingAudio(String(row.media_type), audio);
+            if (validated.sha256 !== String(row.sha256)) throw new Error('Meeting archive integrity check failed');
+            relativePath = `${id}.${validated.extension}`;
+            const target = this.meetingAudioPath(relativePath);
+            writeFileSync(target, audio, { flag: 'wx', mode: 0o600 });
+            writtenFiles.push(target);
+          }
+          const status = archivedStatus === 'recording' ? 'failed' : archivedStatus,
+            failureCode = archivedStatus === 'recording' ? 'interrupted' : row.failure_code == null ? null : String(row.failure_code);
+          this.db.prepare('INSERT INTO meetings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspace.id, String(row.title), status, String(row.consent_acknowledged_at), String(row.consent_version), relativePath, row.media_type == null ? null : String(row.media_type), audio?.length ?? 0, row.sha256 == null ? null : String(row.sha256), row.transcript == null ? null : String(row.transcript), String(row.transcript_status), String(row.speaker_handling), failureCode, String(row.created_at), archivedStatus === 'recording' ? now() : row.ended_at == null ? null : String(row.ended_at));
+        }
+        for (const rowValue of archive.objects.memories ?? []) {
+          const row = rowValue as Record<string, unknown>,
+            id = idMap.get(String(row.id))!;
+          this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.body), row.source_object_id ? (idMap.get(String(row.source_object_id)) ?? null) : null, String(row.ownership ?? 'workspace-owned'), String(row.created_at), String(row.updated_at));
+          this.indexText(workspace.id, id, 'memory', undefined, String(row.title), String(row.body));
+        }
+        for (const value of archive.objects.memory_suggestions ?? []) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!,
+            chatId = idMap.get(String(row.chat_id)),
+            messageId = idMap.get(String(row.source_message_id));
+          if (!chatId || !messageId) continue;
+          this.db.prepare('INSERT INTO memory_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+            id,
+            workspace.id,
+            chatId,
+            messageId,
+            String(row.source_role),
+            String(row.category),
+            String(row.title),
+            String(row.body),
+            String(row.source_excerpt),
+            String(row.source_digest),
+            Number(row.start_offset),
+            Number(row.end_offset),
+            Number(row.confidence),
+            String(row.extractor),
+            String(row.extractor_version),
+            createHash('sha256')
+              .update(`${workspace.id}:${String(row.fingerprint)}`)
+              .digest('hex'),
+            String(row.status),
+            row.accepted_object_id ? (idMap.get(String(row.accepted_object_id)) ?? null) : null,
+            row.resolved_at == null ? null : String(row.resolved_at),
+            String(row.created_at),
+          );
+        }
+        for (const value of archive.objects.commitments ?? []) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!,
+            suggestionId = idMap.get(String(row.suggestion_id)),
+            messageId = idMap.get(String(row.source_message_id));
+          if (!suggestionId || !messageId) continue;
+          this.db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, workspace.id, suggestionId, messageId, String(row.title), String(row.body), String(row.status), String(row.created_at), String(row.updated_at), row.completed_at == null ? null : String(row.completed_at));
+        }
+        for (const value of archive.objects.rule_suggestions ?? []) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!;
+          this.db.prepare('INSERT INTO rule_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)').run(id, workspace.id, String(row.statement), String(row.normalized), contentDigest(JSON.stringify([workspace.id, RULE_EXTRACTOR.provider, RULE_EXTRACTOR.version, String(row.normalized)])), String(row.scope), Number(row.confidence), String(row.extractor), String(row.extractor_version), String(row.status), row.resolved_at == null ? null : String(row.resolved_at), String(row.created_at));
+        }
+        for (const value of archive.objects.rule_suggestion_sources ?? []) {
+          const row = value as Record<string, unknown>,
+            suggestionId = idMap.get(String(row.suggestion_id)),
+            messageId = idMap.get(String(row.message_id)),
+            chatId = idMap.get(String(row.chat_id));
+          if (suggestionId && messageId && chatId) this.db.prepare('INSERT INTO rule_suggestion_sources VALUES (?,?,?,?,?,?,?)').run(suggestionId, messageId, chatId, String(row.excerpt), String(row.source_digest), Number(row.start_offset), Number(row.end_offset));
+        }
+        for (const value of archive.objects.learned_rules ?? []) {
+          const row = value as Record<string, unknown>,
+            id = idMap.get(String(row.id))!,
+            suggestionId = idMap.get(String(row.suggestion_id));
+          if (suggestionId) this.db.prepare('INSERT INTO learned_rules VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, workspace.id, suggestionId, String(row.statement), String(row.scope), Number(row.version), Number(row.enabled), row.prior_enabled == null ? null : Number(row.prior_enabled), String(row.created_at), String(row.updated_at));
+        }
+        for (const value of archive.objects.rule_outcomes ?? []) {
+          const row = value as Record<string, unknown>,
+            ruleId = row.rule_id ? (idMap.get(String(row.rule_id)) ?? null) : null,
+            suggestionId = row.suggestion_id ? (idMap.get(String(row.suggestion_id)) ?? null) : null;
+          if (ruleId || suggestionId) this.db.prepare('INSERT INTO rule_outcomes VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspace.id, ruleId, suggestionId, String(row.action), Number(row.match_count), Number(row.version), String(row.created_at));
+        }
+        for (const edgeValue of archive.objects.relationships ?? []) {
+          const edge = edgeValue as Record<string, unknown>,
+            from = idMap.get(String(edge.from_id)),
+            to = idMap.get(String(edge.to_id));
+          if (from && to) {
+            const relationshipId = randomUUID();
+            idMap.set(String(edge.id), relationshipId);
+            this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspace.id, from, to, String(edge.type), String(edge.created_at));
+          }
+        }
+        if ((archive.objects.attachments ?? []).length > MAX_ATTACHMENTS_PER_WORKSPACE) throw new Error(`Workspace attachment limit of ${MAX_ATTACHMENTS_PER_WORKSPACE} exceeded`);
+        const restoredOwnerCounts = new Map<string, number>();
+        for (const attachmentValue of archive.objects.attachments ?? []) {
+          const attachment = attachmentValue as Record<string, unknown>;
+          const owner = idMap.get(String(attachment.owner_id));
+          if (!owner) throw new Error('Attachment archive owner is missing');
+          const ownerCount = (restoredOwnerCounts.get(owner) ?? 0) + 1;
+          if (ownerCount > MAX_ATTACHMENTS_PER_OWNER) throw new Error(`Attachment owner limit of ${MAX_ATTACHMENTS_PER_OWNER} exceeded`);
+          restoredOwnerCounts.set(owner, ownerCount);
+          const bytes = Buffer.from(String(attachment.data_base64 ?? ''), 'base64');
+          const validated = validateAttachment(String(attachment.name), String(attachment.media_type), bytes),
+            sha256 = validated.sha256;
+          if (sha256 !== String(attachment.sha256)) throw new Error('Attachment archive integrity check failed');
+          const id = randomUUID(),
+            relativePath = `${id}-${validated.safeName}`;
+          idMap.set(String(attachment.id), id);
+          const targetPath = path.join(this.attachmentRoot, relativePath);
+          writeFileSync(targetPath, bytes, { flag: 'wx', mode: 0o600 });
+          writtenFiles.push(targetPath);
+          this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, owner, validated.safeName, String(attachment.media_type), sha256, relativePath, String(attachment.created_at));
+        }
+        for (const tombstoneValue of archive.objects.tombstones ?? []) {
+          const tombstone = tombstoneValue as Record<string, unknown>,
+            mapped = idMap.get(String(tombstone.object_id))!;
+          this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(mapped, workspace.id, String(tombstone.object_kind), String(tombstone.deleted_at));
+        }
+        for (const activityValue of archive.objects.activities ?? []) {
+          const archived = activityValue as Record<string, unknown>,
+            oldObjectId = archived.object_id ? String(archived.object_id) : undefined;
+          const mappedObjectId = oldObjectId === String((archive.workspace as Record<string, unknown>).id) ? workspace.id : oldObjectId ? (idMap.get(oldObjectId) ?? null) : null;
+          const metadata = remapArchiveValue(JSON.parse(String(archived.metadata_json ?? '{}')) as unknown, idMap, String((archive.workspace as Record<string, unknown>).id), workspace.id);
+          this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspace.id, String(archived.category), String(archived.action), mappedObjectId, archived.object_kind ? String(archived.object_kind) : null, JSON.stringify(metadata), String(archived.created_at));
+        }
+        this.activity(workspace.id, 'lifecycle', 'workspace.restored', workspace.id, 'workspace', { archiveVersion: archive.version });
+      });
+    } catch (error) {
+      for (const file of writtenFiles) rmSync(file, { force: true });
+      throw error;
     }
-    return workspace
+    return workspace;
   }
 
   counts(): Record<string, number> {
-    const tables = ['workspaces','documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','embeddings','activities','tombstones','queued_work','security_profiles','executions','execution_events','search_fts']
-    return Object.fromEntries(tables.map((table) => [table, Number((this.db.prepare(`SELECT count(*) count FROM ${table}`).get() as { count: number }).count)]))
+    const tables = ['workspaces', 'documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'embeddings', 'activities', 'tombstones', 'queued_work', 'security_profiles', 'executions', 'execution_events', 'search_fts'];
+    return Object.fromEntries(
+      tables.map((table) => [
+        table,
+        Number(
+          (
+            this.db.prepare(`SELECT count(*) count FROM ${table}`).get() as {
+              count: number;
+            }
+          ).count,
+        ),
+      ]),
+    );
   }
 
   localDiagnostics(workspaceId: string): {
-    schemaVersion: number; expectedSchemaVersion: number; integrity: 'ok'|'corrupt'; foreignKeyViolations:number;
-    missingFiles: number; orphanFiles: number; digestMismatches: number; indexedObjects: number; expectedObjects: number;
+    schemaVersion: number;
+    expectedSchemaVersion: number;
+    integrity: 'ok' | 'corrupt';
+    foreignKeyViolations: number;
+    missingFiles: number;
+    orphanFiles: number;
+    digestMismatches: number;
+    indexedObjects: number;
+    expectedObjects: number;
   } {
-    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found')
-    const integrityRows = this.db.prepare('PRAGMA quick_check').all() as Array<Record<string, unknown>>
-    const integrity = integrityRows.length === 1 && Object.values(integrityRows[0])[0] === 'ok' ? 'ok' : 'corrupt'
-    const foreignKeyViolations=(this.db.prepare('PRAGMA foreign_key_check').all() as unknown[]).length
-    const attachments = this.db.prepare('SELECT relative_path,sha256 FROM attachments WHERE workspace_id=?').all(workspaceId) as Array<{relative_path:string;sha256:string}>
-    const referenced = new Set((this.db.prepare('SELECT relative_path FROM attachments').all() as Array<{relative_path:string}>).map((row)=>row.relative_path))
-    let missingFiles = 0, digestMismatches = 0
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
+    const integrityRows = this.db.prepare('PRAGMA quick_check').all() as Array<Record<string, unknown>>;
+    const integrity = integrityRows.length === 1 && Object.values(integrityRows[0])[0] === 'ok' ? 'ok' : 'corrupt';
+    const foreignKeyViolations = (this.db.prepare('PRAGMA foreign_key_check').all() as unknown[]).length;
+    const attachments = this.db.prepare('SELECT relative_path,sha256 FROM attachments WHERE workspace_id=?').all(workspaceId) as Array<{ relative_path: string; sha256: string }>;
+    const referenced = new Set((this.db.prepare('SELECT relative_path FROM attachments').all() as Array<{ relative_path: string }>).map((row) => row.relative_path));
+    let missingFiles = 0,
+      digestMismatches = 0;
     for (const attachment of attachments) {
-      const file = path.join(this.attachmentRoot, attachment.relative_path)
-      if (!existsSync(file)) { missingFiles += 1; continue }
-      if (createHash('sha256').update(readFileSync(file)).digest('hex') !== attachment.sha256) digestMismatches += 1
+      const file = path.join(this.attachmentRoot, attachment.relative_path);
+      if (!existsSync(file)) {
+        missingFiles += 1;
+        continue;
+      }
+      if (createHash('sha256').update(readFileSync(file)).digest('hex') !== attachment.sha256) digestMismatches += 1;
     }
-    let orphanFiles = readdirSync(this.attachmentRoot).filter((entry) => !entry.includes('.deleting-') && !referenced.has(entry)).length
-    const meetingFiles=this.db.prepare("SELECT audio_relative_path relativePath,sha256 FROM meetings WHERE workspace_id=? AND audio_relative_path IS NOT NULL").all(workspaceId) as Array<{relativePath:string;sha256:string}>;const allMeetingReferences=new Set((this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE audio_relative_path IS NOT NULL').all() as Array<{relativePath:string}>).map((row)=>row.relativePath));for(const meeting of meetingFiles){const file=this.meetingAudioPath(meeting.relativePath);if(!existsSync(file)){missingFiles++;continue}if(createHash('sha256').update(readFileSync(file)).digest('hex')!==meeting.sha256)digestMismatches++}orphanFiles+=readdirSync(this.meetingRoot).filter((entry)=>!entry.includes('.deleting-')&&!allMeetingReferences.has(entry)).length
-    const indexedObjects = Number((this.db.prepare('SELECT count(*) count FROM search_fts WHERE workspace_id=?').get(workspaceId) as {count:number}).count)
-    const expectedObjects = Number((this.db.prepare(`SELECT
+    let orphanFiles = readdirSync(this.attachmentRoot).filter((entry) => !entry.includes('.deleting-') && !referenced.has(entry)).length;
+    const meetingFiles = this.db.prepare('SELECT audio_relative_path relativePath,sha256 FROM meetings WHERE workspace_id=? AND audio_relative_path IS NOT NULL').all(workspaceId) as Array<{ relativePath: string; sha256: string }>;
+    const allMeetingReferences = new Set((this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE audio_relative_path IS NOT NULL').all() as Array<{ relativePath: string }>).map((row) => row.relativePath));
+    for (const meeting of meetingFiles) {
+      const file = this.meetingAudioPath(meeting.relativePath);
+      if (!existsSync(file)) {
+        missingFiles++;
+        continue;
+      }
+      if (createHash('sha256').update(readFileSync(file)).digest('hex') !== meeting.sha256) digestMismatches++;
+    }
+    orphanFiles += readdirSync(this.meetingRoot).filter((entry) => !entry.includes('.deleting-') && !allMeetingReferences.has(entry)).length;
+    const indexedObjects = Number((this.db.prepare('SELECT count(*) count FROM search_fts WHERE workspace_id=?').get(workspaceId) as { count: number }).count);
+    const expectedObjects = Number(
+      (
+        this.db
+          .prepare(
+            `SELECT
       (SELECT count(*) FROM documents WHERE workspace_id=?) +
       (SELECT count(*) FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?) +
-      (SELECT count(*) FROM memories WHERE workspace_id=?) count`).get(workspaceId,workspaceId,workspaceId) as {count:number}).count)
-    return { schemaVersion: schemaVersion(this.db), expectedSchemaVersion: CURRENT_SCHEMA_VERSION, integrity, foreignKeyViolations, missingFiles, orphanFiles, digestMismatches, indexedObjects, expectedObjects }
+      (SELECT count(*) FROM memories WHERE workspace_id=?) count`,
+          )
+          .get(workspaceId, workspaceId, workspaceId) as { count: number }
+      ).count,
+    );
+    return {
+      schemaVersion: schemaVersion(this.db),
+      expectedSchemaVersion: CURRENT_SCHEMA_VERSION,
+      integrity,
+      foreignKeyViolations,
+      missingFiles,
+      orphanFiles,
+      digestMismatches,
+      indexedObjects,
+      expectedObjects,
+    };
   }
 
   rebuildTextIndex(workspaceId: string): void {
-    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found')
+    if (!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId)) throw new Error('Workspace not found');
     this.transaction(() => {
-      this.db.prepare('DELETE FROM search_fts WHERE workspace_id=?').run(workspaceId)
-      this.db.prepare("INSERT INTO search_fts SELECT d.workspace_id,d.id,'document',r.id,d.title,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=?").run(workspaceId)
-      this.db.prepare("INSERT INTO search_fts SELECT c.workspace_id,m.id,'message',NULL,c.title,m.body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?").run(workspaceId)
-      this.db.prepare("INSERT INTO search_fts SELECT workspace_id,id,'memory',NULL,title,body FROM memories WHERE workspace_id=?").run(workspaceId)
-      this.activity(workspaceId, 'maintenance', 'search.rebuilt', workspaceId, 'workspace', {})
-    })
+      this.db.prepare('DELETE FROM search_fts WHERE workspace_id=?').run(workspaceId);
+      this.db.prepare("INSERT INTO search_fts SELECT d.workspace_id,d.id,'document',r.id,d.title,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.workspace_id=?").run(workspaceId);
+      this.db.prepare("INSERT INTO search_fts SELECT c.workspace_id,m.id,'message',NULL,c.title,m.body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?").run(workspaceId);
+      this.db.prepare("INSERT INTO search_fts SELECT workspace_id,id,'memory',NULL,title,body FROM memories WHERE workspace_id=?").run(workspaceId);
+      this.activity(workspaceId, 'maintenance', 'search.rebuilt', workspaceId, 'workspace', {});
+    });
   }
 
   private activity(workspaceId: string, category: string, action: string, objectId: string, objectKind: string, metadata: Record<string, unknown>): void {
-    this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, category, action, objectId, objectKind, JSON.stringify(metadata), now())
+    this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, category, action, objectId, objectKind, JSON.stringify(metadata), now());
   }
-  private activityObject(workspaceId:string,objectId:string|undefined,kind:string):{title?:string;targetId?:string;targetKind?:'chat'|'document'|'memory'|'commitment'|'rule'}{
-    if(!objectId)return{}
-    if(kind==='message'){const row=this.db.prepare('SELECT c.id chatId,c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=?').get(objectId,workspaceId) as {chatId:string;title:string}|undefined;return row?{title:`Message in ${row.title}`,targetId:row.chatId,targetKind:'chat'}:{}}
-    if(kind==='execution'){const row=this.db.prepare("SELECT cli||' · '||status title,chat_id chatId FROM executions WHERE id=? AND workspace_id=?").get(objectId,workspaceId) as {title:string;chatId:string}|undefined;return row?{title:row.title,targetId:row.chatId,targetKind:'chat'}:{}}
-    const lookups:Record<string,[string,'chat'|'document'|'memory'|'commitment'|'rule']>={document:['SELECT title FROM documents WHERE id=? AND workspace_id=?','document'],chat:['SELECT title FROM chats WHERE id=? AND workspace_id=?','chat'],memory:['SELECT title FROM memories WHERE id=? AND workspace_id=?','memory'],commitment:['SELECT title FROM commitments WHERE id=? AND workspace_id=?','commitment'],rule:['SELECT statement title FROM learned_rules WHERE id=? AND workspace_id=?','rule']}
-    const lookup=lookups[kind];if(!lookup){if(kind==='workspace'){const row=this.db.prepare('SELECT name title FROM workspaces WHERE id=? AND id=?').get(objectId,workspaceId) as {title:string}|undefined;return row??{}}return{}};const row=this.db.prepare(lookup[0]).get(objectId,workspaceId) as {title:string}|undefined;return row?{title:row.title,targetId:objectId,targetKind:lookup[1]}:{}
+  private activityObject(
+    workspaceId: string,
+    objectId: string | undefined,
+    kind: string,
+  ): {
+    title?: string;
+    targetId?: string;
+    targetKind?: 'chat' | 'document' | 'memory' | 'commitment' | 'rule';
+  } {
+    if (!objectId) return {};
+    if (kind === 'message') {
+      const row = this.db.prepare('SELECT c.id chatId,c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=?').get(objectId, workspaceId) as { chatId: string; title: string } | undefined;
+      return row
+        ? {
+            title: `Message in ${row.title}`,
+            targetId: row.chatId,
+            targetKind: 'chat',
+          }
+        : {};
+    }
+    if (kind === 'execution') {
+      const row = this.db.prepare("SELECT cli||' · '||status title,chat_id chatId FROM executions WHERE id=? AND workspace_id=?").get(objectId, workspaceId) as { title: string; chatId: string } | undefined;
+      return row ? { title: row.title, targetId: row.chatId, targetKind: 'chat' } : {};
+    }
+    const lookups: Record<string, [string, 'chat' | 'document' | 'memory' | 'commitment' | 'rule']> = {
+      document: ['SELECT title FROM documents WHERE id=? AND workspace_id=?', 'document'],
+      chat: ['SELECT title FROM chats WHERE id=? AND workspace_id=?', 'chat'],
+      memory: ['SELECT title FROM memories WHERE id=? AND workspace_id=?', 'memory'],
+      commitment: ['SELECT title FROM commitments WHERE id=? AND workspace_id=?', 'commitment'],
+      rule: ['SELECT statement title FROM learned_rules WHERE id=? AND workspace_id=?', 'rule'],
+    };
+    const lookup = lookups[kind];
+    if (!lookup) {
+      if (kind === 'workspace') {
+        const row = this.db.prepare('SELECT name title FROM workspaces WHERE id=? AND id=?').get(objectId, workspaceId) as { title: string } | undefined;
+        return row ?? {};
+      }
+      return {};
+    }
+    const row = this.db.prepare(lookup[0]).get(objectId, workspaceId) as { title: string } | undefined;
+    return row ? { title: row.title, targetId: objectId, targetKind: lookup[1] } : {};
   }
-  private indexText(workspaceId: string, objectId: string, kind: ObjectKind, revisionId: string | undefined, title: string, body: string): void { this.db.prepare('INSERT INTO search_fts VALUES (?,?,?,?,?,?)').run(workspaceId, objectId, kind, revisionId ?? null, title, body) }
-  private attachmentPath(relativePath:string):string{if(relativePath!==path.basename(relativePath)||relativePath.includes('\0'))throw new Error('Stored attachment path is invalid');return path.join(this.attachmentRoot,relativePath)}
-  private meetingAudioPath(relativePath:string):string{if(relativePath!==path.basename(relativePath)||relativePath.includes('\0'))throw new Error('Stored meeting audio path is invalid');return path.join(this.meetingRoot,relativePath)}
-  private objectKindInWorkspace(workspaceId:string,id:string):'document'|'chat'|'message'|'memory'|undefined{
-    for(const [table,kind] of [['documents','document'],['chats','chat'],['memories','memory']] as const)if(this.db.prepare(`SELECT 1 FROM ${table} WHERE id=? AND workspace_id=?`).get(id,workspaceId))return kind
-    if(this.db.prepare('SELECT 1 FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=?').get(id,workspaceId))return'message'
-    return undefined
+  private indexText(workspaceId: string, objectId: string, kind: ObjectKind, revisionId: string | undefined, title: string, body: string): void {
+    this.db.prepare('INSERT INTO search_fts VALUES (?,?,?,?,?,?)').run(workspaceId, objectId, kind, revisionId ?? null, title, body);
+  }
+  private attachmentPath(relativePath: string): string {
+    if (relativePath !== path.basename(relativePath) || relativePath.includes('\0')) throw new Error('Stored attachment path is invalid');
+    return path.join(this.attachmentRoot, relativePath);
+  }
+  private meetingAudioPath(relativePath: string): string {
+    if (relativePath !== path.basename(relativePath) || relativePath.includes('\0')) throw new Error('Stored meeting audio path is invalid');
+    return path.join(this.meetingRoot, relativePath);
+  }
+  private objectKindInWorkspace(workspaceId: string, id: string): 'document' | 'chat' | 'message' | 'memory' | undefined {
+    for (const [table, kind] of [
+      ['documents', 'document'],
+      ['chats', 'chat'],
+      ['memories', 'memory'],
+    ] as const)
+      if (this.db.prepare(`SELECT 1 FROM ${table} WHERE id=? AND workspace_id=?`).get(id, workspaceId)) return kind;
+    if (this.db.prepare('SELECT 1 FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=?').get(id, workspaceId)) return 'message';
+    return undefined;
   }
   private objectWorkspace(id: string, expectedKind?: string): string | undefined {
-    const sources = expectedKind === 'document' ? [['documents', 'workspace_id']] : expectedKind === 'chat' ? [['chats', 'workspace_id']] : expectedKind === 'memory' ? [['memories', 'workspace_id']] : [
-      ['documents', 'workspace_id'], ['chats', 'workspace_id'], ['memories', 'workspace_id'],
-    ]
+    const sources =
+      expectedKind === 'document'
+        ? [['documents', 'workspace_id']]
+        : expectedKind === 'chat'
+          ? [['chats', 'workspace_id']]
+          : expectedKind === 'memory'
+            ? [['memories', 'workspace_id']]
+            : [
+                ['documents', 'workspace_id'],
+                ['chats', 'workspace_id'],
+                ['memories', 'workspace_id'],
+              ];
     for (const [table, column] of sources) {
-      const row = this.db.prepare(`SELECT ${column} workspace_id FROM ${table} WHERE id=?`).get(id) as { workspace_id: string } | undefined
-      if (row) return row.workspace_id
+      const row = this.db.prepare(`SELECT ${column} workspace_id FROM ${table} WHERE id=?`).get(id) as { workspace_id: string } | undefined;
+      if (row) return row.workspace_id;
     }
     if (!expectedKind || expectedKind === 'message') {
-      const row = this.db.prepare('SELECT c.workspace_id FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as { workspace_id: string } | undefined
-      if (row) return row.workspace_id
+      const row = this.db.prepare('SELECT c.workspace_id FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as { workspace_id: string } | undefined;
+      if (row) return row.workspace_id;
     }
-    return undefined
+    return undefined;
   }
   private assertObjectInWorkspace(workspaceId: string, id: string, expectedKind?: string): void {
-    if (this.objectWorkspace(id, expectedKind) !== workspaceId) throw new Error('Object not found in workspace')
+    if (this.objectWorkspace(id, expectedKind) !== workspaceId) throw new Error('Object not found in workspace');
   }
   private sourceTitle(id: string, kind: ObjectKind): { title: string; excerpt: string } {
-    if (kind === 'document') { const row = this.db.prepare('SELECT d.title,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.id=?').get(id) as { title: string; body: string }; return { title: row.title, excerpt: row.body.slice(0, 180) } }
-    if (kind === 'memory') { const row = this.db.prepare('SELECT title,body FROM memories WHERE id=?').get(id) as { title: string; body: string }; return { title: row.title, excerpt: row.body.slice(0, 180) } }
-    if (kind === 'message') { const row = this.db.prepare('SELECT c.title,m.body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as { title: string; body: string }; return { title: row.title, excerpt: row.body.slice(0, 180) } }
-    const row = this.db.prepare('SELECT title FROM chats WHERE id=?').get(id) as { title: string }; return { title: row.title, excerpt: '' }
+    if (kind === 'document') {
+      const row = this.db.prepare('SELECT d.title,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.id=?').get(id) as { title: string; body: string };
+      return { title: row.title, excerpt: row.body.slice(0, 180) };
+    }
+    if (kind === 'memory') {
+      const row = this.db.prepare('SELECT title,body FROM memories WHERE id=?').get(id) as { title: string; body: string };
+      return { title: row.title, excerpt: row.body.slice(0, 180) };
+    }
+    if (kind === 'message') {
+      const row = this.db.prepare('SELECT c.title,m.body FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as { title: string; body: string };
+      return { title: row.title, excerpt: row.body.slice(0, 180) };
+    }
+    const row = this.db.prepare('SELECT title FROM chats WHERE id=?').get(id) as { title: string };
+    return { title: row.title, excerpt: '' };
   }
   private graphNode(id: string): GraphNode | undefined {
-    for (const [table, kind] of [['documents','document'],['chats','chat'],['memories','memory']] as const) {
-      const row = this.db.prepare(`SELECT title FROM ${table} WHERE id=?`).get(id) as { title: string } | undefined
-      if (row) return { id, kind, title: row.title }
+    for (const [table, kind] of [
+      ['documents', 'document'],
+      ['chats', 'chat'],
+      ['memories', 'memory'],
+    ] as const) {
+      const row = this.db.prepare(`SELECT title FROM ${table} WHERE id=?`).get(id) as { title: string } | undefined;
+      if (row) return { id, kind, title: row.title };
     }
-    const message=this.db.prepare('SELECT c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as {title:string}|undefined
-    if(message)return{id,kind:'message',title:`Message in ${message.title}`}
-    return undefined
+    const message = this.db.prepare('SELECT c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=?').get(id) as { title: string } | undefined;
+    if (message) return { id, kind: 'message', title: `Message in ${message.title}` };
+    return undefined;
   }
   private rowsForWorkspace(table: string, workspaceId: string): unknown[] {
-    if (table === 'revisions') return this.db.prepare('SELECT r.* FROM revisions r JOIN documents d ON d.id=r.document_id WHERE d.workspace_id=?').all(workspaceId)
-    if (table === 'messages') return this.db.prepare('SELECT m.* FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?').all(workspaceId)
-    if (table === 'rule_suggestion_sources') return this.db.prepare('SELECT rs.* FROM rule_suggestion_sources rs JOIN rule_suggestions s ON s.id=rs.suggestion_id WHERE s.workspace_id=?').all(workspaceId)
-    if (table === 'execution_events') return this.db.prepare('SELECT ee.* FROM execution_events ee JOIN executions e ON e.id=ee.execution_id WHERE e.workspace_id=?').all(workspaceId)
-    return this.db.prepare(`SELECT * FROM ${table} WHERE workspace_id=?`).all(workspaceId)
+    if (table === 'revisions') return this.db.prepare('SELECT r.* FROM revisions r JOIN documents d ON d.id=r.document_id WHERE d.workspace_id=?').all(workspaceId);
+    if (table === 'messages') return this.db.prepare('SELECT m.* FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?').all(workspaceId);
+    if (table === 'rule_suggestion_sources') return this.db.prepare('SELECT rs.* FROM rule_suggestion_sources rs JOIN rule_suggestions s ON s.id=rs.suggestion_id WHERE s.workspace_id=?').all(workspaceId);
+    if (table === 'execution_events') return this.db.prepare('SELECT ee.* FROM execution_events ee JOIN executions e ON e.id=ee.execution_id WHERE e.workspace_id=?').all(workspaceId);
+    return this.db.prepare(`SELECT * FROM ${table} WHERE workspace_id=?`).all(workspaceId);
   }
 
   private reconcileAttachmentFiles(): void {
-    const referenced = new Set((this.db.prepare('SELECT relative_path FROM attachments').all() as Array<{ relative_path: string }>).map((row) => row.relative_path))
-    const suffix = /\.deleting-[0-9a-f-]{36}$/
+    const referenced = new Set((this.db.prepare('SELECT relative_path FROM attachments').all() as Array<{ relative_path: string }>).map((row) => row.relative_path));
+    const suffix = /\.deleting-[0-9a-f-]{36}$/;
     for (const entry of readdirSync(this.attachmentRoot)) {
-      const fullPath = path.join(this.attachmentRoot, entry), original = entry.replace(suffix, '')
+      const fullPath = path.join(this.attachmentRoot, entry),
+        original = entry.replace(suffix, '');
       if (suffix.test(entry)) {
-        if (referenced.has(original) && !existsSync(path.join(this.attachmentRoot, original))) renameSync(fullPath, path.join(this.attachmentRoot, original))
-        else rmSync(fullPath, { force: true })
-      } else if (!referenced.has(entry)) rmSync(fullPath, { force: true })
+        if (referenced.has(original) && !existsSync(path.join(this.attachmentRoot, original))) renameSync(fullPath, path.join(this.attachmentRoot, original));
+        else rmSync(fullPath, { force: true });
+      } else if (!referenced.has(entry)) rmSync(fullPath, { force: true });
     }
   }
-  private reconcileMeetingFiles():void{const referenced=new Set((this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE audio_relative_path IS NOT NULL').all() as Array<{relativePath:string}>).map((row)=>row.relativePath)),suffix=/\.deleting-[0-9a-f-]{36}$/;for(const entry of readdirSync(this.meetingRoot)){const full=this.meetingAudioPath(entry),original=entry.replace(suffix,'');if(suffix.test(entry)){if(referenced.has(original)&&!existsSync(this.meetingAudioPath(original)))renameSync(full,this.meetingAudioPath(original));else rmSync(full,{force:true})}else if(!referenced.has(entry))rmSync(full,{force:true})}}
+  private reconcileMeetingFiles(): void {
+    const referenced = new Set((this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE audio_relative_path IS NOT NULL').all() as Array<{ relativePath: string }>).map((row) => row.relativePath)),
+      suffix = /\.deleting-[0-9a-f-]{36}$/;
+    for (const entry of readdirSync(this.meetingRoot)) {
+      const full = this.meetingAudioPath(entry),
+        original = entry.replace(suffix, '');
+      if (suffix.test(entry)) {
+        if (referenced.has(original) && !existsSync(this.meetingAudioPath(original))) renameSync(full, this.meetingAudioPath(original));
+        else rmSync(full, { force: true });
+      } else if (!referenced.has(entry)) rmSync(full, { force: true });
+    }
+  }
 }
 
 function cosine(left: number[], right: number[]): number {
-  if (left.length !== right.length || left.length === 0) return Number.NaN
-  let dot = 0, leftMagnitude = 0, rightMagnitude = 0
-  for (let index = 0; index < left.length; index += 1) { dot += left[index] * right[index]; leftMagnitude += left[index] ** 2; rightMagnitude += right[index] ** 2 }
-  return leftMagnitude && rightMagnitude ? dot / Math.sqrt(leftMagnitude * rightMagnitude) : Number.NaN
+  if (left.length !== right.length || left.length === 0) return Number.NaN;
+  let dot = 0,
+    leftMagnitude = 0,
+    rightMagnitude = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftMagnitude += left[index] ** 2;
+    rightMagnitude += right[index] ** 2;
+  }
+  return leftMagnitude && rightMagnitude ? dot / Math.sqrt(leftMagnitude * rightMagnitude) : Number.NaN;
 }
 
 function remapArchiveValue(value: unknown, idMap: Map<string, string>, oldWorkspaceId: string, newWorkspaceId: string): unknown {
-  if (typeof value === 'string') return value === oldWorkspaceId ? newWorkspaceId : idMap.get(value) ?? value
-  if (Array.isArray(value)) return value.map((item) => remapArchiveValue(item, idMap, oldWorkspaceId, newWorkspaceId))
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, remapArchiveValue(item, idMap, oldWorkspaceId, newWorkspaceId)]))
-  return value
+  if (typeof value === 'string') return value === oldWorkspaceId ? newWorkspaceId : (idMap.get(value) ?? value);
+  if (Array.isArray(value)) return value.map((item) => remapArchiveValue(item, idMap, oldWorkspaceId, newWorkspaceId));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, remapArchiveValue(item, idMap, oldWorkspaceId, newWorkspaceId)]));
+  return value;
 }

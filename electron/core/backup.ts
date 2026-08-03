@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ExportArchive } from './types.js'
 import { ARCHIVE_LIMITS } from './limits.js'
 
-const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','meetings','activities','tombstones','security_profiles','executions','execution_events'])
+const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','meetings','fixture_playbooks','fixture_playbook_runs','activities','tombstones','security_profiles','executions','execution_events'])
 
 export function archiveIntegrity(archive: Omit<ExportArchive, 'integrity'>): string {
   return createHash('sha256').update(JSON.stringify(archive)).digest('hex')

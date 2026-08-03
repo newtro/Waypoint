@@ -225,3 +225,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Do not invoke the installed Whisper executable: its capability probe stalled and no reviewed cached/packaged model exists. Do not download a model implicitly. Expose a truthful unavailable capability and bounded manual transcript draft until model packaging/licensing/performance pass a separate gate.
 - Treat all speaker labels as uncertain. Require explicit transcript review before creating a source-owned memory; meeting deletion removes that memory, its search entry/relationship, transcript, and audio.
 - Include bounded integrity-checked meeting artifacts in explicit backup/restore and user-selected audio export, while keeping sync and external delivery disabled.
+
+## R4 Slice 1 — fixture connectors and paused playbooks (2026-08-03)
+
+- Prove the connector and playbook contracts with bundled synthetic data only. The fixture identity has a declared local account and tenant, read scope only, no token reference, and no network, draft, or write capability.
+- Create every playbook paused and expose schedule times only as timezone/DST-aware previews. Background activation is intentionally unavailable until separately authorized.
+- Require a current definition-bound dry run before manual fixture execution. Preserve exact permission snapshots, deterministic idempotency, three-attempt dead-lettering, and an immediate kill switch.
+- Keep playbooks and runs device-local and workspace-scoped. Backup restore recomputes definition provenance and clears dry-run and idempotency authority so restored workflows cannot run without fresh review.
+- Treat fixture bodies as untrusted content: they cannot influence capability declarations and are excluded from activity details and sync mutations.

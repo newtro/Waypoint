@@ -146,3 +146,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - A stalled local Whisper probe was terminated. No model download, external transcription, meeting sync, account data, scheduling, Windows claim, or two-instance validation was attempted.
 - Independent review initially found five highs and three mediums; repairs closed sync leakage, crash residue, consent reuse, hidden controls, recorder failures, limit truthfulness, stale derived knowledge, and media integrity. A follow-up workspace-origin high was also repaired. Final verdict: blocker 0 / high 0 / medium 0 / low 0.
 - Terminal gate: 59 suites / 268 tests, lint, production build, zero production vulnerabilities, native macOS package/runtime closure, microphone-purpose declaration, diff hygiene, and isolated-profile packaged launch.
+
+## R4 Slice 1 — fixture connectors and paused playbooks (2026-08-03)
+
+- Selected the first safe R4 slice after local meeting capture. External connectors, credentials, real data, webhook exposure, background scheduling, delivery, and model invocation remain gated.
+- Implemented synthetic connector authority declarations, versioned paused playbooks, DST-aware next-run previews, mandatory dry runs, idempotent manual fixture execution, bounded retry/dead-letter behavior, kill/delete, content-minimized audit, backup/restore, and workspace isolation.
+- Initial review found one high, two mediums, and one low. Repairs persisted and validated a canonical bounded definition, exposed per-playbook authority/version, made synthetic failure/retry reachable, and added archive-tamper/cascade tests.
+- Reverification passed 61 suites / 273 tests, lint, production build, native arm64 macOS packaging, packaged runtime closure, diff hygiene, and isolated-profile native launch. Final independent verdict: clean pass, blocker 0 / high 0 / medium 0.
