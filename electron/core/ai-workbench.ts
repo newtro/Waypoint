@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
-import { resolveExecutable, type CliName } from '../../spikes/cli-capabilities.js'
+import { cliExecutionPath, resolveExecutable, type CliName } from '../../spikes/cli-capabilities.js'
 
 export type RunStatus = 'queued'|'running'|'completed'|'failed'|'canceled'|'timed_out'
 export type ExecutionEvent = { type: 'text'|'tool'|'agent'|'diagnostic'; text?: string; name?: string; rawType?: string }
@@ -19,7 +19,7 @@ export const CONSERVATIVE_PROFILE: SecurityProfile = {
 
 export interface RunRequest {
   cli: CliName; prompt: string; workspaceRoot: string; profile: SecurityProfile; model?: string
-  parentRunId?: string; depth?: number; timeoutMs?: number; executable?: string; version?: string
+  parentRunId?: string; depth?: number; timeoutMs?: number; executable?: string; version?: string; imagePaths?: string[]
 }
 
 export interface RunningExecution {
@@ -42,8 +42,8 @@ export function validateRequest(request: RunRequest): void {
   if (request.profile.secretNames.length) throw new Error('Phase 2 does not inject secrets')
 }
 
-export function adapterArgs(cli: CliName, _prompt: string, model?: string): string[] {
-  if (cli === 'codex') return ['exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', ...(model ? ['--model', model] : []), '-']
+export function adapterArgs(cli: CliName, _prompt: string, model?: string, imagePaths: string[] = []): string[] {
+  if (cli === 'codex') return ['exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', ...imagePaths.flatMap((imagePath)=>['--image',imagePath]), ...(model ? ['--model', model] : []), '-']
   return ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--no-session-persistence', '--safe-mode', '--tools', '', '--permission-mode', 'dontAsk', ...(model ? ['--model', model] : [])]
 }
 
@@ -80,8 +80,10 @@ export class CliWorkbench {
     const executable = request.executable ?? await this.resolver(request.cli)
     if (!executable) throw new Error(`${request.cli} CLI was not found on PATH`)
     if (!path.isAbsolute(executable)) throw new Error('Resolved CLI path must be absolute')
-    const args = adapterArgs(request.cli, request.prompt, request.model)
-    const environment: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', USER: process.env.USER ?? '', LANG: process.env.LANG ?? 'en_US.UTF-8', NO_COLOR: '1' }
+    if(request.imagePaths?.some((imagePath)=>!path.isAbsolute(imagePath)))throw new Error('Attachment image paths must be absolute')
+    if(request.cli!=='codex'&&request.imagePaths?.length)throw new Error(`${request.cli} adapter does not support image delivery`)
+    const args = adapterArgs(request.cli, request.prompt, request.model, request.imagePaths)
+    const environment: NodeJS.ProcessEnv = { PATH: cliExecutionPath(executable), HOME: process.env.HOME ?? '', USER: process.env.USER ?? '', LANG: process.env.LANG ?? 'en_US.UTF-8', NO_COLOR: '1' }
     const child = this.spawnProcess(executable, args, { cwd: path.resolve(request.workspaceRoot), env: environment, shell: false, windowsHide: true })
     let settled = false, canceled = false, timedOut = false, outputLimited = false, stderr = '', buffer = '', outputBytes = 0
     const timeoutMs = Math.min(request.timeoutMs ?? request.profile.maxDurationMs, request.profile.maxDurationMs)

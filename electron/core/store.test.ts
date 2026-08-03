@@ -24,6 +24,16 @@ describe('durable local workspace', () => {
     expect(store.executionExists(other.id,run)).toBe(false)
     store.close()
   })
+
+  it('persists the exact source message for historical retry provenance',()=>{
+    const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Retries'),profile=store.listSecurityProfiles(workspace.id)[0]
+    const first=store.addMessage(workspace.id,chat,'user','first prompt'),second=store.addMessage(workspace.id,chat,'user','second prompt')
+    const firstRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:first,cli:'codex',securityProfileId:profile.id,prompt:'first prompt'})
+    const secondRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:second,cli:'claude',securityProfileId:profile.id,prompt:'second prompt'})
+    expect(store.listExecutions(workspace.id,chat)).toEqual([expect.objectContaining({id:secondRun,sourceMessageId:second}),expect.objectContaining({id:firstRun,sourceMessageId:first})])
+    expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:'missing',cli:'codex',securityProfileId:profile.id,prompt:'x'})).toThrow(/source message/)
+    store.close()
+  })
   it('reconciles queued and running executions to durable interrupted failures on startup',()=>{
     const {database,store,workspace}=fixture(),chat=store.createChat(workspace.id,'Interrupted'),profile=store.listSecurityProfiles(workspace.id)[0]
     const queued=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'queued'})
@@ -106,7 +116,31 @@ describe('durable local workspace', () => {
     const attachmentId = store.addAttachment(workspace.id, document.id, 'source.md', 'text/markdown', source)
     expect(attachmentId).toBeTruthy()
     expect(store.counts().attachments).toBe(1)
-    expect(() => store.addAttachment(workspace.id, document.id, 'image.png', 'image/png', source)).toThrow(/Unsupported/)
+    expect(() => store.addAttachment(workspace.id, document.id, 'image.png', 'image/png', source)).toThrow(/signature/)
+    store.close()
+  })
+
+  it('moves queued chat attachments to the durable message and deletes them independently', () => {
+    const { root, store, workspace } = fixture(), chat = store.createChat(workspace.id, 'Attachment route')
+    const source = path.join(root, 'context.md'); writeFileSync(source, '# local context')
+    const attachment = store.addAttachment(workspace.id, chat, 'context.md', 'text/markdown', source)
+    expect(store.listChatAttachments(workspace.id, chat)).toEqual([expect.objectContaining({ id: attachment, ownerId: chat, ownerKind: 'chat' })])
+    const message = store.addMessage(workspace.id, chat, 'user', 'Use the attachment', [attachment])
+    expect(store.listChatAttachments(workspace.id, chat)).toEqual([expect.objectContaining({ id: attachment, ownerId: message, ownerKind: 'message' })])
+    store.deleteAttachment(workspace.id, attachment)
+    expect(store.listChatAttachments(workspace.id, chat)).toEqual([])
+    expect(store.counts().attachments).toBe(0)
+    store.close()
+  })
+
+  it('rejects attaching another chat queue to a message without partial persistence', () => {
+    const { root, store, workspace } = fixture(), first = store.createChat(workspace.id, 'First'), second = store.createChat(workspace.id, 'Second')
+    const source = path.join(root, 'private.txt'); writeFileSync(source, 'private')
+    const attachment = store.addAttachment(workspace.id, first, 'private.txt', 'text/plain', source)
+    const before = store.counts().messages
+    expect(() => store.addMessage(workspace.id, second, 'user', 'Cross-chat attempt', [attachment])).toThrow(/Pending chat attachment/)
+    expect(store.counts().messages).toBe(before)
+    expect(store.listChatAttachments(workspace.id, first)[0]).toMatchObject({ ownerId: first })
     store.close()
   })
 

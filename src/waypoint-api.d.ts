@@ -1,4 +1,4 @@
-import type { GraphEdge, GraphNode, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types'
+import type { AttachmentMetadata, GraphEdge, GraphNode, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types'
 import type { DiagnosticsReport } from '../electron/core/diagnostics'
 
 declare global {
@@ -16,17 +16,20 @@ declare global {
       deleteDocument(workspaceId: string, objectId: string): Promise<{ ok: true }>
       deleteObject(workspaceId: string, kind: 'document'|'chat'|'memory', objectId: string): Promise<{ ok: true }>
       attachDocument(workspaceId: string, objectId: string): Promise<{ canceled: boolean; attachmentId?: string }>
+      selectChatAttachments(workspaceId:string,chatId:string):Promise<{canceled:boolean;attachments:AttachmentMetadata[]}>
+      listChatAttachments(workspaceId:string,chatId:string):Promise<AttachmentMetadata[]>
+      deleteAttachment(workspaceId:string,attachmentId:string):Promise<{ok:true}>
       graph(workspaceId: string): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>
       activity(workspaceId: string): Promise<Array<Record<string, unknown>>>
       listChats(workspaceId: string): Promise<Array<{ id: string; title: string; updatedAt: string; messages: Array<{ id: string; role: string; body: string; createdAt: string }> }>>
       cliCapabilities(): Promise<Array<{name:'codex'|'claude';available:boolean;executable?:string;version?:string;error?:string;compatible?:boolean;compatibilityError?:string}>>
       listSecurityProfiles(workspaceId:string): Promise<Array<{id:string;name:string;roots:string[];filesystem:'read-only'|'workspace-write';network:'provider-only'|'disabled';tools:string[];approval:'always'|'on-write';maxDurationMs:number;maxConcurrency:number;peerEligible:boolean;secretNames:string[]}>>
       listExecutions(workspaceId:string,chatId?:string): Promise<Array<Record<string,unknown>>>
-      runChat(workspaceId:string,chatId:string,cli:'codex'|'claude',securityProfileId:string,prompt:string,model?:string,parentExecutionId?:string): Promise<{runId:string;status:'running'}>
+      runChat(workspaceId:string,chatId:string,sourceMessageId:string,cli:'codex'|'claude',securityProfileId:string,prompt:string,model?:string,parentExecutionId?:string,attachmentIds?:string[]): Promise<{runId:string;status:'running';attachmentDelivery:{passedToCli:string[];unsupported:Array<{id:string;reason:string}>}}>
       cancelExecution(runId:string): Promise<{canceled:boolean}>
       createChat(workspaceId: string, title: string): Promise<string>
       captureChat(workspaceId: string, title: string, body: string): Promise<string>
-      addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string): Promise<string>
+      addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string,attachmentIds?:string[]): Promise<string>
       listMemories(workspaceId: string): Promise<Array<{ id: string; title: string; body: string; sourceObjectId?: string; ownership: string; updatedAt: string }>>
       createMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string): Promise<string>
       captureMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned?: boolean): Promise<string>

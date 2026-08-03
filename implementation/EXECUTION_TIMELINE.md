@@ -50,3 +50,11 @@
 Phase 4 current-Mac verification is recorded in its evidence. The signed/published cross-platform release gate remains open.
 
 Windows-native build/package/launch, filesystem, update-path, and child-process validation is required immediately when the project moves to Windows, by explicit user decision.
+
+## 2026-08-03 — First-Class Chat repair
+
+- Reproduced the packaged-GUI CLI discovery failure and repaired native executable resolution.
+- Added retry-safe terminal finalization, durable chat attachment ownership and lifecycle, truthful provider delivery, immediate New Chat, retry controls, and full-height responsive layout.
+- Repaired three independent-review high findings: stale startup-failure state, inexact historical retry, and provider-receipt overclaim. Exact retry provenance required schema 6.
+- Passed 161 tests, lint, production build, high-severity audit, bounded live Codex/Claude completion/failure/cancellation checks, native arm64 packaging, and focused independent re-review.
+- Windows-native and signed/published release verification remain explicitly deferred.

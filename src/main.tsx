@@ -1,6 +1,6 @@
 import { FormEvent, StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { GraphEdge, GraphNode, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types'
+import type { AttachmentMetadata, GraphEdge, GraphNode, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types'
 import type { DiagnosticsReport } from '../electron/core/diagnostics'
 import { reconcileSelectedChatId, RefreshGate } from './chat-selection'
 import { failureAdvice, type ExecutionRunView } from './ai-workbench-ui'
@@ -36,6 +36,7 @@ export function App() {
   const [selectedChatId, setSelectedChatId] = useState<string>(),
     [creatingChat, setCreatingChat] = useState(false)
   const [delegationParentId, setDelegationParentId] = useState<string>()
+  const [chatAttachments,setChatAttachments]=useState<AttachmentMetadata[]>([]),[attachmentBusy,setAttachmentBusy]=useState(false),[chatCli,setChatCli]=useState<'codex'|'claude'>('codex')
   const [profiles, setProfiles] = useState<Awaited<ReturnType<Window['waypoint']['listSecurityProfiles']>>>([]),
     [runs, setRuns] = useState<Array<Record<string, unknown>>>([]),
     [capabilities, setCapabilities] = useState<Awaited<ReturnType<Window['waypoint']['cliCapabilities']>>>([])
@@ -96,6 +97,11 @@ export function App() {
     const timer = window.setInterval(() => void refresh().catch(showError), 750)
     return () => window.clearInterval(timer)
   })
+  useEffect(()=>{
+    if(!workspace||!selectedChatId)return
+    void window.waypoint.listChatAttachments(workspace.id,selectedChatId).then(setChatAttachments).catch(showError)
+  },[workspace,selectedChatId,chats])
+  useEffect(()=>{const first=capabilities.find((item)=>item.available&&item.compatible!==false);if(!first||capabilities.find((item)=>item.name===chatCli&&item.available&&item.compatible!==false))return;const timer=window.setTimeout(()=>setChatCli(first.name),0);return()=>window.clearTimeout(timer)},[capabilities,chatCli])
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
@@ -208,40 +214,35 @@ export function App() {
       showError(reason)
     }
   }
-  async function addToChat(event: FormEvent<HTMLFormElement>, chatId: string) {
-    event.preventDefault()
-    if (!workspace) return
-    const form = event.currentTarget,
-      body = String(new FormData(form).get('body') ?? '')
-    try {
-      await window.waypoint.addMessage(workspace.id, chatId, 'user', body)
-      form.reset()
-      await refresh()
-    } catch (reason) {
-      showError(reason)
-    }
-  }
+  async function beginNewChat(){if(!workspace)return;setError('');try{const chatId=await window.waypoint.createChat(workspace.id,'New chat');await refresh();setSelectedChatId(chatId);setCreatingChat(false)}catch(reason){showError(reason)}}
   async function runChat(event: FormEvent<HTMLFormElement>, chatId: string) {
     event.preventDefault()
     if (!workspace) return
     const form = event.currentTarget,
       data = new FormData(form),
       prompt = String(data.get('prompt') ?? ''),
-      cli = String(data.get('cli') ?? 'codex') as 'codex' | 'claude',
+      cli = String(data.get('cli') ?? chatCli) as 'codex' | 'claude',
       profileId = String(data.get('profile') ?? ''),
       model = String(data.get('model') ?? '') || undefined,
-      parentExecutionId = String(data.get('parentExecutionId') ?? '') || undefined
+      parentExecutionId = String(data.get('parentExecutionId') ?? '') || undefined,
+      attachmentIds=chatAttachments.filter((attachment)=>attachment.ownerId===chatId).map((attachment)=>attachment.id)
     try {
-      await window.waypoint.addMessage(workspace.id, chatId, 'user', prompt)
-      const started = await window.waypoint.runChat(workspace.id, chatId, cli, profileId, prompt, model, parentExecutionId)
+      const sourceMessageId=await window.waypoint.addMessage(workspace.id, chatId, 'user', prompt,attachmentIds)
+      const started = await window.waypoint.runChat(workspace.id, chatId,sourceMessageId, cli, profileId, prompt, model, parentExecutionId,attachmentIds)
       form.reset()
       setDelegationParentId(undefined)
-      setNotice(`Started ${cli} run ${started.runId.slice(0, 8)}.`)
+      const unsupported=started.attachmentDelivery.unsupported
+      setNotice(unsupported.length?`Started ${cli}; ${unsupported.length} attachment${unsupported.length===1?' was':'s were'} saved locally but not passed to this CLI.`:`Started ${cli} run ${started.runId.slice(0, 8)}.`)
       await refresh()
     } catch (reason) {
       showError(reason)
+      await refresh().catch(showError)
+      setChatAttachments(await window.waypoint.listChatAttachments(workspace.id,chatId).catch(()=>[]))
     }
   }
+  async function chooseChatAttachments(){if(!workspace||!selectedChatId)return;setAttachmentBusy(true);setError('');try{const result=await window.waypoint.selectChatAttachments(workspace.id,selectedChatId);setChatAttachments(result.attachments)}catch(reason){showError(reason)}finally{setAttachmentBusy(false)}}
+  async function removeChatAttachment(attachmentId:string){if(!workspace)return;setAttachmentBusy(true);try{await window.waypoint.deleteAttachment(workspace.id,attachmentId);if(selectedChatId)setChatAttachments(await window.waypoint.listChatAttachments(workspace.id,selectedChatId))}catch(reason){showError(reason)}finally{setAttachmentBusy(false)}}
+  async function retryRun(run:ExecutionRunView){if(!workspace||!selectedChat)return;const sourceMessageId=String(run.sourceMessageId??''),sourceMessage=selectedChat.messages.find((message)=>message.id===sourceMessageId&&message.role==='user');if(!sourceMessage){setError('This historical run has no exact durable source message and cannot be retried safely.');return}const attachmentIds=chatAttachments.filter((attachment)=>attachment.ownerId===sourceMessage.id).map((attachment)=>attachment.id);try{const started=await window.waypoint.runChat(workspace.id,selectedChat.id,sourceMessage.id,String(run.cli) as 'codex'|'claude',String(run.securityProfileId),sourceMessage.body,run.model?String(run.model):undefined,run.parentExecutionId?String(run.parentExecutionId):undefined,attachmentIds);setNotice(`Retry started as run ${started.runId.slice(0,8)}.`);await refresh()}catch(reason){showError(reason);await refresh().catch(showError)}}
   async function addMemory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!workspace) return
@@ -360,7 +361,7 @@ export function App() {
   const selectedChat = chats.find((chat) => chat.id === selectedChatId)
   const delegationParent = runs.find((run) => run.id === delegationParentId)
   return (
-    <div className="shell">
+    <div className={`shell ${panel==='chats'?'chat-shell':''}`}>
       <header>
         <div>
           <p className="eyebrow">PERSONAL WORKSPACE</p>
@@ -494,7 +495,7 @@ export function App() {
                 <p className="eyebrow">ROUTE LOG</p>
                 <h3>Chats</h3>
               </div>
-              <button onClick={() => setCreatingChat(true)}>New Chat</button>
+              <button onClick={() => void beginNewChat()}>New Chat</button>
             </div>
             <div className="chat-list">
               {chats.map((chat) => {
@@ -558,6 +559,7 @@ export function App() {
                     <article key={message.id} className={`message ${message.role}`}>
                       <small>{message.role}</small>
                       <p>{message.body}</p>
+                      {chatAttachments.some((attachment)=>attachment.ownerId===message.id)&&<div className="message-attachments" aria-label="Message attachments">{chatAttachments.filter((attachment)=>attachment.ownerId===message.id).map((attachment)=><span className="attachment-chip sent" key={attachment.id}>{attachment.name}<small>{Math.ceil(attachment.bytes/1024)} KiB · stored</small></span>)}</div>}
                     </article>
                   ))}
                 </div>
@@ -572,12 +574,17 @@ export function App() {
                     </aside>
                   )}
                   <input type="hidden" name="parentExecutionId" value={delegationParentId ?? ''} />
+                  <div className="attachment-tray">
+                    <div className="attachment-heading"><button type="button" className="quiet attach-button" disabled={attachmentBusy} onClick={()=>void chooseChatAttachments()}>{attachmentBusy?'Adding…':'＋ Attach files'}</button><small>Images, PDF, Word, text, or Markdown · 25 MiB each</small></div>
+                    {chatAttachments.filter((attachment)=>attachment.ownerId===selectedChat.id).length>0&&<div className="attachment-chips" aria-live="polite">{chatAttachments.filter((attachment)=>attachment.ownerId===selectedChat.id).map((attachment)=><span className="attachment-chip queued" key={attachment.id}><span>{attachment.name}<small>{Math.ceil(attachment.bytes/1024)} KiB · queued locally</small></span><button type="button" aria-label={`Remove ${attachment.name}`} disabled={attachmentBusy} onClick={()=>void removeChatAttachment(attachment.id)}>×</button></span>)}</div>}
+                    <p className="attachment-capability">{chatCli==='codex'?'Waypoint passes queued images to the Codex CLI and bounded text/Markdown through stdin. PDF and Word remain stored locally.':'Waypoint passes bounded text/Markdown to the Claude CLI through stdin. Images, PDF, and Word remain stored locally.'}</p>
+                  </div>
                   <label>
-                    Task
-                    <textarea name="prompt" rows={3} required placeholder="Ask the selected signed-in CLI…" />
+                    Message
+                    <textarea name="prompt" rows={3} required placeholder="Message the selected signed-in CLI…" />
                   </label>
                   <div className="chat-form-actions">
-                    <select name="cli" aria-label="CLI route">
+                    <select name="cli" aria-label="CLI route" value={chatCli} onChange={(event)=>setChatCli(event.target.value as 'codex'|'claude')}>
                       {capabilities.map((capability) => (
                         <option key={capability.name} value={capability.name} disabled={!capability.available || capability.compatible === false}>
                           {capability.name} · {capability.available ? `${capability.version}${capability.compatible === false ? ' · incompatible' : ''}` : 'unavailable'}
@@ -690,25 +697,19 @@ export function App() {
                                 Delegate one child
                               </button>
                             )}
+                            {['failed','timed_out','canceled'].includes(String(run.status))&&<button className="quiet" onClick={()=>void retryRun(run)}>Retry last prompt</button>}
                           </div>
                         </article>
                       )
                     })}
                 </div>
-                <form className="chat-composer" onSubmit={(event) => void addToChat(event, selectedChat.id)}>
-                  <label>
-                    Save without running
-                    <textarea name="body" rows={2} required placeholder="Add a durable message only…" />
-                  </label>
-                  <button>Add message</button>
-                </form>
               </>
             ) : (
               <div className="chat-empty">
                 <p className="eyebrow">NO ACTIVE ROUTE</p>
                 <h3>Start your first chat</h3>
                 <p className="empty">Chats stay durable and local to this workspace.</p>
-                <button onClick={() => setCreatingChat(true)}>New Chat</button>
+                <button onClick={() => void beginNewChat()}>New Chat</button>
               </div>
             )}
           </section>

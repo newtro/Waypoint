@@ -7,12 +7,14 @@ import { accessSync, constants, renameSync, rmSync, statfsSync, writeFileSync } 
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './core/store.js'
 import { LocalOllamaEmbeddings } from './core/ollama.js'
-import { CliWorkbench } from './core/ai-workbench.js'
+import { CliWorkbench, type ExecutionEvent } from './core/ai-workbench.js'
 import { detectCli } from '../spikes/cli-capabilities.js'
 import { deleteWithExecutionCancellation, startDurableChild, validateOneChildDelegation } from './core/execution-lifecycle.js'
+import { finalizeExecution } from './core/execution-finalization.js'
 import { readBackup, writeAtomicBackup } from './core/backup.js'
 import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js'
 import { sanitizeSyncStatus } from './core/sync/sync-status.js'
+import { ATTACHMENT_MEDIA_BY_EXTENSION, MAX_ATTACHMENTS_PER_OWNER, readAndValidateAttachment } from './core/chat-attachments.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let store: WorkspaceStore
@@ -101,6 +103,18 @@ function registerIpc(): void {
     const mediaType = extension === '.md' || extension === '.markdown' ? 'text/markdown' : 'text/plain'
     return { canceled: false, attachmentId: store.addAttachment(workspaceId, objectId, path.basename(sourcePath), mediaType, sourcePath) }
   })
+  handle('waypoint:select-chat-attachments',async(_event,input:unknown)=>{
+    const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64)
+    const chosen=await dialog.showOpenDialog({title:'Attach files to chat',properties:['openFile','multiSelections'],filters:[{name:'Chat attachments',extensions:['png','jpg','jpeg','webp','gif','pdf','docx','txt','md','markdown']}]})
+    if(chosen.canceled)return{canceled:true,attachments:store.listChatAttachments(workspaceId,chatId)}
+    const existing=store.listChatAttachments(workspaceId,chatId).filter((attachment)=>attachment.ownerId===chatId).length
+    if(existing+chosen.filePaths.length>MAX_ATTACHMENTS_PER_OWNER)throw new Error(`A chat message can queue no more than ${MAX_ATTACHMENTS_PER_OWNER} files`)
+    const validated=chosen.filePaths.map((sourcePath)=>{const mediaType=ATTACHMENT_MEDIA_BY_EXTENSION[path.extname(sourcePath).toLowerCase()];if(!mediaType)throw new Error('Unsupported chat attachment type');readAndValidateAttachment(sourcePath,path.basename(sourcePath),mediaType);return{sourcePath,mediaType}}),added:string[]=[]
+    try{for(const item of validated)added.push(store.addAttachment(workspaceId,chatId,path.basename(item.sourcePath),item.mediaType,item.sourcePath))}catch(error){for(const attachmentId of added)try{store.deleteAttachment(workspaceId,attachmentId)}catch{/* Best-effort rollback preserves the original picker error. */}throw error}
+    return{canceled:false,attachments:store.listChatAttachments(workspaceId,chatId)}
+  })
+  handle('waypoint:list-chat-attachments',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.listChatAttachments(text(value.workspaceId,'workspace ID',64),text(value.chatId,'chat ID',64))})
+  handle('waypoint:delete-attachment',(_event,input:unknown)=>{const value=input as Record<string,unknown>;store.deleteAttachment(text(value.workspaceId,'workspace ID',64),text(value.attachmentId,'attachment ID',64));return{ok:true}})
   handle('waypoint:graph', (_event, input: unknown) => store.graph(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
   handle('waypoint:activity', (_event, input: unknown) => store.listActivity(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
   handle('waypoint:list-chats', (_event, input: unknown) => store.listChats(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
@@ -110,22 +124,23 @@ function registerIpc(): void {
   handle('waypoint:run-chat', async (_event,input:unknown)=>{
     const value=input as Record<string,unknown>, workspaceId=text(value.workspaceId,'workspace ID',64), chatId=text(value.chatId,'chat ID',64)
     const cli=text(value.cli,'CLI',20); if(!['codex','claude'].includes(cli))throw new Error('Unsupported CLI')
-    const prompt=text(value.prompt,'prompt',2_000_000), profileId=text(value.securityProfileId,'security profile ID',64),parentExecutionId=value.parentExecutionId?text(value.parentExecutionId,'parent execution ID',64):undefined
+    let prompt=text(value.prompt,'prompt',2_000_000); const profileId=text(value.securityProfileId,'security profile ID',64),parentExecutionId=value.parentExecutionId?text(value.parentExecutionId,'parent execution ID',64):undefined
+    const sourceMessageId=text(value.sourceMessageId,'source message ID',64),attachmentIds=Array.isArray(value.attachmentIds)?value.attachmentIds.map((item)=>text(item,'attachment ID',64)):[];if(attachmentIds.length>MAX_ATTACHMENTS_PER_OWNER||new Set(attachmentIds).size!==attachmentIds.length)throw new Error('Invalid chat attachment selection')
     const workspace=store.listWorkspaces().find((candidate)=>candidate.id===workspaceId); if(!workspace)throw new Error('Workspace not found')
     const profile=store.listSecurityProfiles(workspaceId).find((candidate)=>candidate.id===profileId);if(!profile)throw new Error('Security profile not found')
+    const chatAttachmentIds=new Set(store.listChatAttachments(workspaceId,chatId).map((attachment)=>attachment.id));if(attachmentIds.some((id)=>!chatAttachmentIds.has(id)))throw new Error('Attachment not found in chat')
+    const passedToCli:string[]=[],unsupported:Array<{id:string;reason:string}>=[],imagePaths:string[]=[],textParts:string[]=[]
+    for(const attachmentId of attachmentIds){const prepared=store.prepareAttachmentForProvider(workspaceId,attachmentId,cli==='codex'?{inlineText:true,filePaths:true,acceptedMediaTypes:['text/plain','text/markdown','image/png','image/jpeg','image/webp','image/gif'],maxBytes:20*1024*1024}:{inlineText:true,filePaths:false,acceptedMediaTypes:['text/plain','text/markdown'],maxBytes:512*1024});if(prepared.kind==='unsupported')unsupported.push({id:attachmentId,reason:prepared.reason});else if(prepared.kind==='text'){textParts.push(prepared.text);passedToCli.push(attachmentId)}else{imagePaths.push(prepared.path);passedToCli.push(attachmentId)}}
+    if(textParts.length){const context=textParts.map((content,index)=>`\n\n--- Attached text ${index+1} ---\n${content}`).join('');if(prompt.length+context.length>2_000_000)throw new Error('Prompt and attached text exceed the execution limit');prompt+=context}
     if(parentExecutionId)validateOneChildDelegation(store.listExecutions(workspaceId,chatId),parentExecutionId,profileId)
-    const runId=store.createExecution({workspaceId,chatId,cli:cli as 'codex'|'claude',model:value.model?text(value.model,'model',120):undefined,securityProfileId:profileId,prompt,parentExecutionId,depth:parentExecutionId?1:0})
+    const runId=store.createExecution({workspaceId,chatId,sourceMessageId,cli:cli as 'codex'|'claude',model:value.model?text(value.model,'model',120):undefined,securityProfileId:profileId,prompt,parentExecutionId,depth:parentExecutionId?1:0})
+    const fallbackEvents: ExecutionEvent[]=[]
     try {
-      const running=await startDurableChild({workspaceId,runId,detect:async()=>{const capability=await detectCli(cli as 'codex'|'claude');if(capability.available&&capability.compatible===false)throw new Error(capability.compatibilityError);return capability},executionExists:(owner,id)=>store.executionExists(owner,id),spawn:(capability)=>workbench.start(runId,{cli:cli as 'codex'|'claude',prompt,workspaceRoot:profile.roots[0],profile,model:value.model?text(value.model,'model',120):undefined,executable:capability.executable,version:capability.version,parentRunId:parentExecutionId,depth:parentExecutionId?1:0},(event)=>{try{store.appendExecutionEvent(runId,workspaceId,event)}catch{/* A deleted chat cancels persistence authority. */}}),markRunning:(child)=>store.startExecution(runId,workspaceId,child.executable,child.version)})
-      void running.completion.then((result)=>{
-        try {
-          const events=store.listExecutions(workspaceId,chatId).find((run)=>run.id===runId)?.events as Array<Record<string,unknown>>|undefined
-          const textEvents=(events??[]).filter((event)=>event.type==='text').map((event)=>String(event.text??''))
-          const answer=(cli==='claude' ? textEvents.at(-1)??'' : textEvents.join('')).trim()
-          store.finishExecution(runId,workspaceId,result,answer)
-        } catch { /* Deleting the owning chat deliberately removes the run. */ }
-      })
-      return {runId,status:'running'}
+      const running=await startDurableChild({workspaceId,runId,detect:async()=>{const capability=await detectCli(cli as 'codex'|'claude');if(capability.available&&capability.compatible===false)throw new Error(capability.compatibilityError);return capability},executionExists:(owner,id)=>store.executionExists(owner,id),spawn:(capability)=>workbench.start(runId,{cli:cli as 'codex'|'claude',prompt,workspaceRoot:profile.roots[0],profile,model:value.model?text(value.model,'model',120):undefined,executable:capability.executable,version:capability.version,parentRunId:parentExecutionId,depth:parentExecutionId?1:0,imagePaths},(event)=>{fallbackEvents.push(event);try{store.appendExecutionEvent(runId,workspaceId,event)}catch{/* The in-memory stream preserves terminal output; deletion revokes persistence authority. */}}),markRunning:(child)=>store.startExecution(runId,workspaceId,child.executable,child.version)})
+      void running.completion
+        .then((result)=>finalizeExecution(store,{runId,workspaceId,chatId,cli:cli as 'codex'|'claude',result,fallbackEvents}))
+        .catch((error)=>console.error('Failed to persist terminal execution state',error))
+      return {runId,status:'running',attachmentDelivery:{passedToCli,unsupported}}
     } catch(error) {
       try { store.failQueuedExecution(runId,workspaceId,error instanceof Error?error.message:'Unknown execution error') } catch { /* Preserve the original startup error. */ }
       throw error
@@ -138,7 +153,7 @@ function registerIpc(): void {
   })
   handle('waypoint:create-chat', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.createChat(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300)) })
   handle('waypoint:capture-chat', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.captureChat(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000)) })
-  handle('waypoint:add-message', (_event, input: unknown) => { const value = input as Record<string, unknown>; const role = text(value.role, 'role', 20); if (!['user','assistant','system'].includes(role)) throw new Error('Invalid role'); return store.addMessage(text(value.workspaceId, 'workspace ID', 64), text(value.chatId, 'chat ID', 64), role as 'user'|'assistant'|'system', text(value.body, 'body', 2_000_000)) })
+  handle('waypoint:add-message', (_event, input: unknown) => { const value = input as Record<string, unknown>; const role = text(value.role, 'role', 20); if (!['user','assistant','system'].includes(role)) throw new Error('Invalid role');const attachmentIds=Array.isArray(value.attachmentIds)?value.attachmentIds.map((item)=>text(item,'attachment ID',64)):[]; return store.addMessage(text(value.workspaceId, 'workspace ID', 64), text(value.chatId, 'chat ID', 64), role as 'user'|'assistant'|'system', text(value.body, 'body', 2_000_000),attachmentIds) })
   handle('waypoint:list-memories', (_event, input: unknown) => store.listMemories(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
   handle('waypoint:create-memory', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.createMemory(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000), value.sourceObjectId ? text(value.sourceObjectId, 'source ID', 64) : undefined) })
   handle('waypoint:capture-memory', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.captureMemory(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000), value.sourceObjectId ? text(value.sourceObjectId, 'source ID', 64) : undefined, value.sourceOwned === true ? 'source-owned' : 'workspace-owned') })

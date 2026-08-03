@@ -131,3 +131,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Direct packages are pinned exactly with Node `22.16.x`, npm `10.9.x`, and lockfile reproducibility. High-severity audit, complete declared-license inventory, and a production CycloneDX SBOM are release evidence.
 - The version-2 performance fixture and absolute budgets are current-Mac regression controls, not claims for Windows or the oldest supported hardware. It measures startup/reopen, search, index writes, attachment ingestion, graph, diagnostics, and database growth.
 - Docker remains unnecessary. Packaged clients do not require Node; source development and the future native Ubuntu service use pinned native Node/npm paths.
+
+## First-Class Chat repair decisions (2026-08-03)
+
+- Native CLI discovery uses a bounded list of standard install locations in addition to `PATH`; it never starts a login shell or evaluates user profiles. The resolved executable directory is added to the minimized child environment so Finder-launched packages behave like terminal launches.
+- Chat attachments begin as chat-owned queue items and atomically become message-owned when sent. Message/chat deletion therefore applies the existing hard-delete cascade, while an individual attachment can be removed independently.
+- CLI handoff is capability-specific. Waypoint passes supported images to Codex through its native `--image` flag and text through stdin; it passes text to Claude through stdin. This is not a claim of provider receipt or understanding. PDF/DOCX remain local sources until a separately reviewed extraction or provider path exists.
+- The attachment allowlist, integrity validation, limits, private permissions, and generated storage paths are security boundaries. Original filenames are display/provenance metadata, never storage paths.
+- New Chat creates a selected empty durable conversation immediately. It does not manufacture an unsent “first message.”

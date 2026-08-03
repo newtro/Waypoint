@@ -39,6 +39,62 @@ export interface DetectionOptions {
   run?: (executable: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
 }
 
+function unique(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))]
+}
+
+/**
+ * Finder/Explorer launched applications receive a deliberately sparse PATH.
+ * Search only explicit PATH entries and well-known, user-controlled install
+ * locations; never invoke a login shell or execute shell profile files.
+ */
+export function cliSearchDirectories(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix
+  const configured = (env.PATH ?? '').split(pathApi.delimiter).filter(Boolean)
+  if (platform === 'win32') {
+    const home = env.USERPROFILE
+    const local = env.LOCALAPPDATA
+    const roaming = env.APPDATA
+    return unique([
+      ...configured,
+      local && pathApi.join(local, 'Programs', 'Claude'),
+      local && pathApi.join(local, 'Programs', 'OpenAI'),
+      roaming && pathApi.join(roaming, 'npm'),
+      home && pathApi.join(home, '.local', 'bin'),
+      home && pathApi.join(home, '.volta', 'bin'),
+      env.ProgramFiles && pathApi.join(env.ProgramFiles, 'nodejs'),
+      'C:\\Program Files\\nodejs',
+      'C:\\Windows\\System32',
+    ])
+  }
+  const home = env.HOME
+  return unique([
+    ...configured,
+    home && pathApi.join(home, '.local', 'bin'),
+    home && pathApi.join(home, '.npm-global', 'bin'),
+    home && pathApi.join(home, '.volta', 'bin'),
+    ...(platform === 'darwin' ? [
+      '/Applications/ChatGPT.app/Contents/Resources',
+      '/opt/homebrew/bin',
+    ] : []),
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ])
+}
+
+export function cliExecutionPath(
+  executable: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix
+  return unique([pathApi.dirname(executable), ...cliSearchDirectories(env, platform)]).join(pathApi.delimiter)
+}
+
 export async function resolveExecutable(
   name: string,
   options: Pick<DetectionOptions, 'env' | 'platform' | 'canAccess'> = {},
@@ -47,7 +103,7 @@ export async function resolveExecutable(
   const platform = options.platform ?? process.platform
   const canAccess = options.canAccess ?? ((candidate) => access(candidate))
   const pathApi = platform === 'win32' ? path.win32 : path.posix
-  const pathEntries = (env.PATH ?? '').split(pathApi.delimiter).filter(Boolean)
+  const pathEntries = cliSearchDirectories(env, platform)
   const extensions = platform === 'win32'
     ? (env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')
     : ['']
@@ -67,12 +123,12 @@ export async function resolveExecutable(
 
 export async function detectCli(name: CliName, options: DetectionOptions = {}): Promise<CliCapability> {
   const executable = await resolveExecutable(name, options)
-  if (!executable) return { name, available: false, error: `${name} was not found on PATH` }
+  if (!executable) return { name, available: false, error: `${name} was not found in PATH or a supported local install location` }
   const run = options.run ?? ((resolved, args) => execFileAsync(resolved, args, {
     timeout: 5_000,
     shell: false,
     windowsHide: true,
-    env: { PATH: options.env?.PATH ?? process.env.PATH ?? '' },
+    env: { PATH: cliExecutionPath(resolved, options.env ?? process.env, options.platform ?? process.platform) },
   }))
   try {
     const { stdout, stderr } = await run(executable, ['--version'])

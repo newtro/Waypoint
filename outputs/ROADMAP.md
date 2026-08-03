@@ -95,3 +95,9 @@ Docker is not a product prerequisite. If evaluated later as a sandbox backend, i
 ## Scope-control rule
 
 A deferred feature may enter the MVP only when it is necessary to complete or secure the core promise. “The architecture may need it later” justifies a clean boundary or recorded decision, not full implementation.
+
+## Post-roadmap repair — First-Class Chat
+
+- Status: current-Mac implementation and verification complete; independent review evidence is in `implementation/FIRST_CLASS_CHAT_EVIDENCE.md`.
+- Scope and gate: `implementation/FIRST_CLASS_CHAT_PLAN.md`.
+- Windows-native verification, signing, and published-release checks remain open and platform/authorization contingent.

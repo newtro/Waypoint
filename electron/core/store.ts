@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, copyFileSync, renameSync, rmSync } from 'node:fs'
+import { chmodSync,existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync,statSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { ExportArchive, GraphEdge, GraphNode, ObjectKind, SearchResult, WorkspaceSummary } from './types.js'
@@ -7,9 +7,9 @@ import { WorkspaceSyncJournal } from './sync/workspace-sync-journal.js'
 import type { InboundChange, LocalMutation } from './sync/sync-store.js'
 import { archiveIntegrity, validateArchive } from './backup.js'
 import { assertSupportedSchema, createMigrationSnapshot, CURRENT_SCHEMA_VERSION, runMigrations, schemaVersion } from './migrations.js'
+import { MAX_ATTACHMENTS_PER_OWNER,MAX_ATTACHMENTS_PER_WORKSPACE,prepareAttachmentForProvider as prepareProviderAttachment,readAndValidateAttachment,validateAttachment,type AttachmentMetadata,type ProviderAttachmentPreparation } from './chat-attachments.js'
 
 const now = () => new Date().toISOString()
-const supportedAttachmentTypes = new Set(['text/plain', 'text/markdown'])
 
 export class WorkspaceStore {
   private readonly db: DatabaseSync
@@ -19,7 +19,7 @@ export class WorkspaceStore {
   constructor(readonly databasePath: string) {
     mkdirSync(path.dirname(databasePath), { recursive: true })
     this.attachmentRoot = path.join(path.dirname(databasePath), 'attachments')
-    mkdirSync(this.attachmentRoot, { recursive: true })
+    mkdirSync(this.attachmentRoot, { recursive: true,mode:0o700 });chmodSync(this.attachmentRoot,0o700)
     this.db = new DatabaseSync(databasePath)
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;')
     const priorVersion = assertSupportedSchema(this.db)
@@ -50,7 +50,7 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS tombstones(object_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, object_kind TEXT NOT NULL, deleted_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_work(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, context_object_id TEXT NOT NULL, status TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS security_profiles(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, roots_json TEXT NOT NULL, filesystem TEXT NOT NULL, network TEXT NOT NULL, tools_json TEXT NOT NULL, approval TEXT NOT NULL, max_duration_ms INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, peer_eligible INTEGER NOT NULL, secret_names_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(workspace_id,name));
-      CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, parent_execution_id TEXT REFERENCES executions(id) ON DELETE SET NULL, cli TEXT NOT NULL CHECK(cli IN ('codex','claude')), executable TEXT, cli_version TEXT, model TEXT, device TEXT NOT NULL, security_profile_id TEXT NOT NULL REFERENCES security_profiles(id), prompt_sha256 TEXT NOT NULL, status TEXT NOT NULL, depth INTEGER NOT NULL, started_at TEXT, finished_at TEXT, exit_code INTEGER, error_code TEXT, error_message TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL, parent_execution_id TEXT REFERENCES executions(id) ON DELETE SET NULL, cli TEXT NOT NULL CHECK(cli IN ('codex','claude')), executable TEXT, cli_version TEXT, model TEXT, device TEXT NOT NULL, security_profile_id TEXT NOT NULL REFERENCES security_profiles(id), prompt_sha256 TEXT NOT NULL, status TEXT NOT NULL, depth INTEGER NOT NULL, started_at TEXT, finished_at TEXT, exit_code INTEGER, error_code TEXT, error_message TEXT, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS execution_events(id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, type TEXT NOT NULL, text TEXT, name TEXT, raw_type TEXT, created_at TEXT NOT NULL, UNIQUE(execution_id,sequence));
       CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(workspace_id UNINDEXED, object_id UNINDEXED, object_kind UNINDEXED, revision_id UNINDEXED, title, body);
     `)
@@ -71,7 +71,7 @@ export class WorkspaceStore {
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(4, now())
     runMigrations(this.db, schemaVersion(this.db), [{ version: 5, apply: (database) => database.exec(`
       CREATE TABLE app_settings(key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
-    `) }])
+    `) }, { version: 6, apply: (database) => { const columns=database.prepare('PRAGMA table_info(executions)').all() as Array<{name:string}>;if(!columns.some((column)=>column.name==='source_message_id'))database.exec('ALTER TABLE executions ADD COLUMN source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL') } }])
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{id:string;localPath:string}>) {
       const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
       const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)
@@ -116,17 +116,18 @@ export class WorkspaceStore {
     return rows.map((row) => ({...row, id:String(row.id),name:String(row.name),roots:JSON.parse(String(row.roots)),tools:JSON.parse(String(row.tools)),secretNames:JSON.parse(String(row.secretNames)),filesystem:row.filesystem as 'read-only'|'workspace-write',network:row.network as 'provider-only'|'disabled',approval:row.approval as 'always'|'on-write',maxDurationMs:Number(row.maxDurationMs),maxConcurrency:Number(row.maxConcurrency),peerEligible:Boolean(row.peerEligible)}))
   }
 
-  createExecution(input: {workspaceId:string;chatId:string;parentExecutionId?:string;cli:'codex'|'claude';model?:string;securityProfileId:string;prompt:string;depth?:number}): string {
+  createExecution(input: {workspaceId:string;chatId:string;sourceMessageId?:string;parentExecutionId?:string;cli:'codex'|'claude';model?:string;securityProfileId:string;prompt:string;depth?:number}): string {
     this.assertObjectInWorkspace(input.workspaceId, input.chatId, 'chat')
     const profile = this.db.prepare('SELECT id FROM security_profiles WHERE id=? AND workspace_id=?').get(input.securityProfileId,input.workspaceId)
     if (!profile) throw new Error('Security profile not found in workspace')
+    if(input.sourceMessageId&&!this.db.prepare("SELECT 1 FROM messages WHERE id=? AND chat_id=? AND role='user'").get(input.sourceMessageId,input.chatId))throw new Error('Execution source message not found in chat')
     if (input.parentExecutionId) {
       const parent = this.db.prepare('SELECT depth FROM executions WHERE id=? AND workspace_id=? AND chat_id=?').get(input.parentExecutionId,input.workspaceId,input.chatId) as {depth:number}|undefined
       if (!parent || (input.depth ?? 0) !== parent.depth + 1) throw new Error('Invalid execution lineage')
     }
     const id=randomUUID(), timestamp=now()
     this.transaction(()=>{
-      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id,input.workspaceId,input.chatId,input.parentExecutionId??null,input.cli,input.model??null,'local',input.securityProfileId,createHash('sha256').update(input.prompt).digest('hex'),'queued',input.depth??0,timestamp)
+      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,input.workspaceId,input.chatId,input.sourceMessageId??null,input.parentExecutionId??null,input.cli,input.model??null,'local',input.securityProfileId,createHash('sha256').update(input.prompt).digest('hex'),'queued',input.depth??0,timestamp)
       this.activity(input.workspaceId,'ai','execution.queued',id,'execution',{cli:input.cli,chatId:input.chatId,profileId:input.securityProfileId,parentExecutionId:input.parentExecutionId??null})
     })
     return id
@@ -170,7 +171,7 @@ export class WorkspaceStore {
   }
 
   listExecutions(workspaceId:string, chatId?:string): Array<Record<string,unknown>> {
-    const rows=this.db.prepare(`SELECT e.id,e.chat_id chatId,e.parent_execution_id parentExecutionId,e.cli,e.executable,e.cli_version cliVersion,e.model,e.device,e.security_profile_id securityProfileId,e.prompt_sha256 promptSha256,e.status,e.depth,e.started_at startedAt,e.finished_at finishedAt,e.exit_code exitCode,e.error_code errorCode,e.error_message errorMessage,e.created_at createdAt,p.name profileName FROM executions e JOIN security_profiles p ON p.id=e.security_profile_id WHERE e.workspace_id=? ${chatId?'AND e.chat_id=?':''} ORDER BY e.created_at DESC`).all(...(chatId?[workspaceId,chatId]:[workspaceId])) as Array<Record<string,unknown>>
+    const rows=this.db.prepare(`SELECT e.id,e.chat_id chatId,e.source_message_id sourceMessageId,e.parent_execution_id parentExecutionId,e.cli,e.executable,e.cli_version cliVersion,e.model,e.device,e.security_profile_id securityProfileId,e.prompt_sha256 promptSha256,e.status,e.depth,e.started_at startedAt,e.finished_at finishedAt,e.exit_code exitCode,e.error_code errorCode,e.error_message errorMessage,e.created_at createdAt,p.name profileName FROM executions e JOIN security_profiles p ON p.id=e.security_profile_id WHERE e.workspace_id=? ${chatId?'AND e.chat_id=?':''} ORDER BY e.created_at DESC,e.rowid DESC`).all(...(chatId?[workspaceId,chatId]:[workspaceId])) as Array<Record<string,unknown>>
     return rows.map((run)=>({...run,events:this.db.prepare('SELECT sequence,type,text,name,raw_type rawType,created_at createdAt FROM execution_events WHERE execution_id=? ORDER BY sequence').all(String(run.id))}))
   }
 
@@ -261,12 +262,19 @@ export class WorkspaceStore {
     return id
   }
 
-  addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string): string {
+  addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string, attachmentIds: string[] = []): string {
     this.assertObjectInWorkspace(workspaceId, chatId, 'chat')
     const chat = this.db.prepare('SELECT workspace_id,title FROM chats WHERE id=?').get(chatId) as { workspace_id: string; title: string } | undefined
     if (!chat) throw new Error('Chat not found')
     const id = randomUUID(), timestamp = now()
     this.transaction(() => {
+      if(attachmentIds.length>MAX_ATTACHMENTS_PER_OWNER||new Set(attachmentIds).size!==attachmentIds.length)throw new Error('Invalid message attachment selection')
+      for(const attachmentId of attachmentIds){
+        const attachment=this.db.prepare('SELECT id,name,media_type mediaType,sha256 FROM attachments WHERE id=? AND workspace_id=? AND owner_id=?').get(attachmentId,workspaceId,chatId) as {id:string;name:string;mediaType:string;sha256:string}|undefined
+        if(!attachment)throw new Error('Pending chat attachment not found')
+        this.db.prepare('UPDATE attachments SET owner_id=? WHERE id=?').run(id,attachmentId)
+        this.syncJournal.enqueue(workspaceId,attachmentId,'attachment','upsert',{...attachment,ownerId:id})
+      }
       this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(id, chatId, role, body, timestamp)
       this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp, chatId)
       this.syncJournal.enqueue(workspaceId,id,'message','upsert',{id,chatId,role,body,createdAt:timestamp})
@@ -321,19 +329,53 @@ export class WorkspaceStore {
   }
 
   addAttachment(workspaceId: string, ownerId: string, name: string, mediaType: string, sourcePath: string): string {
-    if (!supportedAttachmentTypes.has(mediaType)) throw new Error(`Unsupported attachment type: ${mediaType}`)
     this.assertObjectInWorkspace(workspaceId, ownerId)
-    const bytes = readFileSync(sourcePath)
-    const sha256 = createHash('sha256').update(bytes).digest('hex')
-    const id = randomUUID(), relativePath = `${id}-${path.basename(name)}`,createdAt=now()
-    copyFileSync(sourcePath, path.join(this.attachmentRoot, relativePath))
+    const ownerCount=Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=? AND owner_id=?').get(workspaceId,ownerId) as {count:number}).count),workspaceCount=Number((this.db.prepare('SELECT count(*) count FROM attachments WHERE workspace_id=?').get(workspaceId) as {count:number}).count)
+    if(ownerCount>=MAX_ATTACHMENTS_PER_OWNER)throw new Error(`Attachment owner limit of ${MAX_ATTACHMENTS_PER_OWNER} reached`)
+    if(workspaceCount>=MAX_ATTACHMENTS_PER_WORKSPACE)throw new Error(`Workspace attachment limit of ${MAX_ATTACHMENTS_PER_WORKSPACE} reached`)
+    const validated=readAndValidateAttachment(sourcePath,name,mediaType),{bytes,sha256,safeName}=validated
+    const id = randomUUID(), relativePath = `${id}-${safeName}`,createdAt=now()
+    writeFileSync(this.attachmentPath(relativePath),bytes,{flag:'wx',mode:0o600})
     try {
       this.transaction(()=>{
-        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, ownerId, path.basename(name), mediaType, sha256, relativePath, createdAt)
-        this.syncJournal.enqueue(workspaceId,id,'attachment','upsert',{id,ownerId,name:path.basename(name),mediaType,sha256,relativePath,createdAt})
+        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, ownerId, safeName, mediaType, sha256, relativePath, createdAt)
+        this.syncJournal.enqueue(workspaceId,id,'attachment','upsert',{id,ownerId,name:safeName,mediaType,sha256,bytes:bytes.byteLength,createdAt})
       })
     } catch (error) { rmSync(path.join(this.attachmentRoot, relativePath), { force: true }); throw error }
     return id
+  }
+
+  listAttachments(workspaceId:string,ownerId?:string):AttachmentMetadata[]{
+    if(ownerId)this.assertObjectInWorkspace(workspaceId,ownerId)
+    const rows=this.db.prepare(`SELECT id,workspace_id workspaceId,owner_id ownerId,name,media_type mediaType,sha256,relative_path relativePath,created_at createdAt FROM attachments WHERE workspace_id=? ${ownerId?'AND owner_id=?':''} ORDER BY created_at`).all(...(ownerId?[workspaceId,ownerId]:[workspaceId])) as Array<Record<string,unknown>>
+    return rows.map((row)=>{const ownerKind=this.objectKindInWorkspace(workspaceId,String(row.ownerId));if(!ownerKind)throw new Error('Attachment owner is missing');const file=this.attachmentPath(String(row.relativePath));if(!existsSync(file))throw new Error('Stored attachment file is missing');return{id:String(row.id),workspaceId,ownerId:String(row.ownerId),ownerKind,name:String(row.name),mediaType:String(row.mediaType),sha256:String(row.sha256),bytes:statSync(file).size,createdAt:String(row.createdAt)}})
+  }
+
+  listChatAttachments(workspaceId:string,chatId:string):AttachmentMetadata[]{
+    this.assertObjectInWorkspace(workspaceId,chatId,'chat')
+    const owners=[chatId,...(this.db.prepare('SELECT id FROM messages WHERE chat_id=?').all(chatId) as Array<{id:string}>).map((row)=>row.id)]
+    const ownerSet=new Set(owners)
+    return this.listAttachments(workspaceId).filter((attachment)=>ownerSet.has(attachment.ownerId))
+  }
+
+  deleteAttachment(workspaceId:string,attachmentId:string):void{
+    const row=this.db.prepare('SELECT relative_path relativePath FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId,workspaceId) as {relativePath:string}|undefined
+    if(!row)throw new Error('Attachment not found in workspace')
+    const source=this.attachmentPath(row.relativePath),staged=`${source}.deleting-${randomUUID()}`
+    renameSync(source,staged)
+    try{this.transaction(()=>{
+      this.db.prepare('DELETE FROM attachments WHERE id=? AND workspace_id=?').run(attachmentId,workspaceId)
+      this.syncJournal.enqueue(workspaceId,attachmentId,'attachment','delete',{id:attachmentId},[attachmentId])
+      this.activity(workspaceId,'lifecycle','attachment.deleted',attachmentId,'attachment',{})
+    })}catch(error){renameSync(staged,source);throw error}
+    rmSync(staged,{force:true})
+  }
+
+  prepareAttachmentForProvider(workspaceId:string,attachmentId:string,capabilities:{inlineText:boolean;filePaths:boolean;acceptedMediaTypes:readonly string[];maxBytes:number}):ProviderAttachmentPreparation{
+    const row=this.db.prepare('SELECT relative_path relativePath,owner_id ownerId FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId,workspaceId) as {relativePath:string;ownerId:string}|undefined
+    if(!row)throw new Error('Attachment not found in workspace')
+    const metadata=this.listAttachments(workspaceId,row.ownerId).find((item)=>item.id===attachmentId)!
+    return prepareProviderAttachment({metadata,absolutePath:this.attachmentPath(row.relativePath),capabilities})
   }
 
   searchText(workspaceId: string, query: string, limit = 20): SearchResult[] {
@@ -368,6 +410,32 @@ export class WorkspaceStore {
     const nodes = [...ids].map((id) => this.graphNode(id)).filter((node): node is GraphNode => Boolean(node))
     const surviving = new Set(nodes.map((node) => node.id))
     return { nodes, edges: edges.filter((edge) => surviving.has(edge.fromId) && surviving.has(edge.toId)) }
+  }
+
+  deleteMessage(workspaceId:string,messageId:string):void{
+    this.assertObjectInWorkspace(workspaceId,messageId,'message')
+    const stagedFiles:Array<{source:string;staged:string}>=[]
+    try{this.transaction(()=>{
+      const ownedIds=[messageId]
+      for(;;){const placeholders=ownedIds.map(()=>'?').join(','),dependents=this.db.prepare(`SELECT id FROM memories WHERE workspace_id=? AND ownership='source-owned' AND source_object_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string}>,additions=dependents.map((row)=>row.id).filter((id)=>!ownedIds.includes(id));if(!additions.length)break;ownedIds.push(...additions)}
+      const placeholders=ownedIds.map(()=>'?').join(','),attachments=this.db.prepare(`SELECT id,relative_path relativePath FROM attachments WHERE workspace_id=? AND owner_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string;relativePath:string}>
+      const relationships=(this.db.prepare(`SELECT id FROM relationships WHERE workspace_id=? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`).all(workspaceId,...ownedIds,...ownedIds) as Array<{id:string}>).map((row)=>row.id)
+      for(const attachment of attachments){const source=this.attachmentPath(attachment.relativePath),staged=`${source}.deleting-${randomUUID()}`;renameSync(source,staged);stagedFiles.push({source,staged})}
+      this.db.prepare(`DELETE FROM relationships WHERE workspace_id=? AND (from_id IN (${placeholders}) OR to_id IN (${placeholders}))`).run(workspaceId,...ownedIds,...ownedIds)
+      this.db.prepare(`DELETE FROM embeddings WHERE workspace_id=? AND object_id IN (${placeholders})`).run(workspaceId,...ownedIds)
+      this.db.prepare(`DELETE FROM queued_work WHERE workspace_id=? AND context_object_id IN (${placeholders})`).run(workspaceId,...ownedIds)
+      this.db.prepare(`DELETE FROM search_fts WHERE workspace_id=? AND object_id IN (${placeholders})`).run(workspaceId,...ownedIds)
+      this.db.prepare(`DELETE FROM attachments WHERE workspace_id=? AND owner_id IN (${placeholders})`).run(workspaceId,...ownedIds)
+      const detached=this.db.prepare(`SELECT id,title,body,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string;title:string;body:string;ownership:string;createdAt:string;updatedAt:string}>
+      this.db.prepare(`UPDATE memories SET source_object_id=NULL WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).run(workspaceId,...ownedIds);for(const memory of detached)this.syncJournal.enqueue(workspaceId,memory.id,'memory','upsert',{...memory,sourceObjectId:null})
+      const dependentMemoryIds=ownedIds.filter((id)=>id!==messageId);if(dependentMemoryIds.length)this.db.prepare(`DELETE FROM memories WHERE workspace_id=? AND id IN (${dependentMemoryIds.map(()=>'?').join(',')})`).run(workspaceId,...dependentMemoryIds)
+      this.db.prepare('DELETE FROM messages WHERE id=?').run(messageId)
+      for(const dependentId of dependentMemoryIds){this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId,workspaceId,'memory',now());this.syncJournal.enqueue(workspaceId,dependentId,'memory','delete',{id:dependentId},[dependentId]);this.activity(workspaceId,'lifecycle','deleted',dependentId,'memory',{})}
+      this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(messageId,workspaceId,'message',now())
+      this.syncJournal.enqueue(workspaceId,messageId,'message','delete',{id:messageId,cascade:true},[...ownedIds,...attachments.map((item)=>item.id),...relationships])
+      this.activity(workspaceId,'lifecycle','deleted',messageId,'message',{})
+    })}catch(error){for(const file of stagedFiles.reverse())renameSync(file.staged,file.source);throw error}
+    for(const file of stagedFiles)rmSync(file.staged,{force:true})
   }
 
   deleteObject(workspaceId: string, objectKind: 'document' | 'chat' | 'memory', objectId: string): void {
@@ -425,7 +493,9 @@ export class WorkspaceStore {
     for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId)
     objects.attachments = (objects.attachments ?? []).map((value) => {
       const row = value as Record<string, unknown>
-      return { ...row, data_base64: readFileSync(path.join(this.attachmentRoot, String(row.relative_path))).toString('base64') }
+      const bytes=readFileSync(this.attachmentPath(String(row.relative_path))),validated=validateAttachment(String(row.name),String(row.media_type),bytes)
+      if(validated.sha256!==String(row.sha256))throw new Error('Stored attachment integrity check failed')
+      return { ...row, data_base64: bytes.toString('base64') }
     })
     const archive = { version: 3 as const, exportedAt: now(), workspace, objects }
     return { ...archive, integrity: archiveIntegrity(archive) }
@@ -482,7 +552,7 @@ export class WorkspaceStore {
         const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,chatId=idMap.get(String(row.chat_id)),profileId=idMap.get(String(row.security_profile_id))
         if(!chatId||!profileId)continue
         const active=['queued','running'].includes(String(row.status)),status=active?'failed':String(row.status)
-        this.db.prepare('INSERT INTO executions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,chatId,row.parent_execution_id?idMap.get(String(row.parent_execution_id))??null:null,String(row.cli),row.executable==null?null:String(row.executable),row.cli_version==null?null:String(row.cli_version),row.model==null?null:String(row.model),String(row.device),profileId,String(row.prompt_sha256),status,Number(row.depth),row.started_at==null?null:String(row.started_at),active?now():row.finished_at==null?null:String(row.finished_at),row.exit_code==null?null:Number(row.exit_code),active?'restored_interrupted':row.error_code==null?null:String(row.error_code),active?'Archive captured a non-terminal run':row.error_message==null?null:String(row.error_message),String(row.created_at))
+        this.db.prepare('INSERT INTO executions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,chatId,row.source_message_id?idMap.get(String(row.source_message_id))??null:null,row.parent_execution_id?idMap.get(String(row.parent_execution_id))??null:null,String(row.cli),row.executable==null?null:String(row.executable),row.cli_version==null?null:String(row.cli_version),row.model==null?null:String(row.model),String(row.device),profileId,String(row.prompt_sha256),status,Number(row.depth),row.started_at==null?null:String(row.started_at),active?now():row.finished_at==null?null:String(row.finished_at),row.exit_code==null?null:Number(row.exit_code),active?'restored_interrupted':row.error_code==null?null:String(row.error_code),active?'Archive captured a non-terminal run':row.error_message==null?null:String(row.error_message),String(row.created_at))
       }
       for(const value of archive.objects.execution_events??[]){const row=value as Record<string,unknown>,executionId=idMap.get(String(row.execution_id));if(executionId)this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),executionId,Number(row.sequence),String(row.type),row.text==null?null:String(row.text),row.name==null?null:String(row.name),row.raw_type==null?null:String(row.raw_type),String(row.created_at))}
       for (const rowValue of archive.objects.memories ?? []) {
@@ -494,18 +564,21 @@ export class WorkspaceStore {
         const edge = edgeValue as Record<string, unknown>, from = idMap.get(String(edge.from_id)), to = idMap.get(String(edge.to_id))
         if (from && to) { const relationshipId = randomUUID(); idMap.set(String(edge.id), relationshipId); this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspace.id, from, to, String(edge.type), String(edge.created_at)) }
       }
+      if((archive.objects.attachments??[]).length>MAX_ATTACHMENTS_PER_WORKSPACE)throw new Error(`Workspace attachment limit of ${MAX_ATTACHMENTS_PER_WORKSPACE} exceeded`)
+      const restoredOwnerCounts=new Map<string,number>()
       for (const attachmentValue of archive.objects.attachments ?? []) {
         const attachment = attachmentValue as Record<string, unknown>
         const owner = idMap.get(String(attachment.owner_id))
-        if (!owner || !supportedAttachmentTypes.has(String(attachment.media_type))) continue
+        if (!owner) throw new Error('Attachment archive owner is missing')
+        const ownerCount=(restoredOwnerCounts.get(owner)??0)+1;if(ownerCount>MAX_ATTACHMENTS_PER_OWNER)throw new Error(`Attachment owner limit of ${MAX_ATTACHMENTS_PER_OWNER} exceeded`);restoredOwnerCounts.set(owner,ownerCount)
         const bytes = Buffer.from(String(attachment.data_base64 ?? ''), 'base64')
-        const sha256 = createHash('sha256').update(bytes).digest('hex')
+        const validated=validateAttachment(String(attachment.name),String(attachment.media_type),bytes),sha256 = validated.sha256
         if (sha256 !== String(attachment.sha256)) throw new Error('Attachment archive integrity check failed')
-        const id = randomUUID(), relativePath = `${id}-${path.basename(String(attachment.name))}`
+        const id = randomUUID(), relativePath = `${id}-${validated.safeName}`;idMap.set(String(attachment.id),id)
         const targetPath = path.join(this.attachmentRoot, relativePath)
-        writeFileSync(targetPath, bytes, { flag: 'wx' })
+        writeFileSync(targetPath, bytes, { flag: 'wx',mode:0o600 })
         writtenFiles.push(targetPath)
-        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, owner, path.basename(String(attachment.name)), String(attachment.media_type), sha256, relativePath, String(attachment.created_at))
+        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, owner, validated.safeName, String(attachment.media_type), sha256, relativePath, String(attachment.created_at))
       }
       for (const tombstoneValue of archive.objects.tombstones ?? []) {
         const tombstone = tombstoneValue as Record<string, unknown>, mapped = idMap.get(String(tombstone.object_id))!
@@ -570,6 +643,12 @@ export class WorkspaceStore {
     this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, category, action, objectId, objectKind, JSON.stringify(metadata), now())
   }
   private indexText(workspaceId: string, objectId: string, kind: ObjectKind, revisionId: string | undefined, title: string, body: string): void { this.db.prepare('INSERT INTO search_fts VALUES (?,?,?,?,?,?)').run(workspaceId, objectId, kind, revisionId ?? null, title, body) }
+  private attachmentPath(relativePath:string):string{if(relativePath!==path.basename(relativePath)||relativePath.includes('\0'))throw new Error('Stored attachment path is invalid');return path.join(this.attachmentRoot,relativePath)}
+  private objectKindInWorkspace(workspaceId:string,id:string):'document'|'chat'|'message'|'memory'|undefined{
+    for(const [table,kind] of [['documents','document'],['chats','chat'],['memories','memory']] as const)if(this.db.prepare(`SELECT 1 FROM ${table} WHERE id=? AND workspace_id=?`).get(id,workspaceId))return kind
+    if(this.db.prepare('SELECT 1 FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=?').get(id,workspaceId))return'message'
+    return undefined
+  }
   private objectWorkspace(id: string, expectedKind?: string): string | undefined {
     const sources = expectedKind === 'document' ? [['documents', 'workspace_id']] : expectedKind === 'chat' ? [['chats', 'workspace_id']] : expectedKind === 'memory' ? [['memories', 'workspace_id']] : [
       ['documents', 'workspace_id'], ['chats', 'workspace_id'], ['memories', 'workspace_id'],

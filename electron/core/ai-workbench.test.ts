@@ -16,6 +16,12 @@ describe('AI workbench privilege boundary', () => {
     expect(adapterArgs('claude', 'hello')).not.toContain('--dangerously-skip-permissions')
     expect(adapterArgs('codex', 'private prompt')).not.toContain('private prompt')
     expect(adapterArgs('claude', 'private prompt')).not.toContain('private prompt')
+    expect(adapterArgs('codex', 'image', undefined, ['/safe/workspace/map.png'])).toEqual(expect.arrayContaining(['--image','/safe/workspace/map.png']))
+  })
+
+  it('rejects image delivery to adapters without a real image path', async () => {
+    const workbench = new CliWorkbench(vi.fn() as never, async()=>'/bin/claude')
+    await expect(workbench.start('no-image',{cli:'claude',prompt:'x',workspaceRoot:'/safe/workspace',profile,imagePaths:['/safe/workspace/map.png']},()=>{})).rejects.toThrow(/does not support image/)
   })
 
   it('rejects roots, secrets, and recursive lineage outside the profile', () => {
@@ -43,6 +49,7 @@ describe('AI workbench privilege boundary', () => {
     expect(spawn).toHaveBeenCalledWith('/trusted/bin/codex', expect.any(Array), expect.objectContaining({cwd:'/safe/workspace',shell:false}))
     const environment = capturedOptions!.env
     expect(Object.keys(environment).sort()).toEqual(['HOME','LANG','NO_COLOR','PATH','USER'])
+    expect(environment.PATH?.split(':')[0]).toBe('/trusted/bin')
     expect(child.stdin.read()?.toString()).toBe('hello')
     expect(events).toContainEqual(expect.objectContaining({type:'text',text:'done'}))
   })

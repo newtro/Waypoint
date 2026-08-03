@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cliCompatibility, detectCli, parseCliVersion, resolveExecutable } from './cli-capabilities.js'
+import { cliCompatibility, cliExecutionPath, cliSearchDirectories, detectCli, parseCliVersion, resolveExecutable } from './cli-capabilities.js'
 
 describe('cross-platform CLI capability detection', () => {
   it('uses PATHEXT for native Windows resolution', async () => {
@@ -8,6 +8,23 @@ describe('cross-platform CLI capability detection', () => {
       canAccess: async (candidate) => { if (!candidate.endsWith('codex.EXE')) throw new Error('missing') },
     })
     expect(found).toBe('C:\\Tools\\codex.EXE')
+  })
+
+  it('finds user-local Claude and the ChatGPT-bundled Codex with a Finder-style PATH', async () => {
+    const accessible = new Set([
+      '/Users/test/.local/bin/claude',
+      '/Applications/ChatGPT.app/Contents/Resources/codex',
+    ])
+    const canAccess = async (candidate: string) => { if (!accessible.has(candidate)) throw new Error('missing') }
+    const env = { PATH: '/usr/bin:/bin', HOME: '/Users/test' }
+    await expect(resolveExecutable('claude', { platform: 'darwin', env, canAccess })).resolves.toBe('/Users/test/.local/bin/claude')
+    await expect(resolveExecutable('codex', { platform: 'darwin', env, canAccess })).resolves.toBe('/Applications/ChatGPT.app/Contents/Resources/codex')
+    expect(cliSearchDirectories(env, 'darwin')).toContain('/opt/homebrew/bin')
+  })
+
+  it('builds a child PATH that keeps the resolved executable and its runtime dependencies reachable', () => {
+    expect(cliExecutionPath('/Users/test/.local/bin/claude', { PATH: '/usr/bin', HOME: '/Users/test' }, 'darwin').split(':'))
+      .toEqual(expect.arrayContaining(['/Users/test/.local/bin', '/usr/bin', '/opt/homebrew/bin']))
   })
 
   it('executes the exact resolved path without re-resolving the name', async () => {
@@ -21,7 +38,7 @@ describe('cross-platform CLI capability detection', () => {
 
   it('returns structured missing and malformed states', async () => {
     const missing = await detectCli('claude', { env: { PATH: '/none' }, canAccess: async () => { throw new Error('missing') } })
-    expect(missing).toMatchObject({ available: false, error: 'claude was not found on PATH' })
+    expect(missing).toMatchObject({ available: false, error: expect.stringContaining('supported local install location') })
     const malformed = await detectCli('claude', {
       env: { PATH: '/trusted' }, canAccess: async () => undefined,
       run: async () => ({ stdout: '', stderr: '' }),
