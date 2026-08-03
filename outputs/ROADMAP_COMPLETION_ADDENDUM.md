@@ -21,11 +21,12 @@ Status: canonical implementation-readiness addendum, 2026-08-03. This document o
 | P5 | Local cross-device command/control policy, UX, lease, and simulator | Real peer command execution and failover activation after two-instance/device security gates |
 | P6 | Rich local multi-provider/model and agent orchestration | New API providers, costs, remote devices, or unattended execution |
 | P7 | Local unified-calendar/meeting-copilot fixture contracts and review UX | Microsoft registration/tenant/account scopes, real data, writes, scheduling, and delivery |
+| P8 | Local memory consolidation / reflection proposals | Scheduled runs or low-risk auto-apply require a later explicit policy authorization |
 | V1 | Two isolated running app instances, then two physical Macs | Mac↔Windows matrix when Windows hardware is available |
 | E1 | Connector/public-ingress activation stream | Provider-by-provider user/employer authority, credentials, network, retention, and writes |
 | M1 | Mobile product/architecture prototype after V1 | Platform/store/push identities, physical devices, distribution, and publishing |
 
-P1 → P2 → P3 → P4 → P5 → P6 → P7 is the default safe-local order. A slice may be marked ineligible only for a documented dependency/authority reason; that does not authorize skipping its release gate. V1 follows all completed eligible local slices and precedes claims about sync, peer control, or mobile readiness.
+P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 is the default safe-local order. A slice may be marked ineligible only for a documented dependency/authority reason; that does not authorize skipping its release gate. V1 follows all completed eligible local slices and precedes claims about sync, peer control, or mobile readiness.
 
 ## P1 — proactive engine and webhook lab
 
@@ -124,6 +125,21 @@ Activate providers one at a time in this order: Outlook/calendar read-only; emai
 
 No account connection, app registration, employer/client data, credential, public endpoint, network exposure, background schedule, send/write, or external retention is authorized by this plan. Each provider must pass fixture → authorized sandbox → limited authorized account gates with separate security/privacy review.
 
+## P8 — local memory consolidation and reflection
+
+Borrow the useful pattern of Anthropic Managed Agents “Dreaming” without adopting its managed preview API. Waypoint’s slice stays subscription-first and invokes only an already signed-in local Codex or Claude Code CLI under the existing bounded execution/security profile. A user explicitly starts a workspace-scoped reflection over a bounded, visible source selection. The result is a new proposed revision set; it never overwrites canonical memory, notes, rules, relationships, or source content.
+
+Acceptance:
+
+- The review surface shows exact source IDs, revisions/digests, workspace, provider/CLI/version, prompt/policy version, budget, omissions, and per-proposal rationale. Cross-workspace or cross-client source selection fails closed.
+- Proposals identify duplicates, stale claims, and contradictions without silently choosing a winner; they may suggest merges, supersession, relationship edges, or learned rules, but every item supports diff, accept, edit, reject, and accept-selected controls.
+- Acceptance revalidates every source digest and policy immediately before an atomic write. Changed/deleted sources make the proposal stale. Source deletion cascades through owned proposal evidence and invalidates or deletes accepted derivatives under the existing provenance rules; no orphaned assertion survives as current truth.
+- Original source memory is immutable through the reflection path. Accepted revisions retain rollback lineage; rejection and rollback are durable and auditable. Backup/restore, hard deletion, sync schema, workspace isolation, interruption, crash recovery, cancellation, and bounded queue/output/runtime behavior pass adversarial tests.
+- Status visibly distinguishes queued, reviewing, proposed, stale, accepted/edited, rejected, rolled back, cancelled, failed, and killed. Audit and activity records remain content-minimized. The existing workspace/global kill and execution budgets dominate provider invocation.
+- Missing or signed-out CLIs produce a truthful unavailable state. No Anthropic/OpenAI API credential, managed-agent service, external account/data, model download, network service, or background execution is introduced.
+
+Later activation gate: scheduling and any narrowly defined low-risk auto-apply require separate user authorization, source categories, cadence/quiet hours, retention, finite budgets, notification/review policy, false-merge/contradiction thresholds, kill behavior, rollback drill, and an independent privacy/correctness review. The initial slice is explicit-run and review-required only.
+
 ## M1 — mobile companion
 
 After V1, decide iOS/Android order and prototype a narrow companion: explicit device enrollment/revocation, protected keys, encrypted bounded cache, quick text/photo/file capture, offline queue, conversation/search/briefing/commitment review, approve/reject/cancel, and privacy-redacted notifications. Desktop/relay remain the execution authority; mobile is not an unrestricted credential or agent broker.
@@ -134,7 +150,7 @@ Authority gates: platform order, minimum devices/OS, cache/biometric/cellular po
 
 ## V1 — deferred but mandatory sync validation
 
-After P1–P7 safe local slices that remain eligible, run two isolated production app-data roots/processes through the live relay, then two physical Macs. Cover enrollment/revocation/rotation, chats/messages, attachments/resume, document source/chunk rebuild, graph/commitments/rules/activities/meetings/triggers/capture-policy data, concurrent conflicts, offline work/delete, outage/recovery, re-enrollment, and anti-resurrection. Capture files/audio remain unsynced unless their explicit per-feature sync choices were approved.
+After P1–P8 safe local slices that remain eligible, run two isolated production app-data roots/processes through the live relay, then two physical Macs. Cover enrollment/revocation/rotation, chats/messages, attachments/resume, document source/chunk rebuild, graph/commitments/rules/activities/meetings/triggers/reflection proposals/capture-policy data, concurrent conflicts, offline work/delete, outage/recovery, re-enrollment, and anti-resurrection. Capture files/audio remain unsynced unless their explicit per-feature sync choices were approved.
 
 Mac↔Windows repeats the matrix on supported hardware before cross-platform release readiness. Simulation is useful evidence but never substitutes for physical-device, Windows, signing, update, connector, public-ingress, or mobile gates.
 

@@ -20,6 +20,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Email/Teams/Outlook/calendar/DevOps/webhooks | P1 local trigger/webhook simulation is implemented: bounded quarantined fixtures, suggested/paused rules, zero-effect dry runs, retry/dead-letter, kill/delete, audit, backup/restore, and strict provenance | Any public endpoint, app registration, account, tenant, credential, real data, schedule, external action, or write needs explicit authorization |
 | Multi-provider/model routing and multi-agent execution | R5 Slice 1 adds a versioned local Codex/Claude capability registry, explainable fail-closed route proposal/enforcement, attachment eligibility, and explicit no-fallback default; one-child lineage remains | Richer budgets/typed agents/peer execution and APIs/costs/providers require later gates and authorization |
 | Mobile companion | Planning only | R6 requires platform/distribution decisions; no store/push/publishing authority exists |
+| Memory consolidation / reflection | P8 implementation-ready plan only | Explicit local signed-in-CLI, review-required slice is safe later; scheduling and low-risk auto-apply require separate user policy authorization |
 
 ## Post-R5 safe sequencing
 
@@ -29,7 +30,7 @@ After Backup Slice 1, proactive webhooks/calendar remain external-authority gate
 
 Production local document ingestion and P1 local trigger/webhook simulation are complete. The next safe substantive phase is first-class local voice chat (no cloud API or implicit model download). Two-instance sync testing remains after the ordered safely implementable feature gates.
 
-The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: local triggers → live voice → CrisperWhisper meeting lab → opt-in whole-device activity capture → local peer-control policy/simulation → richer local orchestration → calendar/meeting fixture contracts → two-instance validation. Real accounts/connectors/public ingress, model installs, capture sync, peer activation, Windows/release, and mobile distribution remain separately authority/hardware gated.
+The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: live voice → CrisperWhisper meeting lab → opt-in whole-device activity capture → local peer-control policy/simulation → richer local orchestration → calendar/meeting fixture contracts → local memory consolidation/reflection → two-instance validation. Real accounts/connectors/public ingress, model installs, capture sync, peer activation, scheduled/auto-applied reflection, Windows/release, and mobile distribution remain separately authority/hardware gated.
 
 ## Sequencing decision
 

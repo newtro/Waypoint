@@ -308,3 +308,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Recompute exact event, rule, and run provenance before display or use; reject authority-shaped payload keys, non-record JSON, replay/staleness, tampering, and cross-workspace access rather than repairing data silently.
 - Keep retry/dead-letter history finite and truthful, make terminal dead letters idempotent, and let the workspace kill switch dominate evaluation.
 - Public ingress, schedules, real senders/accounts/data, models, outbound effects, and unattended stages remain separate activation decisions.
+
+## Memory consolidation / reflection pattern (2026-08-03)
+
+- Borrow the review-oriented pattern from Anthropic Managed Agents “Dreaming,” but do not integrate or imply use of Anthropic's preview, API-based managed feature. Waypoint remains signed-in-CLI-only and subscription-first for this slice.
+- Place local Memory Consolidation / Reflection at P8, after the earlier safe-local product slices and before V1 sync validation. It is explicit-run, workspace-scoped, source-bounded, budgeted, auditable, and killable.
+- Preserve canonical sources unchanged. CLI output becomes a separate proposed revision with exact provenance and diff/accept/edit/reject review; stale, duplicate, and contradictory claims remain explicit rather than silently merged.
+- Accepted changes retain rollback lineage and source-deletion cascade. Cross-workspace/client inputs fail closed, and backup/restore/deletion/sync must cover both proposals and accepted derivatives.
+- Scheduling and any low-risk auto-apply remain later, separately authorized policy stages with their own safety gate.
