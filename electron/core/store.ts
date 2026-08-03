@@ -8,8 +8,10 @@ import type { InboundChange, LocalMutation } from './sync/sync-store.js'
 import { archiveIntegrity, validateArchive } from './backup.js'
 import { assertSupportedSchema, createMigrationSnapshot, CURRENT_SCHEMA_VERSION, runMigrations, schemaVersion } from './migrations.js'
 import { MAX_ATTACHMENT_BYTES,MAX_ATTACHMENTS_PER_OWNER,MAX_ATTACHMENTS_PER_WORKSPACE,prepareAttachmentForProvider as prepareProviderAttachment,readAndValidateAttachment,validateAttachment,type AttachmentMetadata,type ProviderAttachmentPreparation } from './chat-attachments.js'
+import {extractSuggestions,SUGGESTION_EXTRACTOR,SUGGESTION_SCAN_LIMITS} from './derived-suggestions.js'
 
 const now = () => new Date().toISOString()
+const contentDigest=(value:string)=>createHash('sha256').update(value).digest('hex')
 
 export class WorkspaceStore {
   private readonly db: DatabaseSync
@@ -52,6 +54,8 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS security_profiles(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, roots_json TEXT NOT NULL, filesystem TEXT NOT NULL, network TEXT NOT NULL, tools_json TEXT NOT NULL, approval TEXT NOT NULL, max_duration_ms INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, peer_eligible INTEGER NOT NULL, secret_names_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(workspace_id,name));
       CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL, parent_execution_id TEXT REFERENCES executions(id) ON DELETE SET NULL, cli TEXT NOT NULL CHECK(cli IN ('codex','claude')), executable TEXT, cli_version TEXT, model TEXT, device TEXT NOT NULL, security_profile_id TEXT NOT NULL REFERENCES security_profiles(id), prompt_sha256 TEXT NOT NULL, status TEXT NOT NULL, depth INTEGER NOT NULL, started_at TEXT, finished_at TEXT, exit_code INTEGER, error_code TEXT, error_message TEXT, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS execution_events(id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, type TEXT NOT NULL, text TEXT, name TEXT, raw_type TEXT, created_at TEXT NOT NULL, UNIQUE(execution_id,sequence));
+      CREATE TABLE IF NOT EXISTS memory_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,source_role TEXT NOT NULL,category TEXT NOT NULL, title TEXT NOT NULL,body TEXT NOT NULL,source_excerpt TEXT NOT NULL,source_digest TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),accepted_object_id TEXT,resolved_at TEXT,created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS commitments(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES memory_suggestions(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,title TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('open','completed')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT);
       CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(workspace_id UNINDEXED, object_id UNINDEXED, object_kind UNINDEXED, revision_id UNINDEXED, title, body);
     `)
     const memoryColumns = this.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>
@@ -71,7 +75,15 @@ export class WorkspaceStore {
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(4, now())
     runMigrations(this.db, schemaVersion(this.db), [{ version: 5, apply: (database) => database.exec(`
       CREATE TABLE app_settings(key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
-    `) }, { version: 6, apply: (database) => { const columns=database.prepare('PRAGMA table_info(executions)').all() as Array<{name:string}>;if(!columns.some((column)=>column.name==='source_message_id'))database.exec('ALTER TABLE executions ADD COLUMN source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL') } }, {version:7,apply:(database)=>WorkspaceSyncJournal.install(database)}])
+    `) }, { version: 6, apply: (database) => { const columns=database.prepare('PRAGMA table_info(executions)').all() as Array<{name:string}>;if(!columns.some((column)=>column.name==='source_message_id'))database.exec('ALTER TABLE executions ADD COLUMN source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL') } }, {version:7,apply:(database)=>WorkspaceSyncJournal.install(database)},{version:8,apply:(database)=>database.exec(`CREATE TABLE IF NOT EXISTS memory_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,source_role TEXT NOT NULL,category TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,source_excerpt TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),accepted_object_id TEXT,resolved_at TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS commitments(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES memory_suggestions(id) ON DELETE CASCADE,source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,title TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('open','completed')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT);`)}])
+    runMigrations(this.db,schemaVersion(this.db),[{version:9,apply:(database)=>{
+      const columns=database.prepare('PRAGMA table_info(memory_suggestions)').all() as Array<{name:string}>
+      if(columns.some((column)=>column.name==='source_digest'))return
+      database.exec("ALTER TABLE memory_suggestions ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''")
+      const legacy=database.prepare('SELECT s.id,s.status,s.chat_id chatId,s.source_role sourceRole,s.source_excerpt sourceExcerpt,s.start_offset startOffset,s.end_offset endOffset,m.body,m.role,m.chat_id messageChatId FROM memory_suggestions s JOIN messages m ON m.id=s.source_message_id').all() as Array<Record<string,unknown>>
+      const update=database.prepare('UPDATE memory_suggestions SET source_digest=? WHERE id=?'),remove=database.prepare("DELETE FROM memory_suggestions WHERE id=? AND status='pending'")
+      for(const item of legacy){const body=String(item.body),exact=String(item.sourceExcerpt)===body.slice(Number(item.startOffset),Number(item.endOffset))&&String(item.sourceRole)===String(item.role)&&String(item.chatId)===String(item.messageChatId);if(exact)update.run(contentDigest(body),String(item.id));else if(item.status==='pending')remove.run(String(item.id));else update.run('legacy-unverified',String(item.id))}
+    }}])
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{id:string;localPath:string}>) {
       const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
       const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)
@@ -232,6 +244,32 @@ export class WorkspaceStore {
   listMemories(workspaceId: string): Array<{ id: string; title: string; body: string; sourceObjectId?: string; ownership: string; updatedAt: string }> {
     return this.db.prepare('SELECT id,title,body,source_object_id sourceObjectId,ownership,updated_at updatedAt FROM memories WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as unknown as Array<{ id: string; title: string; body: string; sourceObjectId?: string; ownership: string; updatedAt: string }>
   }
+
+  scanMemorySuggestions(workspaceId:string,chatId?:string):number{if(chatId)this.assertObjectInWorkspace(workspaceId,chatId,'chat');const rows=this.db.prepare(`SELECT m.id messageId,m.role,CASE WHEN length(m.body)<=? THEN m.body ELSE NULL END body,m.chat_id chatId FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=? ${chatId?'AND c.id=?':''} AND m.role!='system' ORDER BY m.created_at DESC LIMIT ?`).all(SUGGESTION_SCAN_LIMITS.maxMessageCharacters,...(chatId?[workspaceId,chatId]:[workspaceId]),SUGGESTION_SCAN_LIMITS.maxMessages) as Array<{messageId:string;role:string;body:string|null;chatId:string}>;let created=0,scannedCharacters=0;this.transaction(()=>{for(const row of rows){if(row.body===null)continue;if(scannedCharacters+row.body.length>SUGGESTION_SCAN_LIMITS.maxTotalCharacters)break;scannedCharacters+=row.body.length;const digest=contentDigest(row.body);for(const candidate of extractSuggestions(row.messageId,row.body)){if(candidate.confidence<SUGGESTION_EXTRACTOR.threshold||(candidate.category==='commitment'&&row.role!=='user'))continue;const result=this.db.prepare("INSERT OR IGNORE INTO memory_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',NULL,NULL,?)").run(randomUUID(),workspaceId,row.chatId,row.messageId,row.role,candidate.category,candidate.title,candidate.body,candidate.sourceExcerpt,digest,candidate.startOffset,candidate.endOffset,candidate.confidence,SUGGESTION_EXTRACTOR.provider,SUGGESTION_EXTRACTOR.version,candidate.fingerprint,now());created+=Number(result.changes);if(created>=SUGGESTION_EXTRACTOR.maxPerScan)break}if(created>=SUGGESTION_EXTRACTOR.maxPerScan)break}if(created)this.activity(workspaceId,'knowledge','suggestions.scanned',workspaceId,'workspace',{created,extractor:SUGGESTION_EXTRACTOR.provider,version:SUGGESTION_EXTRACTOR.version,scannedCharacters})});return created}
+
+  listMemorySuggestions(workspaceId:string,status:'pending'|'accepted'|'rejected'='pending'):Array<Record<string,unknown>>{return this.db.prepare('SELECT id,chat_id chatId,source_message_id sourceMessageId,source_role sourceRole,category,title,body,source_excerpt sourceExcerpt,start_offset startOffset,end_offset endOffset,confidence,extractor,extractor_version extractorVersion,status,accepted_object_id acceptedObjectId,resolved_at resolvedAt,created_at createdAt FROM memory_suggestions WHERE workspace_id=? AND status=? ORDER BY confidence DESC,created_at DESC').all(workspaceId,status) as Array<Record<string,unknown>>}
+
+  resolveMemorySuggestion(workspaceId:string,suggestionId:string,action:'accept'|'reject',edited?:{title:string;body:string}):{acceptedObjectId?:string;kind?:'memory'|'commitment'}{
+    return this.transaction(()=>{
+      const suggestion=this.db.prepare("SELECT s.*,m.body source_body,m.role current_source_role,m.chat_id current_chat_id FROM memory_suggestions s JOIN messages m ON m.id=s.source_message_id JOIN chats c ON c.id=m.chat_id WHERE s.id=? AND s.workspace_id=? AND c.workspace_id=? AND s.status='pending'").get(suggestionId,workspaceId,workspaceId) as Record<string,unknown>|undefined
+      if(!suggestion)throw new Error('Pending suggestion or source not found')
+      const sourceId=String(suggestion.source_message_id),sourceBody=String(suggestion.source_body),start=Number(suggestion.start_offset),end=Number(suggestion.end_offset)
+      if(String(suggestion.source_digest)!==contentDigest(sourceBody)||String(suggestion.source_excerpt)!==sourceBody.slice(start,end)||String(suggestion.source_role)!==String(suggestion.current_source_role)||String(suggestion.chat_id)!==String(suggestion.current_chat_id))throw new Error('Suggestion source changed; scan the conversation again')
+      if(action==='reject'){this.db.prepare("UPDATE memory_suggestions SET status='rejected',resolved_at=? WHERE id=? AND workspace_id=? AND status='pending'").run(now(),suggestionId,workspaceId);this.activity(workspaceId,'knowledge','suggestion.rejected',suggestionId,'suggestion',{category:suggestion.category});return{}}
+      const title=(edited?.title??String(suggestion.title)).trim().slice(0,300)||'Memory',body=(edited?.body??String(suggestion.body)).slice(0,10_000),timestamp=now()
+      if(!body.trim())throw new Error('Accepted suggestion body is required')
+      if(String(suggestion.category)==='commitment'){const id=randomUUID();this.db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,NULL)').run(id,workspaceId,suggestionId,sourceId,title,body,'open',timestamp,timestamp);this.db.prepare("UPDATE memory_suggestions SET status='accepted',accepted_object_id=?,resolved_at=? WHERE id=? AND status='pending'").run(id,timestamp,suggestionId);this.activity(workspaceId,'knowledge','commitment.accepted',id,'commitment',{suggestionId,sourceMessageId:sourceId});return{acceptedObjectId:id,kind:'commitment'}}
+      const id=randomUUID(),relationshipId=randomUUID()
+      this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,workspaceId,title,body,sourceId,'workspace-owned',timestamp,timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'memory','upsert',{id,title,body,sourceObjectId:sourceId,ownership:'workspace-owned',createdAt:timestamp,updatedAt:timestamp});this.indexText(workspaceId,id,'memory',undefined,title,body)
+      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId,workspaceId,sourceId,id,'derived_from',timestamp);this.syncJournal.enqueue(workspaceId,relationshipId,'relationship','upsert',{id:relationshipId,fromId:sourceId,toId:id,type:'derived_from',createdAt:timestamp})
+      this.db.prepare("UPDATE memory_suggestions SET status='accepted',accepted_object_id=?,resolved_at=? WHERE id=? AND status='pending'").run(id,timestamp,suggestionId);this.activity(workspaceId,'knowledge','suggestion.accepted',id,'memory',{suggestionId,category:suggestion.category,sourceMessageId:sourceId});return{acceptedObjectId:id,kind:'memory'}
+    })
+  }
+
+  listCommitments(workspaceId:string):Array<Record<string,unknown>>{return this.db.prepare('SELECT c.id,c.suggestion_id suggestionId,c.source_message_id sourceMessageId,c.title,c.body,c.status,c.created_at createdAt,c.updated_at updatedAt,c.completed_at completedAt,s.source_excerpt sourceExcerpt FROM commitments c JOIN memory_suggestions s ON s.id=c.suggestion_id WHERE c.workspace_id=? ORDER BY CASE c.status WHEN \'open\' THEN 0 ELSE 1 END,c.updated_at DESC').all(workspaceId) as Array<Record<string,unknown>>}
+
+  setCommitmentCompleted(workspaceId:string,commitmentId:string,completed:boolean):void{const timestamp=now(),result=this.db.prepare("UPDATE commitments SET status=?,updated_at=?,completed_at=? WHERE id=? AND workspace_id=?").run(completed?'completed':'open',timestamp,completed?timestamp:null,commitmentId,workspaceId);if(!result.changes)throw new Error('Commitment not found');this.activity(workspaceId,'knowledge',completed?'commitment.completed':'commitment.reopened',commitmentId,'commitment',{})}
 
   createDocument(workspaceId: string, title: string, body: string): { id: string; revisionId: string } {
     const id = randomUUID(), revisionId = randomUUID(), timestamp = now()
@@ -529,7 +567,7 @@ export class WorkspaceStore {
   exportWorkspace(workspaceId: string): ExportArchive {
     const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId) as Record<string, unknown> | undefined
     if (!workspace) throw new Error('Workspace not found')
-    const tables = ['documents','revisions','chats','messages','memories','relationships','attachments','activities','tombstones','security_profiles','executions','execution_events']
+    const tables = ['documents','revisions','chats','messages','memories','memory_suggestions','commitments','relationships','attachments','activities','tombstones','security_profiles','executions','execution_events']
     const objects: Record<string, unknown[]> = {}
     for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId)
     objects.attachments = (objects.attachments ?? []).map((value) => {
@@ -556,6 +594,8 @@ export class WorkspaceStore {
         for (const row of archive.objects[table] ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
       }
       for (const row of archive.objects.messages ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
+      for (const row of archive.objects.memory_suggestions ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
+      for (const row of archive.objects.commitments ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
       for (const row of archive.objects.tombstones ?? []) idMap.set(String((row as Record<string, unknown>).object_id), randomUUID())
       for (const row of archive.objects.executions ?? []) idMap.set(String((row as Record<string,unknown>).id),randomUUID())
       if((archive.objects.security_profiles??[]).length){
@@ -601,6 +641,8 @@ export class WorkspaceStore {
         this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.body), row.source_object_id ? idMap.get(String(row.source_object_id)) ?? null : null, String(row.ownership ?? 'workspace-owned'), String(row.created_at), String(row.updated_at))
         this.indexText(workspace.id, id, 'memory', undefined, String(row.title), String(row.body))
       }
+      for(const value of archive.objects.memory_suggestions??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,chatId=idMap.get(String(row.chat_id)),messageId=idMap.get(String(row.source_message_id));if(!chatId||!messageId)continue;this.db.prepare('INSERT INTO memory_suggestions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,chatId,messageId,String(row.source_role),String(row.category),String(row.title),String(row.body),String(row.source_excerpt),String(row.source_digest),Number(row.start_offset),Number(row.end_offset),Number(row.confidence),String(row.extractor),String(row.extractor_version),createHash('sha256').update(`${workspace.id}:${String(row.fingerprint)}`).digest('hex'),String(row.status),row.accepted_object_id?idMap.get(String(row.accepted_object_id))??null:null,row.resolved_at==null?null:String(row.resolved_at),String(row.created_at))}
+      for(const value of archive.objects.commitments??[]){const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,suggestionId=idMap.get(String(row.suggestion_id)),messageId=idMap.get(String(row.source_message_id));if(!suggestionId||!messageId)continue;this.db.prepare('INSERT INTO commitments VALUES (?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,suggestionId,messageId,String(row.title),String(row.body),String(row.status),String(row.created_at),String(row.updated_at),row.completed_at==null?null:String(row.completed_at))}
       for (const edgeValue of archive.objects.relationships ?? []) {
         const edge = edgeValue as Record<string, unknown>, from = idMap.get(String(edge.from_id)), to = idMap.get(String(edge.to_id))
         if (from && to) { const relationshipId = randomUUID(); idMap.set(String(edge.id), relationshipId); this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspace.id, from, to, String(edge.type), String(edge.created_at)) }
@@ -640,7 +682,7 @@ export class WorkspaceStore {
   }
 
   counts(): Record<string, number> {
-    const tables = ['workspaces','documents','revisions','chats','messages','memories','relationships','attachments','embeddings','activities','tombstones','queued_work','security_profiles','executions','execution_events','search_fts']
+    const tables = ['workspaces','documents','revisions','chats','messages','memories','memory_suggestions','commitments','relationships','attachments','embeddings','activities','tombstones','queued_work','security_profiles','executions','execution_events','search_fts']
     return Object.fromEntries(tables.map((table) => [table, Number((this.db.prepare(`SELECT count(*) count FROM ${table}`).get() as { count: number }).count)]))
   }
 

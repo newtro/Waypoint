@@ -189,3 +189,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Use 4 MiB independently authenticated attachment chunks under the existing 25 MiB product limit. Persist missing-index requests and bounded sender metadata so an interrupted transfer resumes selectively without Docker or a new external service.
 - Preserve ambiguous snapshot enqueue authorization until its 24-hour expiry because a transport failure cannot prove server rejection. This prevents an accepted response from becoming permanently unauthorized at the queue head.
 - Production enrollment remains empty by default. Enabling a real workspace requires the explicit public-only first-owner bootstrap ceremony; no private key or workspace key is copied to the VM.
+
+## Post-R1 sequencing and R3 Slice 1 — 2026-08-03
+
+- Defer two-physical-device and Windows-native validation until planned feature implementation is finished, by explicit user direction. This does not convert missing hardware evidence into a pass and does not authorize signing, publishing, or update hosting.
+- Advance from hardware/credential-bound R2 to the locally implementable R3 slices while keeping R2's release gate open. R3 derived data may be developed locally because R0/R1 provenance, lifecycle, and sync foundations are established.
+- Commitments and memory extraction starts with deterministic `local-patterns-v1`, explicit markers, threshold 0.72, bounded scans, and no silent auto-save. This avoids new provider, credential, network, cost, or unattended-action authority.
+- Rejection prevents exact re-suggestion for the same extractor/source span but does not create a learned profile. Accepted commitments are source-owned; accepted ordinary memories follow the existing source-linked detach semantics.

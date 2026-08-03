@@ -43,6 +43,11 @@ declare global {
       captureChat(workspaceId: string, title: string, body: string): Promise<string>
       addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string,attachmentIds?:string[]): Promise<string>
       listMemories(workspaceId: string): Promise<Array<{ id: string; title: string; body: string; sourceObjectId?: string; ownership: string; updatedAt: string }>>
+      scanMemorySuggestions(workspaceId:string,chatId?:string):Promise<{created:number}>
+      listMemorySuggestions(workspaceId:string):Promise<Array<{id:string;chatId:string;sourceMessageId:string;sourceRole:string;category:'commitment'|'decision'|'fact'|'person'|'project'|'date';title:string;body:string;sourceExcerpt:string;startOffset:number;endOffset:number;confidence:number;extractor:string;extractorVersion:string;status:string;createdAt:string}>>
+      resolveMemorySuggestion(workspaceId:string,suggestionId:string,action:'accept'|'reject',title?:string,body?:string):Promise<{acceptedObjectId?:string;kind?:'memory'|'commitment'}>
+      listCommitments(workspaceId:string):Promise<Array<{id:string;suggestionId:string;sourceMessageId:string;title:string;body:string;status:'open'|'completed';sourceExcerpt:string;createdAt:string;updatedAt:string;completedAt?:string}>>
+      setCommitmentCompleted(workspaceId:string,commitmentId:string,completed:boolean):Promise<{ok:true}>
       createMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string): Promise<string>
       captureMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned?: boolean): Promise<string>
       createRelationship(workspaceId: string, fromId: string, toId: string, type: string): Promise<string>

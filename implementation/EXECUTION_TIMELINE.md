@@ -108,3 +108,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Expanded the isolated peer matrix through conflicts, offline deletion, graph updates, re-enrollment, three-peer isolation, old-epoch drain, malicious snapshot rejection, outage recovery, and dropped attachment chunks.
 - Repaired every blocker/high independent-review finding through repeated adversarial passes; terminal reviewer and deployment evidence are recorded in `implementation/R1_DESKTOP_SYNC_EVIDENCE.md`.
 - Physical two-Mac validation and Windows-native verification remain honest hardware-contingent gates; they are not represented by the isolated same-Mac matrix.
+
+## R3 Slice 1 — commitments and review-first memory (2026-08-03)
+
+- Persisted the canonical promised-feature status audit and advanced past authority/hardware-bound R2 evidence to the next safe R3 slice without claiming Windows release readiness.
+- Added deterministic local suggestions, exact provenance/digest validation, typed source-owned commitments, explicit accept/edit-and-accept/reject controls, completion state, migration 9, backup/restore support, and chat-first Knowledge integration.
+- Independent review initially found two highs: stale/non-exact provenance and excessive main-process scan exposure. Repairs added atomic source validation and conservative lazy scan budgets; additional lifecycle/isolation fixtures and truthful terminal-action labeling were added before re-review.
+- A second review found and drove repair of schema-8 pending-suggestion migration. Final independent verdict: blocker 0 / high 0 / medium 0 / low 1. Terminal gate: 49 suites / 235 tests, lint, build, zero production vulnerabilities, native macOS package, runtime closure, diff hygiene, and isolated-profile native launch.
