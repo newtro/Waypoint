@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
+import {R0_PROTOCOL_CONTRACT} from './protocol-contract.js'
 import type { CausalClock, InboundChange, LocalMutation, SyncOperation } from './sync-store.js'
 
 const now=()=>new Date().toISOString()
-const RETENTION_MS=90*86_400_000
+const RETENTION_MS=R0_PROTOCOL_CONTRACT.retention.tombstoneMinimumDays*86_400_000
 
 function dominates(left:CausalClock,right:CausalClock):boolean{const devices=new Set([...Object.keys(left),...Object.keys(right)]);let greater=false;for(const device of devices){const l=left[device]??0,r=right[device]??0;if(l<r)return false;if(l>r)greater=true}return greater}
 function canonical(value:unknown):unknown{return Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,canonical(item)])):value}

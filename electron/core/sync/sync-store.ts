@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import {R0_PROTOCOL_CONTRACT} from './protocol-contract.js'
 
 export type SyncOperation = 'upsert' | 'delete'
 export type CausalClock = Record<string, number>
@@ -89,7 +90,7 @@ export class SyncStateStore {
         retain_until TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(workspace_id,object_id)
       );
       CREATE TABLE IF NOT EXISTS sync_tombstone_acks(
-        workspace_id TEXT NOT NULL, object_id TEXT NOT NULL, device_id TEXT NOT NULL, acked_at TEXT NOT NULL,
+        workspace_id TEXT NOT NULL, object_id TEXT NOT NULL, change_id TEXT NOT NULL, device_id TEXT NOT NULL, acked_at TEXT NOT NULL,
         PRIMARY KEY(workspace_id,object_id,device_id)
       );
       CREATE TABLE IF NOT EXISTS sync_attachment_chunks(
@@ -106,6 +107,8 @@ export class SyncStateStore {
       CREATE TABLE IF NOT EXISTS sync_consumed_enrollments(request_id TEXT PRIMARY KEY,consumed_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sync_consumed_peer_requests(request_id TEXT PRIMARY KEY,consumed_at TEXT NOT NULL);
     `)
+    const ackColumns=this.db.prepare('PRAGMA table_info(sync_tombstone_acks)').all() as Array<{name:string}>
+    if(!ackColumns.some((column)=>column.name==='change_id'))this.db.exec('ALTER TABLE sync_tombstone_acks ADD COLUMN change_id TEXT')
   }
 
   close(): void { this.db.close() }
@@ -190,7 +193,9 @@ export class SyncStateStore {
       if (change.operation === 'delete') {
         this.db.prepare('DELETE FROM sync_conflicts WHERE workspace_id=? AND object_id=?').run(change.workspaceId, change.objectId)
         this.putHead(change)
-        const retainUntil = new Date(Date.now() + 90 * 86_400_000).toISOString()
+        const retainUntil=new Date(Date.now()+R0_PROTOCOL_CONTRACT.retention.tombstoneMinimumDays*86_400_000).toISOString()
+        const priorTombstone=this.db.prepare('SELECT change_id changeId FROM sync_tombstones WHERE workspace_id=? AND object_id=?').get(change.workspaceId,change.objectId) as {changeId:string}|undefined
+        if(priorTombstone?.changeId!==change.id)this.db.prepare('DELETE FROM sync_tombstone_acks WHERE workspace_id=? AND object_id=?').run(change.workspaceId,change.objectId)
         this.db.prepare('INSERT INTO sync_tombstones VALUES (?,?,?,?,?) ON CONFLICT(workspace_id,object_id) DO UPDATE SET change_id=excluded.change_id,retain_until=excluded.retain_until').run(change.workspaceId,change.objectId,change.id,retainUntil,timestamp())
         return 'applied'
       }
@@ -231,15 +236,17 @@ export class SyncStateStore {
     return (this.db.prepare('SELECT * FROM sync_conflicts WHERE workspace_id=? AND object_id=? ORDER BY change_id').all(workspaceId,objectId) as Array<Record<string,unknown>>).map((row)=>({workspaceId:String(row.workspace_id),objectId:String(row.object_id),objectKind:String(row.object_kind),operation:'upsert',changeId:String(row.change_id),clock:JSON.parse(String(row.clock_json)),payload:JSON.parse(String(row.payload_json))}))
   }
 
-  acknowledgeTombstone(workspaceId:string, objectId:string, deviceId:string): void {
+  acknowledgeTombstone(workspaceId:string, objectId:string, changeId:string, deviceId:string): void {
     const active=this.db.prepare("SELECT 1 FROM sync_devices WHERE id=? AND workspace_id=? AND status='active'").get(deviceId,workspaceId)
     if(!active)throw new Error('Only an active device can acknowledge a tombstone')
-    this.db.prepare('INSERT OR REPLACE INTO sync_tombstone_acks VALUES (?,?,?,?)').run(workspaceId,objectId,deviceId,timestamp())
+    const tombstone=this.db.prepare('SELECT 1 FROM sync_tombstones WHERE workspace_id=? AND object_id=? AND change_id=?').get(workspaceId,objectId,changeId)
+    if(!tombstone)throw new Error('Tombstone acknowledgement must match the current delete change')
+    this.db.prepare('INSERT OR REPLACE INTO sync_tombstone_acks(workspace_id,object_id,change_id,device_id,acked_at) VALUES (?,?,?,?,?)').run(workspaceId,objectId,changeId,deviceId,timestamp())
   }
 
   purgeEligibleTombstones(workspaceId:string, at=timestamp()): string[] {
     const active=(this.db.prepare("SELECT id FROM sync_devices WHERE workspace_id=? AND status='active'").all(workspaceId) as Array<{id:string}>).map((row)=>row.id)
     const candidates=this.db.prepare('SELECT object_id objectId FROM sync_tombstones WHERE workspace_id=? AND retain_until<=?').all(workspaceId,at) as Array<{objectId:string}>
-    return candidates.filter(({objectId})=>active.every((deviceId)=>this.db.prepare('SELECT 1 FROM sync_tombstone_acks WHERE workspace_id=? AND object_id=? AND device_id=?').get(workspaceId,objectId,deviceId))).map((row)=>row.objectId)
+    return candidates.filter(({objectId})=>active.every((deviceId)=>this.db.prepare('SELECT 1 FROM sync_tombstone_acks a JOIN sync_tombstones t ON t.workspace_id=a.workspace_id AND t.object_id=a.object_id AND t.change_id=a.change_id WHERE a.workspace_id=? AND a.object_id=? AND a.device_id=?').get(workspaceId,objectId,deviceId))).map((row)=>row.objectId)
   }
 }

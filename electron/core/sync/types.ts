@@ -18,6 +18,7 @@ export interface SignedEncryptedEnvelope {
   keyEpoch: number
   sequence: number
   createdAt: string
+  expiresAt: string
   nonce: string
   ciphertext: string
   signature: string

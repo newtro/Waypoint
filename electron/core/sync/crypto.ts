@@ -1,16 +1,19 @@
 import sodium from 'libsodium-wrappers-sumo'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { DeviceIdentity, DeviceKeyPair, EnrollmentApproval, EnrollmentRequest, SignedEncryptedEnvelope } from './types.js'
 import type { ChunkCrypto } from './attachment-transfer.js'
+import {R0_PROTOCOL_CONTRACT,validateRecoveryManifest,type RecoveryManifest} from './protocol-contract.js'
 
 const utf8 = (value: string) => sodium.from_string(value)
 const b64 = (value: Uint8Array) => sodium.to_base64(value, sodium.base64_variants.ORIGINAL)
 const unb64 = (value: string) => sodium.from_base64(value, sodium.base64_variants.ORIGINAL)
+const recoveryCore=(value:Omit<RecoveryManifest,'checksum'>)=>JSON.stringify([value.format,value.version,value.workspaceId,value.createdAt,value.kdf,value.opslimit,value.memlimitBytes,value.cipher,value.salt,value.nonce,value.wrappedWorkspaceKey])
+const recoveryChecksum=(value:Omit<RecoveryManifest,'checksum'>)=>`sha256-${createHash('sha256').update(recoveryCore(value)).digest('hex')}`
 
 function canonicalEnvelope(envelope: Omit<SignedEncryptedEnvelope, 'signature'>): string {
   return JSON.stringify([
     envelope.version, envelope.envelopeId, envelope.workspaceId, envelope.senderDeviceId,
-    envelope.recipientDeviceId, envelope.keyEpoch, envelope.sequence, envelope.createdAt, envelope.nonce, envelope.ciphertext,
+    envelope.recipientDeviceId,envelope.keyEpoch,envelope.sequence,envelope.createdAt,envelope.expiresAt,envelope.nonce,envelope.ciphertext,
   ])
 }
 
@@ -45,6 +48,28 @@ export class WaypointCrypto {
     return b64(sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES))
   }
 
+  createRecoveryManifest(workspaceId:string,workspaceKey:string,passphrase:string,now=new Date()):RecoveryManifest{
+    if(!/^[A-Za-z0-9_-]{16,128}$/.test(workspaceId))throw new Error('Recovery requires an opaque workspace identifier')
+    if(passphrase.length<12||passphrase.length>1024)throw new Error('Recovery passphrase must contain 12 to 1024 characters')
+    const salt=sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES),nonce=sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
+    const key=sodium.crypto_pwhash(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES,passphrase,salt,R0_PROTOCOL_CONTRACT.recovery.opslimit,R0_PROTOCOL_CONTRACT.recovery.memlimitBytes,sodium.crypto_pwhash_ALG_ARGON2ID13)
+    const header=[R0_PROTOCOL_CONTRACT.recovery.format,R0_PROTOCOL_CONTRACT.recovery.version,workspaceId,now.toISOString()]
+    const wrapped=sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(unb64(workspaceKey),utf8(JSON.stringify(header)),null,nonce,key)
+    const core:Omit<RecoveryManifest,'checksum'>={format:R0_PROTOCOL_CONTRACT.recovery.format,version:R0_PROTOCOL_CONTRACT.recovery.version,workspaceId,createdAt:now.toISOString(),kdf:R0_PROTOCOL_CONTRACT.recovery.kdf,opslimit:R0_PROTOCOL_CONTRACT.recovery.opslimit,memlimitBytes:R0_PROTOCOL_CONTRACT.recovery.memlimitBytes,cipher:R0_PROTOCOL_CONTRACT.recovery.cipher,salt:b64(salt),nonce:b64(nonce),wrappedWorkspaceKey:b64(wrapped)}
+    return{...core,checksum:recoveryChecksum(core)}
+  }
+
+  recoverWorkspaceKey(value:unknown,passphrase:string,now=new Date()):string{
+    if(passphrase.length<12||passphrase.length>1024)throw new Error('Recovery passphrase must contain 12 to 1024 characters')
+    const manifest=validateRecoveryManifest(value,now),{checksum,...core}=manifest
+    if(recoveryChecksum(core)!==checksum)throw new Error('Recovery manifest checksum mismatch')
+    try{
+      const key=sodium.crypto_pwhash(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES,passphrase,unb64(manifest.salt),manifest.opslimit,manifest.memlimitBytes,sodium.crypto_pwhash_ALG_ARGON2ID13)
+      const header=[manifest.format,manifest.version,manifest.workspaceId,manifest.createdAt]
+      return b64(sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null,unb64(manifest.wrappedWorkspaceKey),utf8(JSON.stringify(header)),unb64(manifest.nonce),key))
+    }catch{throw new Error('Recovery artifact cannot be opened')}
+  }
+
   wrapWorkspaceKey(workspaceKey: string, recipient: DeviceIdentity): string {
     return b64(sodium.crypto_box_seal(unb64(workspaceKey), unb64(recipient.encryptionPublicKey)))
   }
@@ -70,9 +95,12 @@ export class WaypointCrypto {
     keyEpoch: number
     sequence: number
     now?: Date
+    ttlMs?:number
   }): SignedEncryptedEnvelope {
     const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
     if (!Number.isSafeInteger(input.keyEpoch) || input.keyEpoch < 1 || !Number.isSafeInteger(input.sequence) || input.sequence < 1) throw new Error('Valid key epoch and sequence are required')
+    const now=input.now??new Date(),ttlMs=input.ttlMs??R0_PROTOCOL_CONTRACT.retention.relayEnvelopeMaximumDays*86_400_000
+    if(!Number.isSafeInteger(ttlMs)||ttlMs<1||ttlMs>R0_PROTOCOL_CONTRACT.retention.relayEnvelopeMaximumDays*86_400_000)throw new Error('Envelope lifetime exceeds protocol policy')
     const header = [1, input.workspaceId, input.sender.deviceId, input.recipient.deviceId, input.keyEpoch, input.sequence]
     const plaintext = utf8(JSON.stringify(input.payload))
     const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
@@ -86,7 +114,7 @@ export class WaypointCrypto {
       recipientDeviceId: input.recipient.deviceId,
       keyEpoch: input.keyEpoch,
       sequence: input.sequence,
-      createdAt: (input.now ?? new Date()).toISOString(),
+      createdAt:now.toISOString(),expiresAt:new Date(now.getTime()+ttlMs).toISOString(),
       nonce: b64(nonce),
       ciphertext: b64(ciphertext),
     }
@@ -107,15 +135,19 @@ export class WaypointCrypto {
         envelope.recipientDeviceId !== input.recipient.deviceId) {
       throw new Error('Envelope identity mismatch')
     }
-    if (!sodium.crypto_sign_verify_detached(
-      unb64(envelope.signature), utf8(canonicalEnvelope(envelope)), unb64(input.sender.signingPublicKey),
-    )) throw new Error('Envelope signature is invalid')
+    if(!this.verifyEnvelopeSignature(envelope,input.sender))throw new Error('Envelope signature is invalid')
     if (!Number.isSafeInteger(envelope.keyEpoch) || envelope.keyEpoch < 1 || !Number.isSafeInteger(envelope.sequence) || envelope.sequence < 1) throw new Error('Envelope epoch or sequence is invalid')
+    const created=Date.parse(envelope.createdAt),expires=Date.parse(envelope.expiresAt)
+    if(!Number.isFinite(created)||!Number.isFinite(expires)||expires<=created||expires-created>R0_PROTOCOL_CONTRACT.retention.relayEnvelopeMaximumDays*86_400_000)throw new Error('Envelope lifetime is invalid')
     const header = [1, envelope.workspaceId, envelope.senderDeviceId, envelope.recipientDeviceId, envelope.keyEpoch, envelope.sequence]
     const plaintext = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
       null, unb64(envelope.ciphertext), utf8(JSON.stringify(header)), unb64(envelope.nonce), unb64(input.workspaceKey),
     )
     return JSON.parse(sodium.to_string(plaintext)) as T
+  }
+
+  verifyEnvelopeSignature(envelope:SignedEncryptedEnvelope,sender:DeviceIdentity):boolean{
+    try{return envelope.version===R0_PROTOCOL_CONTRACT.protocolVersion&&envelope.senderDeviceId===sender.deviceId&&sodium.crypto_sign_verify_detached(unb64(envelope.signature),utf8(canonicalEnvelope(envelope)),unb64(sender.signingPublicKey))}catch{return false}
   }
 
   chunkCrypto(workspaceKey: string): ChunkCrypto {

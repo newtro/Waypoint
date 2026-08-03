@@ -1,16 +1,20 @@
 import type { OpaqueRelayMessage, RelayAuthority, RelayReceipt } from './types.js'
+import {R0_PROTOCOL_CONTRACT} from '../../electron/core/sync/protocol-contract.js'
 
 export class OpaqueRelayService {
   private readonly messages = new Map<string, OpaqueRelayMessage>()
   private readonly acceptedAt = new Map<string, string>()
   private readonly sequences = new Map<string, number>()
-  constructor(private readonly authority: RelayAuthority, private readonly limits={maxEnvelopeBytes:8*1024*1024,maxMessages:10_000,maxWorkspaceBytes:512*1024*1024}) {}
+  constructor(private readonly authority: RelayAuthority, private readonly limits:{maxEnvelopeBytes:number;maxMessages:number;maxWorkspaceBytes:number}=R0_PROTOCOL_CONTRACT.limits) {}
 
   enqueue(message: OpaqueRelayMessage, now = new Date()): RelayReceipt {
+    if(message.protocolVersion!==R0_PROTOCOL_CONTRACT.protocolVersion)throw new Error('Unsupported relay protocol version')
+    for(const [field,value] of [['message',message.messageId],['workspace',message.workspaceId],['recipient device',message.recipientDeviceId],['sender device',message.senderDeviceId]] as const)if(!/^[A-Za-z0-9_-]{16,128}$/.test(value))throw new Error(`Invalid opaque ${field} identifier`)
     if (!(message.envelope instanceof Uint8Array) || message.envelope.byteLength === 0) throw new Error('Opaque envelope is required')
     if (message.envelope.byteLength > this.limits.maxEnvelopeBytes) throw new Error('Opaque envelope exceeds relay limit')
     const expires=Date.parse(message.expiresAt),created=Date.parse(message.createdAt)
     if(!Number.isFinite(expires)||!Number.isFinite(created)||expires<=now.getTime()||created>now.getTime()+30_000||expires<=created)throw new Error('Expired or invalid envelope is rejected')
+    if(expires-created>R0_PROTOCOL_CONTRACT.retention.relayEnvelopeMaximumDays*86_400_000)throw new Error('Envelope lifetime exceeds relay policy')
     const existing = this.messages.get(message.messageId)
     if (existing) {
       if (!sameMessage(existing, message)) throw new Error('Message identifier collision')
@@ -62,7 +66,7 @@ export class OpaqueRelayService {
 }
 
 function sameMessage(left: OpaqueRelayMessage, right: OpaqueRelayMessage): boolean {
-  return left.workspaceId === right.workspaceId && left.recipientDeviceId === right.recipientDeviceId &&
+  return left.protocolVersion===right.protocolVersion&&left.workspaceId === right.workspaceId && left.recipientDeviceId === right.recipientDeviceId &&
     left.senderDeviceId === right.senderDeviceId && left.createdAt === right.createdAt &&
     left.keyEpoch === right.keyEpoch && left.sequence === right.sequence &&
     left.expiresAt === right.expiresAt && Buffer.from(left.envelope).equals(Buffer.from(right.envelope))

@@ -1,4 +1,5 @@
 export interface OpaqueRelayMessage {
+  protocolVersion: number
   messageId: string
   workspaceId: string
   recipientDeviceId: string

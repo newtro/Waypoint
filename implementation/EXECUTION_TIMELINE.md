@@ -77,3 +77,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Status: blocked before implementation. The phase exit gate requires explicit user approval of node region/account/cost ceiling, relay-visible metadata, recovery method, peer-expiry/tombstone policy, backup retention, supported platform matrix, and release identity. Those approvals are not present in the canonical decision log.
 - R1 additionally requires user-owned AWS/DNS/TLS/firewall/backup authority; R2 requires Windows hardware and signing/notarization identities. R3 fixture work is permitted only after R0, so it was not started out of order.
 - No source, external account, credential, service, deployment, or third-party data was touched. Resume condition: record the R0 decisions and obtain explicit user approval, then execute its protocol-fixture and independent privacy/security review gate.
+
+## 2026-08-03 — R0 local authority/protocol freeze
+
+- Executor: primary implementation task. Reviewer: fresh independent context receiving the acceptance criteria and diff without builder rationale.
+- Status: completed under the clarified authorization to select conservative local defaults. Scope: `implementation/R0_PROTOCOL_FREEZE_PLAN.md`; evidence: `implementation/R0_PROTOCOL_FREEZE_EVIDENCE.md`.
+- The independent first pass found 3 high/3 medium issues; all were repaired. Final independent severity verdict: blocker 0, high 0, medium 0, low 0.
+- Final gate: 35 suites / 179 tests, lint, build, zero-vulnerability high audit, native macOS package, packaged runtime closure, and diff-check pass.
+- External stop remains: no AWS/Ubuntu deployment, public transport, Windows/signing environment, external credentials, accounts, or data.

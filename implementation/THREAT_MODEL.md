@@ -50,6 +50,17 @@ Adversaries include a malicious document or prompt, compromised renderer, malici
 - Representative local embedding runtime license, package size, memory, latency, and retrieval quality.
 - Full Mac/Windows/coordinator convergence, revocation, and deletion tests.
 
+## R0 future-surface threat freeze
+
+| Surface | Conservative default | Required later evidence |
+|---|---|---|
+| Connector ingress and webhooks | Disabled; external payload is untrusted, quarantined data and cannot grant scopes or trigger writes | Signed source, replay/idempotency, tenant binding, prompt-injection, retention, and provider-confirmed deletion tests |
+| Audio capture | Disabled; explicit visible recording and consent reminder required; local-only retention by default | Permission denial, interruption, disk pressure, consent UX, transcript provenance/correction, export, and cascade deletion |
+| Notifications | Content-redacted by default; no lock-screen body; no authority-bearing action without unlock/approval | Platform privacy, spoofing, stale action, revocation, and accessibility tests |
+| Mobile loss | No mobile enrollment in R0; future keys must use platform protection and revocation stops only future access | Lost/offline device, protected storage, fresh-snapshot re-enrollment, notification privacy, and store-policy review |
+| Model/provider fallback | Disabled across provider, device, region, account, or cost boundary unless an approved policy names it | Capability mismatch, auth expiry, privacy policy, cost, cancellation, and no-eligible-route tests |
+| Unattended execution | Disabled; local explicit approval and existing bounded profile remain authoritative | Schedule permission snapshot, budget, kill switch, recursion, side-effect idempotency, and recovery tests |
+
 ## Phase 3 local-foundation update
 
 - Authenticated encryption and signatures use a pinned official libsodium JS/WASM distribution behind a narrow trusted-process facade. The dependency, wrapper integration, protocol composition, key lifecycle, and packaging still require continuing review; audited primitives do not make a custom protocol automatically safe.
