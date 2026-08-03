@@ -139,3 +139,23 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - CLI handoff is capability-specific. Waypoint passes supported images to Codex through its native `--image` flag and text through stdin; it passes text to Claude through stdin. This is not a claim of provider receipt or understanding. PDF/DOCX remain local sources until a separately reviewed extraction or provider path exists.
 - The attachment allowlist, integrity validation, limits, private permissions, and generated storage paths are security boundaries. Original filenames are display/provenance metadata, never storage paths.
 - New Chat creates a selected empty durable conversation immediately. It does not manufacture an unsent “first message.”
+
+## Future implementation-readiness decisions (2026-08-03)
+
+- Future work follows the ordered gates in `outputs/FUTURE_IMPLEMENTATION_READINESS.md`: authority/protocol freeze; real secure relay; Windows/release readiness; second-brain experience; proactive intake/automations; provider/agent orchestration; then mobile companion. Local fixture work may overlap, but no simulation substitutes for real platform, network, provider, or physical-device evidence.
+- The Ubuntu/AWS node remains an opaque, least-privilege relay installed through a native Docker-free path. Real provisioning, DNS/TLS/firewall exposure, AWS cost, region, credentials, backups, and teardown require explicit user authorization. Employer networks require employer authorization.
+- Personal and employer accounts/tenants are separate data boundaries. Connector read, durable ingest, model access, draft, and external write are distinct grants. Microsoft 365, Teams, Outlook, calendar, Azure DevOps, webhook registration, app credentials, real data, and sends/writes require provider-specific user authorization and employer approval where applicable.
+- Second-brain facts, commitments, learned rules, briefings, and transcripts are provenance-bearing derived data. The safe default is reviewable suggestion rather than silent permanent memory or new authority; source revision and deletion lifecycle remain enforceable.
+- Audio capture is a separate consent and retention boundary. It cannot record covertly or imply participant/legal consent, and upload/sync/transcription choices require explicit policy.
+- Provider fallback and agent delegation cannot cross a provider, device, region, account, workspace, cost, or security boundary implicitly. Child authority is capped by both parent authority and the executing device's profile; recursive/budget limits and complete lineage are mandatory.
+- Mobile begins as a capture/review companion. Peer-equivalent execution, audio, broad background behavior, store publication, push credentials, and distribution are later authorization gates, not assumptions.
+- Apple/Windows signing identities, notarization, update hosting, public distribution, and production release channels require explicit credential custody and release authorization. Uninstall must distinguish application removal from deliberate workspace deletion.
+
+## Chat-first UI decisions (2026-08-03)
+
+- Primary navigation belongs in a persistent left rail. Knowledge, activity, health, and settings are compact secondary entries; knowledge opens only when invoked so it cannot compete with chat.
+- Desktop transcript and composer use the whole central pane with responsive gutters. There is no fixed narrow reading column or permanent right panel.
+- Conversation history defaults to date groups and recent-first order. A–Z intentionally becomes one alphabetical group, and search covers titles plus message content.
+- Hard-delete and note management stay reachable but unobtrusive. Conversation-derived notes are created with their provenance relationship in one transaction.
+- Right drawers and responsive navigation are modal overlays with explicit focus containment and restoration.
+- Window display, normal bounds, and maximized state are private local preferences. Restore validates live displays and bounds, recenters off-screen state, and falls back safely when state is corrupt or a monitor is disconnected.
