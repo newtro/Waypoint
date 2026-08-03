@@ -335,3 +335,9 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Store only workspace/client-scoped normalized tool identity, keyed/redacted context fingerprints, error class, tool/version context, timestamps, remediation and outcome. Never store secrets, raw sensitive arguments, prompts, or unbounded output.
 - Expiry, version/context change, explicit deletion, and later success invalidate or supersede stale knowledge. Overrides require a visible reason and receipt. Retention, deletion cascade, backup/sync, activity visibility, and deterministic isolation tests are mandatory.
 - This planning decision grants no provider, external account, network, schedule, autonomous retry, or tool-authority activation.
+# 2026-08-03 — P6D hosted-provider safety defaults
+
+- OpenRouter remains globally unavailable until a user stores a key in OS-protected storage and separately enables both the provider and live hosted requests.
+- Default budgets are conservative and integer-microdollar based: $5 monthly, $25 year-to-date, $0.10 per request, with an 80% warning threshold. A request reserves capacity atomically and carries provider-side output/max-price constraints; any reported overage is withheld but retained as authoritative charged usage.
+- Kimi is registered as the strategic route and DeepSeek as the everyday route only when the user supplies exact model IDs; Codex/Claude fallback must be explicitly selected and never widens workspace/device/tool authority.
+- Provider keys never enter workspace backup, sync, relay, or receipts. Usage receipts use keyed prompt provenance and minimized bounded fields.

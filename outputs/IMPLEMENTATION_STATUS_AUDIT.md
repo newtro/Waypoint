@@ -37,3 +37,8 @@ The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: live v
 R0 and the locally implementable R1 product path are complete. R2's remaining work is intrinsically tied to unavailable Windows hardware, signing identities, notarization, update hosting, or distribution authority. By explicit user direction, those validations remain deferred rather than blocking planned feature implementation. Work therefore advances to R3 in its canonical slice order without claiming R2 release readiness.
 
 Conservative R3 defaults are local-only, suggestion-first, no silent memory, no background send, no external account/source, and exact source provenance. These choices do not widen authority and may be made under the user's standing product-decision authorization.
+# P6D status update — 2026-08-03
+
+- **Complete (fixture/contract gate):** protected OpenRouter configuration, explicit activation, model routing preferences, cost dashboard/caps, subscription fallback, hosted chat execution/cancel, durable receipts/timeline, backup/restore, incremental/replacement sync, and provider-domain settings seam.
+- **Not claimed:** live OpenRouter health/model availability or paid execution. Those require the user to enter a key and explicitly activate hosted requests.
+- **Non-gating follow-up:** transactional hosted completion and finer-grained durable provider progress events.

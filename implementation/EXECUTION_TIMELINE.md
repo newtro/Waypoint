@@ -240,3 +240,9 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - A final spot-check caught missing supersession provenance in replacement snapshots. Incremental and full snapshot serialization now share one minimized payload builder; a new regression proves superseded snapshot recovery without raw command content. Final review: SHIP (0 blocker/0 high/0 medium/0 low).
 - Terminal gate passed 75 files/352 tests, lint, build, dependency verification/SBOM, macOS arm64 package/runtime closure, isolated native launch, and diff check. Evidence: `implementation/P6C_TOOL_FAILURE_LEARNING_EVIDENCE.md`.
 - Executor: primary task. Reviewer: fresh independent adversarial context after targeted verification.
+
+## P6D — OpenRouter provider integration (2026-08-03)
+
+- Implemented protected, explicitly activated OpenRouter routing with model preferences, budget/cost observability, subscription fallback, hosted chat provenance, cancellation, lifecycle, backup, and sync.
+- Initial review found 1 blocker/4 high; production chat wiring, atomic reservation, incremental sync, bounded response handling, and keyed prompt provenance were repaired. Re-review exposed replacement-sync and hard-cap gaps; final repairs added targeted full snapshots, provider token/max-price controls, and authoritative over-cap accounting.
+- Final review: SHIP (0 blocker/0 high/2 medium/0 low). Full gate: 78 files/365 tests, lint/build, dependency audit, macOS package/runtime closure, and diff hygiene. No live provider call or key use occurred.

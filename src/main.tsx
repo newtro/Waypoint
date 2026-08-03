@@ -7,6 +7,7 @@ import { reconcileSelectedChatId, RefreshGate } from './chat-selection';
 import { groupChatHistory, type HistorySort } from './chat-history';
 import waypointMark from './assets/waypoint-mark.svg';
 import './styles.css';
+import './provider-settings.css';
 
 type Chat = Awaited<ReturnType<Window['waypoint']['listChats']>>[number];
 type Document = Awaited<ReturnType<Window['waypoint']['listDocuments']>>[number];
@@ -24,6 +25,7 @@ type WebhookChannels=Awaited<ReturnType<Window['waypoint']['webhookChannels']>>;
 type WebhookEvent=Awaited<ReturnType<Window['waypoint']['listWebhookEvents']>>[number];
 type ToolSettings=Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>;type ToolReceipt=Awaited<ReturnType<Window['waypoint']['toolGatewayReceipts']>>[number];type ToolCapabilities=Awaited<ReturnType<Window['waypoint']['toolGatewayCapabilities']>>;
 type ToolFailure=Awaited<ReturnType<Window['waypoint']['toolFailures']>>[number];
+type OpenRouterStatus=Awaited<ReturnType<Window['waypoint']['openRouterStatus']>>;
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -41,7 +43,7 @@ export function App() {
     [capabilities, setCapabilities] = useState<Awaited<ReturnType<Window['waypoint']['cliCapabilities']>>>([]);
   const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]),
     [attachmentBusy, setAttachmentBusy] = useState(false),
-    [chatCli, setChatCli] = useState<'codex' | 'claude'>('codex'),
+    [chatCli, setChatCli] = useState<'codex' | 'claude'|'openrouter'>('codex'),
     [routeProposal,setRouteProposal]=useState<Awaited<ReturnType<Window['waypoint']['proposeChatRoute']>>>(),
     [selectedProfileId,setSelectedProfileId]=useState('');
   const [documentIndexes,setDocumentIndexes]=useState<Record<string,Awaited<ReturnType<Window['waypoint']['documentIndexStatus']>>>>({}),[documentImportBusy,setDocumentImportBusy]=useState(false);
@@ -77,6 +79,7 @@ export function App() {
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
     [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>(),[webhookChannels,setWebhookChannels]=useState<WebhookChannels>(),[webhookEvents,setWebhookEvents]=useState<WebhookEvent[]>([]);
   const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolFailures,setToolFailures]=useState<ToolFailure[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState('');
+  const[openRouter,setOpenRouter]=useState<OpenRouterStatus>(),[openRouterKey,setOpenRouterKeyDraft]=useState('');
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
@@ -95,6 +98,9 @@ export function App() {
   }
   async function loadToolGateway(){if(!workspace)return;const[settings,receipts,failures,caps]=await Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities()]);setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps)}
   async function saveToolGateway(overrides:Partial<ToolSettings>={}){if(!workspace||!toolSettings)return;const next={stopped:overrides.stopped??toolSettings.stopped,denyPatterns:overrides.denyPatterns??denyDraft.split('\n').map((item)=>item.trim()).filter(Boolean),suppressCommit:overrides.suppressCommit??toolSettings.suppressCommit,suppressPush:overrides.suppressPush??toolSettings.suppressPush};setToolSettings(await window.waypoint.updateToolGatewaySettings(workspace.id,next));await loadToolGateway();setNotice(next.stopped?'Tool Gateway stopped for this workspace.':'Tool Gateway policy saved.')}
+  async function refreshOpenRouter(){setOpenRouter(await window.waypoint.openRouterStatus())}
+  async function storeOpenRouterKey(){if(!openRouterKey)return;await window.waypoint.setOpenRouterKey(openRouterKey);setOpenRouterKeyDraft('');await refreshOpenRouter();setNotice('OpenRouter key stored in OS-protected storage. It is not shown, exported, backed up, synced, or relayed.')}
+  async function saveOpenRouterSettings(){if(!openRouter)return;await window.waypoint.updateOpenRouterSettings(openRouter.settings);await refreshOpenRouter();setNotice('OpenRouter preferences saved. Hosted requests occur only when the provider and explicit hosted-request switch are enabled.')}
   async function openAutomations() {
     if (!workspace) return;
     const[nextPlaybooks,nextLab,nextSync]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id),window.waypoint.desktopSyncStatus(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);if(nextSync.configured){const[channels,events]=await Promise.all([window.waypoint.webhookChannels(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]);setWebhookChannels(channels);setWebhookEvents(events)}else{setWebhookChannels(undefined);setWebhookEvents([])}
@@ -351,11 +357,12 @@ export function App() {
   }, [workspace, selectedChatId, chats]);
   useEffect(() => {
     const available = capabilities.find((item) => item.available && item.compatible !== false);
-    if (!available || capabilities.some((item) => item.name === chatCli && item.available && item.compatible !== false)) return;
+    if(chatCli==='openrouter')return;if (!available || capabilities.some((item) => item.name === chatCli && item.available && item.compatible !== false)) return;
     const timer = window.setTimeout(() => setChatCli(available.name), 0);
     return () => window.clearTimeout(timer);
   }, [capabilities, chatCli]);
-  useEffect(()=>{if(!workspace||!selectedChatId||!selectedProfileId)return;const token=routeGate.current.begin(),timer=window.setTimeout(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)},0),ids=attachments.filter((item)=>item.ownerId===selectedChatId).map((item)=>item.id);void window.waypoint.proposeChatRoute(workspace.id,selectedChatId,chatCli,selectedProfileId,ids,false).then((route)=>{if(routeGate.current.isCurrent(token))setRouteProposal(route)}).catch(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)});return()=>window.clearTimeout(timer)},[workspace,selectedChatId,chatCli,selectedProfileId,attachments]);
+  useEffect(()=>{if(!workspace||!selectedChatId||!selectedProfileId||chatCli==='openrouter'){const clear=window.setTimeout(()=>setRouteProposal(undefined),0);return()=>window.clearTimeout(clear)}const token=routeGate.current.begin(),timer=window.setTimeout(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)},0),ids=attachments.filter((item)=>item.ownerId===selectedChatId).map((item)=>item.id);void window.waypoint.proposeChatRoute(workspace.id,selectedChatId,chatCli,selectedProfileId,ids,false).then((route)=>{if(routeGate.current.isCurrent(token))setRouteProposal(route)}).catch(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)});return()=>window.clearTimeout(timer)},[workspace,selectedChatId,chatCli,selectedProfileId,attachments]);
+  useEffect(()=>{void Promise.resolve().then(refreshOpenRouter).catch(()=>undefined)},[]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -379,7 +386,7 @@ export function App() {
     const timer = window.setTimeout(() => document.getElementById(`activity-target-${activityKnowledgeTarget}`)?.scrollIntoView({ block: 'center' }), 0);
     return () => window.clearTimeout(timer);
   }, [drawer, activityKnowledgeTarget]);
-  useEffect(()=>{if(drawer!=='settings'||!workspace)return;let current=true;void Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities()]).then(([settings,receipts,failures,caps])=>{if(!current)return;setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps)}).catch(showError);return()=>{current=false}},[drawer,workspace]);
+  useEffect(()=>{if(drawer!=='settings'||!workspace)return;let current=true;void Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities(),window.waypoint.openRouterStatus()]).then(([settings,receipts,failures,caps,provider])=>{if(!current)return;setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps);setOpenRouter(provider)}).catch(showError);return()=>{current=false}},[drawer,workspace]);
   useEffect(()=>{if(drawer!=='knowledge'||!workspace)return;let current=true;void Promise.all(documents.map(async(item)=>[item.id,await window.waypoint.documentIndexStatus(workspace.id,item.id)] as const)).then((entries)=>{if(current)setDocumentIndexes(Object.fromEntries(entries))}).catch(showError);return()=>{current=false}},[drawer,workspace,documents]);
   useEffect(() => {
     if (!drawer && !sidebarOpen) return;
@@ -464,14 +471,16 @@ export function App() {
     const form = event.currentTarget,
       data = new FormData(form),
       prompt = String(data.get('prompt') ?? ''),
-      cli = String(data.get('cli') ?? chatCli) as 'codex' | 'claude',
+      cli = String(data.get('cli') ?? chatCli) as 'codex' | 'claude'|'openrouter',
       profile = String(data.get('profile') ?? ''),
       model = String(data.get('model') ?? '') || undefined,
       attachmentIds = attachments.filter((item) => item.ownerId === chatId).map((item) => item.id);
     setError('');
     try {
-      const messageId = await window.waypoint.addMessage(workspace.id, chatId, 'user', prompt, attachmentIds),
-        started = await window.waypoint.runChat(workspace.id, chatId, messageId, cli, profile, prompt, model, undefined, attachmentIds);
+      if(cli==='openrouter'&&attachmentIds.length)throw new Error('OpenRouter file delivery is not enabled. Remove attachments or use an eligible local CLI; files remain local.');
+      const messageId = await window.waypoint.addMessage(workspace.id, chatId, 'user', prompt, attachmentIds);
+      if(cli==='openrouter'){const hosted=await window.waypoint.runOpenRouterChat({workspaceId:workspace.id,chatId,sourceMessageId:messageId,prompt,role:'everyday',attachmentIds});if(hosted.fallbackProvider){await window.waypoint.runChat(workspace.id,chatId,messageId,hosted.fallbackProvider,profile,prompt,model,undefined,[]);setNotice(hosted.reason??`Hosted cap reached; ${hosted.fallbackProvider} subscription fallback started.`)}else setNotice(`OpenRouter ${hosted.model} is responding within the reserved per-request cap…`);form.reset();await refresh();return}
+      const started = await window.waypoint.runChat(workspace.id, chatId, messageId, cli, profile, prompt, model, undefined, attachmentIds);
       form.reset();
       const unsupported = started.attachmentDelivery.unsupported;
       setNotice(unsupported.length ? `${unsupported.length} attachment${unsupported.length === 1 ? ' remains' : 's remain'} local because ${cli} cannot accept the file type.` : `${cli} is responding…`);
@@ -501,8 +510,8 @@ export function App() {
   }
   async function cancelRun(id: string) {
     try {
-      await window.waypoint.cancelExecution(id);
-      setNotice('Stopping the local CLI…');
+      const run=runs.find((item)=>item.id===id);if(run?.cli==='openrouter')await window.waypoint.cancelOpenRouterRun(workspace!.id,id);else await window.waypoint.cancelExecution(id);
+      setNotice(run?.cli==='openrouter'?'Stopping the hosted request…':'Stopping the local CLI…');
       await refresh();
     } catch (reason) {
       showError(reason);
@@ -924,7 +933,7 @@ export function App() {
           </button>
           <div>
             <strong>{selectedChat?.title || 'New conversation'}</strong>
-            <small>{chatCli} · local CLI</small>
+            <small>{chatCli} · {chatCli==='openrouter'?'hosted · explicit cost policy':'local CLI'}</small>
           </div>
           {recordingMeetingId && (
             <div className="recording-global" role="status">
@@ -990,7 +999,7 @@ export function App() {
                   </div>
                 </article>
               ))}
-              {chatRuns.map((value)=>{const run=value as ExecutionRunView,toolEvents=(run.events??[]).filter((event)=>event.type==='tool'||event.type==='agent'||event.type==='diagnostic');return <details className="execution-timeline" key={`timeline-${String(run.id)}`} open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):'Provider status'}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This CLI did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>})}
+              {chatRuns.map((value)=>{const run=value as ExecutionRunView,toolEvents=(run.events??[]).filter((event)=>['tool','agent','diagnostic','provider','progress','terminal','policy'].includes(String(event.type)));return <details className="execution-timeline" key={`timeline-${String(run.id)}`} open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):String(event.type??'Provider status')}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This provider did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>})}
               {chatRuns
                 .filter((run) => run.status !== 'completed')
                 .map((value) => {
@@ -1050,13 +1059,14 @@ export function App() {
                     <button type="button" className="attach" disabled={attachmentBusy} onClick={() => void chooseAttachments()} aria-label="Attach files">
                       ＋
                     </button>
-                    <select name="cli" value={chatCli} onChange={(event) => setChatCli(event.target.value as 'codex' | 'claude')} aria-label="AI provider">
+                    <select name="cli" value={chatCli} onChange={(event) => setChatCli(event.target.value as 'codex' | 'claude'|'openrouter')} aria-label="AI provider">
                       {capabilities.map((item) => (
                         <option key={item.name} value={item.name} disabled={!item.available || item.compatible === false}>
                           {item.name}
                           {!item.available ? ' · unavailable' : ''}
                         </option>
                       ))}
+                      <option value="openrouter" disabled={!openRouter?.capability.available}>OpenRouter{openRouter?.capability.available?' · hosted cost':` · ${openRouter?.capability.state.replaceAll('_',' ')??'not configured'}`}</option>
                     </select>
                     <select name="profile" value={selectedProfileId} onChange={(event)=>setSelectedProfileId(event.target.value)} aria-label="Security profile">
                       {profiles.map((item) => (
@@ -1071,8 +1081,8 @@ export function App() {
                     ↑
                   </button>
                 </div>
-                <p className="capability-copy">{chatCli === 'codex' ? 'Images and text can be passed to the Codex CLI. PDF and Word stay local.' : 'Text can be passed to Claude. Images, PDF, and Word stay local.'}</p>
-                <p className="route-copy" role="status">{routeProposal?.selected?`Route: ${routeProposal.selected} · local signed-in CLI · ${routeProposal.fallbackEnabled?'fallback enabled':'no fallback'} · ${routeProposal.securityProfileId}`:'No eligible local route. Check provider health; fallback remains disabled.'}</p>
+                <p className="capability-copy">{chatCli==='openrouter'?'Text only · hosted cost · attachments stay local · cancel available.':chatCli === 'codex' ? 'Images and text can be passed to the Codex CLI. PDF and Word stay local.' : 'Text can be passed to Claude. Images, PDF, and Word stay local.'}</p>
+                <p className="route-copy" role="status">{chatCli==='openrouter'?`${openRouter?.capability.reason??'OpenRouter status unavailable'} Fallback only at cap to the configured available subscription route.`:routeProposal?.selected?`Route: ${routeProposal.selected} · local signed-in CLI · ${routeProposal.fallbackEnabled?'fallback enabled':'no fallback'} · ${routeProposal.securityProfileId}`:'No eligible local route. Check provider health; fallback remains disabled.'}</p>
               </form>
               <small className="composer-hint">Enter to send · Shift Enter for a new line</small>
             </div>
@@ -1488,6 +1498,19 @@ export function App() {
                   <h4>Failure prevention</h4>
                   <p className="settings-copy">Equivalent active failures pause before retry. A changed tool/context or an explicit reason allows a truthful retry; success supersedes the warning.</p>
                   <div className="activity-list">{toolFailures.length?toolFailures.slice(0,20).map((item)=><article className="activity-item execution" key={item.id}><span/><div><strong>{item.tool} · {item.outcome}</strong><small>{item.errorClass}{item.remediation?` · remedy: ${item.remediation}`:''}</small><small>{item.outcome==='active'?`Expires ${new Date(item.expiresAt).toLocaleString()}`:`Superseded ${new Date(item.updatedAt).toLocaleString()}`}{item.hadOverride?' · reasoned retry':''}</small></div><button className="quiet-button" onClick={()=>void window.waypoint.deleteToolFailure(workspace!.id,item.id).then(loadToolGateway).catch(showError)}>Delete</button></article>):<p className="empty-copy">No learned tool failures in this workspace.</p>}</div>
+                </section>
+                <section>
+                  <h3>OpenRouter & hosted models</h3>
+                  <p className="drawer-intro">Optional hosted routing. Codex and Claude subscriptions remain the primary local CLI lanes. Kimi K3 and DeepSeek V4 Flash are roles until exact model IDs are configured and verified.</p>
+                  {openRouter&&<><div className={`automation-boundary ${openRouter.usage.summary.capReached?'warning':''}`} role="status"><strong>{openRouter.capability.state.replaceAll('_',' ')}</strong><span>{openRouter.capability.reason} · health {openRouter.capability.health.replaceAll('_',' ')}</span></div>
+                  <div className="provider-cost-grid"><article><small>This month</small><strong>${(openRouter.usage.summary.monthMicros/1_000_000).toFixed(2)}</strong><span>projected ${(openRouter.usage.summary.projectedMonthMicros/1_000_000).toFixed(2)}</span></article><article><small>Year to date</small><strong>${(openRouter.usage.summary.ytdMicros/1_000_000).toFixed(2)}</strong><span>{openRouter.usage.summary.capReached?'cap reached':openRouter.usage.summary.warning?'warning threshold':'within configured budget'}</span></article></div>
+                  <label className="meeting-consent">API key <input type="password" autoComplete="off" placeholder={openRouter.keyConfigured?'Protected key stored':'Enter key to protected storage'} value={openRouterKey} onChange={(event)=>setOpenRouterKeyDraft(event.target.value)}/></label><div className="drawer-actions"><button disabled={!openRouterKey} onClick={()=>void storeOpenRouterKey().catch(showError)}>Store protected key</button>{openRouter.keyConfigured&&<button className="secondary" onClick={()=>void window.waypoint.removeOpenRouterKey().then(refreshOpenRouter).catch(showError)}>Remove key</button>}</div>
+                  <label className="meeting-consent"><input type="checkbox" checked={openRouter.settings.enabled} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,enabled:event.target.checked,liveRequestsEnabled:event.target.checked?openRouter.settings.liveRequestsEnabled:false}})}/>Enable OpenRouter globally</label>
+                  <label className="meeting-consent"><input type="checkbox" checked={openRouter.settings.liveRequestsEnabled} disabled={!openRouter.settings.enabled||!openRouter.keyConfigured} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,liveRequestsEnabled:event.target.checked}})}/>Allow explicitly selected hosted requests (may incur cost)</label>
+                  <label className="settings-field">Strategic model ID <input placeholder="provider/model for Kimi K3" value={openRouter.settings.strategicModel} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,strategicModel:event.target.value}})}/></label><label className="settings-field">Everyday model ID <input placeholder="provider/model for DeepSeek V4 Flash" value={openRouter.settings.everydayModel} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,everydayModel:event.target.value}})}/></label>
+                  <div className="settings-grid"><label>Monthly cap (USD)<input type="number" min="0" step="1" value={openRouter.settings.monthlyCapMicros/1_000_000} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,monthlyCapMicros:Math.round(Number(event.target.value)*1_000_000)}})}/></label><label>YTD cap (USD)<input type="number" min="0" step="1" value={openRouter.settings.ytdCapMicros/1_000_000} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,ytdCapMicros:Math.round(Number(event.target.value)*1_000_000)}})}/></label><label>Warn at %<input type="number" min="1" max="100" value={openRouter.settings.warningPercent} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,warningPercent:Number(event.target.value)}})}/></label><label>Cap fallback<select value={openRouter.settings.fallbackProvider??'codex'} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,fallbackProvider:event.target.value as 'codex'|'claude'}})}><option value="codex">Codex subscription</option><option value="claude">Claude subscription</option></select></label></div>
+                  <div className="drawer-actions"><button onClick={()=>void saveOpenRouterSettings().catch(showError)}>Save provider settings</button></div>
+                  <h4>Cost breakdown</h4><div className="activity-list">{openRouter.usage.summary.byModel.length?openRouter.usage.summary.byModel.map((item)=><article className="provider-row" key={item.model}><strong>{item.model}</strong><span>${(item.costMicros/1_000_000).toFixed(4)}</span></article>):<p className="empty-copy">No hosted usage receipts. Setup and status checks make no provider call.</p>}</div></>}
                 </section>
                 <section>
                   <h3>Secure device sync</h3>
