@@ -339,6 +339,13 @@ declare global {
       diagnostics(workspaceId: string): Promise<DiagnosticsReport>;
       rebuildSearch(workspaceId: string): Promise<{ ok: true }>;
       exportDiagnostics(workspaceId: string): Promise<{ canceled: boolean }>;
+      toolGatewayCapabilities():Promise<{version:1;tools:Array<{name:string;version:string;effect:string}>;localClis:Array<{name:string;available:boolean;executable?:string;authentication:'existing-local-identity'}>;browser:{available:false;profiles:string[];reason:string};remoteProviders:{available:false;reason:string};crossDevice:{available:false;reason:string}}>;
+      toolGatewaySettings(workspaceId:string):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}>;
+      updateToolGatewaySettings(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean}):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}>;
+      toolGatewayReceipts(workspaceId:string,limit?:number):Promise<Array<{id:string;workspaceId:string;origin:'ui'|'ai';tool:string;status:string;summary:string;code?:string;notification?:string;outputBytes:number;truncated:boolean;startedAt:string;finishedAt:string;durationMs:number}>>;
+      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'terminal.run'|'local_cli.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
+      cancelTool(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
+      onToolProgress(listener:(event:unknown)=>void):()=>void;
     };
   }
 }

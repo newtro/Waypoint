@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
 import { cliExecutionPath, resolveExecutable, type CliName } from '../../spikes/cli-capabilities.js'
+import {redactToolText} from './tool-gateway.js'
 
 export type RunStatus = 'queued'|'running'|'completed'|'failed'|'canceled'|'timed_out'
 export type ExecutionEvent = { type: 'text'|'tool'|'agent'|'diagnostic'; text?: string; name?: string; rawType?: string }
@@ -55,7 +56,7 @@ export function parseEvent(cli: CliName, line: string): ExecutionEvent {
   if (cli === 'codex') {
     const item = value.item as Record<string, unknown>|undefined
     if (item?.type === 'agent_message' && typeof item.text === 'string') return { type: 'text', text: item.text, rawType: String(value.type ?? '') }
-    if (item?.type === 'command_execution') return { type: 'tool', name: 'command', rawType: String(value.type ?? '') }
+    if (item?.type === 'command_execution') {const phase=String(value.type??'').includes('started')?'started':String(value.type??'').includes('completed')?'completed':'progress',exit=typeof item.exit_code==='number'?` · exit ${item.exit_code}`:'',output=typeof item.aggregated_output==='string'?redactToolText(item.aggregated_output).trim().slice(0,1000):undefined;return{type:'tool',name:`Command ${phase}${exit}`,text:output,rawType:String(value.type??'')}}
   } else {
     const streamEvent=value.event as Record<string,unknown>|undefined,delta=streamEvent?.delta as Record<string,unknown>|undefined
     if(streamEvent?.type==='content_block_delta'&&delta?.type==='text_delta'&&typeof delta.text==='string')return{type:'text',text:delta.text,rawType:'stream_event.content_block_delta'}
@@ -63,10 +64,12 @@ export function parseEvent(cli: CliName, line: string): ExecutionEvent {
     const message = value.message as Record<string, unknown>|undefined
     const content = message?.content
     if (Array.isArray(content)) {
+      const result = content.find((part) => typeof part === 'object' && part && (part as Record<string,unknown>).type === 'tool_result') as Record<string,unknown>|undefined
+      if (result) return { type: 'tool', name: `Tool ${result.is_error===true?'failed':'completed'}`, text:typeof result.content==='string'?redactToolText(result.content).slice(0,1000):undefined, rawType:String(value.type??'') }
+      const tool = content.find((part) => typeof part === 'object' && part && (part as Record<string,unknown>).type === 'tool_use') as Record<string,unknown>|undefined
+      if (tool) return { type: 'tool', name: `${String(tool.name ?? 'tool')} started`, rawType: String(value.type ?? '') }
       const text = content.filter((part) => typeof part === 'object' && part && (part as Record<string,unknown>).type === 'text').map((part) => String((part as Record<string,unknown>).text ?? '')).join('')
       if (text) return { type: 'text', text, rawType: String(value.type ?? '') }
-      const tool = content.find((part) => typeof part === 'object' && part && (part as Record<string,unknown>).type === 'tool_use') as Record<string,unknown>|undefined
-      if (tool) return { type: 'tool', name: String(tool.name ?? 'tool'), rawType: String(value.type ?? '') }
     }
   }
   return { type: 'diagnostic', rawType: String(value.type ?? 'unknown') }

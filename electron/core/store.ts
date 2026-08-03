@@ -16,6 +16,7 @@ import { validateMeetingAudio, validateTranscript } from './meeting-audio.js';
 import { assertPlaybookDefinition, FIXTURE_CONNECTOR, fixtureDryRun, nextDailyOccurrence, playbookDefinitionDigest, playbookDefinitionJson } from './fixture-automations.js';
 import {parseExecutionBudget,securityProfileDigest} from './execution-budget.js';
 import {createLocalEventEnvelope,LOCAL_TRIGGER_AUTHORITY,LOCAL_TRIGGER_LIMITS,localTriggerDryRun,suggestedTriggerRule,type LocalTriggerPayload} from './proactive-triggers.js';
+import type {ToolReceipt} from './tool-gateway.js';
 
 const now = () => new Date().toISOString();
 const contentDigest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -42,6 +43,7 @@ export class WorkspaceStore {
     this.syncJournal = new WorkspaceSyncJournal(this.db);
     for (const workspace of this.db.prepare('SELECT id FROM workspaces').all() as Array<{ id: string }>) this.syncJournal.ensureWorkspace(workspace.id);
     this.reconcileInterruptedExecutions();
+    this.reconcileInterruptedToolReceipts();
     this.reconcileInterruptedMeetings();
     this.reconcileAttachmentFiles();
     this.reconcileMeetingFiles();
@@ -71,6 +73,9 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS local_trigger_rules(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,source_event_id TEXT NOT NULL UNIQUE REFERENCES local_events(id) ON DELETE CASCADE,statement TEXT NOT NULL,version INTEGER NOT NULL,definition_json TEXT NOT NULL,definition_digest TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('suggested','paused','killed')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS local_trigger_runs(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,rule_id TEXT NOT NULL REFERENCES local_trigger_rules(id) ON DELETE CASCADE,event_id TEXT NOT NULL REFERENCES local_events(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('dry_run','retrying','dead_letter')),attempt INTEGER NOT NULL,proposed_effects INTEGER NOT NULL CHECK(proposed_effects=0),run_digest TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(rule_id,event_id,run_digest,status,attempt));
       CREATE TABLE IF NOT EXISTS external_inbound_events(id TEXT PRIMARY KEY,source_event_id TEXT NOT NULL,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,channel_id TEXT NOT NULL,event_type TEXT NOT NULL,occurred_at TEXT NOT NULL,received_at TEXT NOT NULL,payload_json TEXT NOT NULL,payload_digest TEXT NOT NULL,status TEXT NOT NULL CHECK(status='quarantined'),created_at TEXT NOT NULL,UNIQUE(workspace_id,channel_id,source_event_id));
+      CREATE TABLE IF NOT EXISTS tool_gateway_settings(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,stopped INTEGER NOT NULL CHECK(stopped IN (0,1)),deny_patterns_json TEXT NOT NULL,suppress_commit INTEGER NOT NULL CHECK(suppress_commit IN (0,1)),suppress_push INTEGER NOT NULL CHECK(suppress_push IN (0,1)),updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS tool_gateway_receipts(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,origin TEXT NOT NULL CHECK(origin IN ('ui','ai')),tool TEXT NOT NULL,status TEXT NOT NULL,capability_version TEXT NOT NULL,device TEXT NOT NULL CHECK(device='local'),profile_name TEXT NOT NULL,policy_digest TEXT NOT NULL,summary TEXT NOT NULL,code TEXT,notification TEXT,rollback_ref TEXT,output_bytes INTEGER NOT NULL,truncated INTEGER NOT NULL CHECK(truncated IN (0,1)),started_at TEXT NOT NULL,finished_at TEXT NOT NULL,duration_ms INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_tool_gateway_receipts_workspace ON tool_gateway_receipts(workspace_id,started_at DESC,id);
       CREATE INDEX IF NOT EXISTS idx_document_chunks_search ON document_chunks(workspace_id,provider,provider_version,model,model_digest,policy_digest);
       CREATE TABLE IF NOT EXISTS activities(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, category TEXT NOT NULL, action TEXT NOT NULL, object_id TEXT, object_kind TEXT, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_activities_workspace_created ON activities(workspace_id,created_at DESC,id);
@@ -193,12 +198,14 @@ export class WorkspaceStore {
     ]);
     runMigrations(this.db,schemaVersion(this.db),[{version:16,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS local_trigger_settings(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,kill_switch INTEGER NOT NULL CHECK(kill_switch IN (0,1)),updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS local_events(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,schema_version INTEGER NOT NULL,source TEXT NOT NULL CHECK(source='webhook.fixture.local'),event_type TEXT NOT NULL,occurred_at TEXT NOT NULL,received_at TEXT NOT NULL,idempotency_key TEXT NOT NULL,payload_json TEXT NOT NULL,payload_digest TEXT NOT NULL,authority_json TEXT NOT NULL,status TEXT NOT NULL CHECK(status='quarantined'),UNIQUE(workspace_id,source,idempotency_key));CREATE TABLE IF NOT EXISTS local_trigger_rules(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,source_event_id TEXT NOT NULL UNIQUE REFERENCES local_events(id) ON DELETE CASCADE,statement TEXT NOT NULL,version INTEGER NOT NULL,definition_json TEXT NOT NULL,definition_digest TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('suggested','paused','killed')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS local_trigger_runs(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,rule_id TEXT NOT NULL REFERENCES local_trigger_rules(id) ON DELETE CASCADE,event_id TEXT NOT NULL REFERENCES local_events(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('dry_run','retrying','dead_letter')),attempt INTEGER NOT NULL,proposed_effects INTEGER NOT NULL CHECK(proposed_effects=0),run_digest TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(rule_id,event_id,run_digest,status,attempt))")}]);
     runMigrations(this.db,schemaVersion(this.db),[{version:17,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS external_inbound_events(id TEXT PRIMARY KEY,source_event_id TEXT NOT NULL,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,channel_id TEXT NOT NULL,event_type TEXT NOT NULL,occurred_at TEXT NOT NULL,received_at TEXT NOT NULL,payload_json TEXT NOT NULL,payload_digest TEXT NOT NULL,status TEXT NOT NULL CHECK(status='quarantined'),created_at TEXT NOT NULL,UNIQUE(workspace_id,channel_id,source_event_id))")}]);
+    runMigrations(this.db,schemaVersion(this.db),[{version:18,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS tool_gateway_settings(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,stopped INTEGER NOT NULL CHECK(stopped IN (0,1)),deny_patterns_json TEXT NOT NULL,suppress_commit INTEGER NOT NULL CHECK(suppress_commit IN (0,1)),suppress_push INTEGER NOT NULL CHECK(suppress_push IN (0,1)),updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS tool_gateway_receipts(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,origin TEXT NOT NULL CHECK(origin IN ('ui','ai')),tool TEXT NOT NULL,status TEXT NOT NULL,capability_version TEXT NOT NULL,device TEXT NOT NULL CHECK(device='local'),profile_name TEXT NOT NULL,policy_digest TEXT NOT NULL,summary TEXT NOT NULL,code TEXT,notification TEXT,rollback_ref TEXT,output_bytes INTEGER NOT NULL,truncated INTEGER NOT NULL CHECK(truncated IN (0,1)),started_at TEXT NOT NULL,finished_at TEXT NOT NULL,duration_ms INTEGER NOT NULL);CREATE INDEX IF NOT EXISTS idx_tool_gateway_receipts_workspace ON tool_gateway_receipts(workspace_id,started_at DESC,id)")}]);
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{ id: string; localPath: string }>) {
       const executionRoot = path.join(workspace.localPath, 'waypoint-workspaces', workspace.id);
       mkdirSync(executionRoot, { recursive: true });
       const existing = this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id);
       if (existing) this.db.prepare("UPDATE security_profiles SET roots_json=? WHERE workspace_id=? AND name='Workspace — conservative'").run(JSON.stringify([executionRoot]), workspace.id);
       else this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+      this.ensureAutonomousDeveloperProfile(workspace.id, workspace.localPath);
     }
   }
 
@@ -224,6 +231,7 @@ export class WorkspaceStore {
       }
     });
   }
+  private reconcileInterruptedToolReceipts():void{const timestamp=now(),rows=this.db.prepare("SELECT id,workspace_id workspaceId FROM tool_gateway_receipts WHERE status='running'").all() as Array<{id:string;workspaceId:string}>;for(const row of rows){this.db.prepare("UPDATE tool_gateway_receipts SET status='failed',summary='Waypoint stopped before the tool reached a terminal state',code='interrupted',finished_at=?,duration_ms=max(0,unixepoch(?)*1000-unixepoch(started_at)*1000) WHERE id=?").run(timestamp,timestamp,row.id);this.activity(row.workspaceId,'ai','tool.failed',row.id,'tool_receipt',{tool:'unknown',origin:'recovery',status:'failed',code:'interrupted'})}}
 
   createWorkspace(name: string, localPath: string): WorkspaceSummary {
     if (!name.trim() || !path.isAbsolute(localPath)) throw new Error('Workspace name and absolute local path are required');
@@ -508,6 +516,11 @@ export class WorkspaceStore {
     mkdirSync(executionRoot, { recursive: true });
     this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspaceId, 'Workspace — conservative', JSON.stringify([executionRoot]), 'read-only', 'provider-only', '[]', 'always', 120000, 1, 0, '[]', now());
     return id;
+  }
+
+  private ensureAutonomousDeveloperProfile(workspaceId:string,workspaceRoot:string):string{
+    const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Autonomous developer'").get(workspaceId) as {id:string}|undefined;if(existing)return existing.id
+    const id=randomUUID(),executionRoot=path.join(path.resolve(workspaceRoot),'waypoint-workspaces',workspaceId);mkdirSync(executionRoot,{recursive:true});this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspaceId,'Autonomous developer',JSON.stringify([executionRoot]),'workspace-write','provider-only',JSON.stringify(['tool-gateway','terminal','local-cli']),'on-write',120000,1,0,'[]',now());return id
   }
 
   listSecurityProfiles(workspaceId: string): Array<{
@@ -1929,7 +1942,7 @@ export class WorkspaceStore {
   exportWorkspace(workspaceId: string): ExportArchive {
     const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId) as Record<string, unknown> | undefined;
     if (!workspace) throw new Error('Workspace not found');
-    const tables = ['documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'document_import_sources', 'meetings', 'fixture_playbooks', 'fixture_playbook_runs', 'local_trigger_settings', 'local_events', 'local_trigger_rules', 'local_trigger_runs', 'external_inbound_events', 'activities', 'tombstones', 'security_profiles', 'executions', 'execution_events'];
+    const tables = ['documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'document_import_sources', 'meetings', 'fixture_playbooks', 'fixture_playbook_runs', 'local_trigger_settings', 'local_events', 'local_trigger_rules', 'local_trigger_runs', 'external_inbound_events','tool_gateway_settings','tool_gateway_receipts', 'activities', 'tombstones', 'security_profiles', 'executions', 'execution_events'];
     const objects: Record<string, unknown[]> = {};
     for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId);
     objects.attachments = (objects.attachments ?? []).map((value) => {
@@ -1970,7 +1983,8 @@ export class WorkspaceStore {
       this.transaction(() => {
         this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt);
         this.syncJournal.ensureWorkspace(workspace.id, 'snapshot_required');
-        this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+      this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+      this.ensureAutonomousDeveloperProfile(workspace.id, workspace.localPath);
         const idMap = new Map<string, string>();
         for (const table of ['documents', 'chats', 'memories'] as const) {
           for (const row of archive.objects[table] ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID());
@@ -2041,6 +2055,8 @@ export class WorkspaceStore {
             executionId = idMap.get(String(row.execution_id));
           if (executionId) this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), executionId, Number(row.sequence), String(row.type), row.text == null ? null : String(row.text), row.name == null ? null : String(row.name), row.raw_type == null ? null : String(row.raw_type), String(row.created_at));
         }
+        for(const value of archive.objects.tool_gateway_settings??[]){const row=value as Record<string,unknown>,patterns=JSON.parse(String(row.deny_patterns_json));if(!Array.isArray(patterns)||patterns.length>100||patterns.some((item)=>typeof item!=='string'||item.length>300))throw new Error('Tool gateway settings archive is invalid');for(const pattern of patterns)try{new RegExp(pattern,'i')}catch{throw new Error('Tool gateway settings archive is invalid')}this.db.prepare('INSERT INTO tool_gateway_settings VALUES (?,?,?,?,?,?)').run(workspace.id,0,JSON.stringify(patterns),Number(row.suppress_commit)===1?1:0,Number(row.suppress_push)===1?1:0,String(row.updated_at))}
+        for(const value of archive.objects.tool_gateway_receipts??[]){const row=value as Record<string,unknown>,origin=String(row.origin),status=String(row.status),tool=String(row.tool);if(!['ui','ai'].includes(origin)||!['completed','failed','canceled','timed_out','denied'].includes(status)||!['workspace.list_files','workspace.read_file','terminal.run','local_cli.run','waypoint.command'].includes(tool)||String(row.summary).length>500)throw new Error('Tool gateway receipt archive is invalid');this.db.prepare('INSERT INTO tool_gateway_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(),workspace.id,origin,tool,status,String(row.capability_version),'local',String(row.profile_name),String(row.policy_digest),String(row.summary),row.code==null?null:String(row.code),row.notification==null?null:String(row.notification),row.rollback_ref==null?null:String(row.rollback_ref),Number(row.output_bytes),Number(row.truncated)===1?1:0,String(row.started_at),String(row.finished_at),Number(row.duration_ms))}
         for (const value of archive.objects.fixture_playbooks ?? []) {
           const row = value as Record<string, unknown>,
             id = idMap.get(String(row.id))!,
@@ -2216,7 +2232,7 @@ export class WorkspaceStore {
   }
 
   counts(): Record<string, number> {
-    const tables = ['workspaces', 'documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'document_import_sources', 'document_chunks', 'embeddings', 'activities', 'tombstones', 'queued_work', 'security_profiles', 'executions', 'execution_events', 'search_fts'];
+    const tables = ['workspaces', 'documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'document_import_sources', 'document_chunks', 'embeddings','tool_gateway_settings','tool_gateway_receipts', 'activities', 'tombstones', 'queued_work', 'security_profiles', 'executions', 'execution_events', 'search_fts'];
     return Object.fromEntries(
       tables.map((table) => [
         table,
@@ -2308,6 +2324,21 @@ export class WorkspaceStore {
     });
   }
 
+  toolGatewaySettings(workspaceId:string):{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}{
+    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
+    const row=this.db.prepare('SELECT stopped,deny_patterns_json denyPatterns,suppress_commit suppressCommit,suppress_push suppressPush,updated_at updatedAt FROM tool_gateway_settings WHERE workspace_id=?').get(workspaceId) as Record<string,unknown>|undefined
+    return row?{stopped:Boolean(row.stopped),denyPatterns:JSON.parse(String(row.denyPatterns)) as string[],suppressCommit:Boolean(row.suppressCommit),suppressPush:Boolean(row.suppressPush),updatedAt:String(row.updatedAt)}:{stopped:false,denyPatterns:[],suppressCommit:false,suppressPush:false,updatedAt:now()}
+  }
+  setToolGatewaySettings(workspaceId:string,input:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean}){
+    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found');const timestamp=now();this.db.prepare('INSERT INTO tool_gateway_settings VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET stopped=excluded.stopped,deny_patterns_json=excluded.deny_patterns_json,suppress_commit=excluded.suppress_commit,suppress_push=excluded.suppress_push,updated_at=excluded.updated_at').run(workspaceId,input.stopped?1:0,JSON.stringify(input.denyPatterns),input.suppressCommit?1:0,input.suppressPush?1:0,timestamp);this.activity(workspaceId,'ai','tool.policy.updated',workspaceId,'workspace',{stopped:input.stopped,denyCount:input.denyPatterns.length,suppressCommit:input.suppressCommit,suppressPush:input.suppressPush});return{...input,updatedAt:timestamp}
+  }
+  saveToolReceipt(receipt:ToolReceipt){
+    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(receipt.workspaceId))return false
+    this.db.prepare('INSERT OR REPLACE INTO tool_gateway_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(receipt.id,receipt.workspaceId,receipt.origin,receipt.tool,receipt.status,receipt.capabilityVersion,'local',receipt.profileName,receipt.policyDigest,receipt.summary.slice(0,500),receipt.code??null,receipt.notification?.slice(0,300)??null,receipt.rollbackRef?.slice(0,200)??null,receipt.outputBytes,receipt.truncated?1:0,receipt.startedAt,receipt.finishedAt??receipt.startedAt,receipt.durationMs??0)
+    this.activity(receipt.workspaceId,'ai',`tool.${receipt.status}`,receipt.id,'tool_receipt',{tool:receipt.tool,origin:receipt.origin,status:receipt.status,code:receipt.code??null,outputBytes:receipt.outputBytes,truncated:receipt.truncated});return true
+  }
+  listToolReceipts(workspaceId:string,limit=100):ToolReceipt[]{if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found');return(this.db.prepare('SELECT id,workspace_id workspaceId,origin,tool,status,capability_version capabilityVersion,device,profile_name profileName,policy_digest policyDigest,summary,code,notification,rollback_ref rollbackRef,output_bytes outputBytes,truncated,started_at startedAt,finished_at finishedAt,duration_ms durationMs FROM tool_gateway_receipts WHERE workspace_id=? ORDER BY started_at DESC,id DESC LIMIT ?').all(workspaceId,Math.max(1,Math.min(500,limit))) as Array<Record<string,unknown>>).map((row)=>({...row,version:1,device:'local',truncated:Boolean(row.truncated),outputBytes:Number(row.outputBytes),durationMs:Number(row.durationMs)}) as unknown as ToolReceipt)}
+
   private activity(workspaceId: string, category: string, action: string, objectId: string, objectKind: string, metadata: Record<string, unknown>): void {
     this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, category, action, objectId, objectKind, JSON.stringify(metadata), now());
   }
@@ -2335,6 +2366,7 @@ export class WorkspaceStore {
       const row = this.db.prepare("SELECT cli||' · '||status title,chat_id chatId FROM executions WHERE id=? AND workspace_id=?").get(objectId, workspaceId) as { title: string; chatId: string } | undefined;
       return row ? { title: row.title, targetId: row.chatId, targetKind: 'chat' } : {};
     }
+    if(kind==='tool_receipt'){const row=this.db.prepare("SELECT tool||' · '||status title FROM tool_gateway_receipts WHERE id=? AND workspace_id=?").get(objectId,workspaceId) as {title:string}|undefined;return row??{}}
     const lookups: Record<string, [string, 'chat' | 'document' | 'memory' | 'commitment' | 'rule']> = {
       document: ['SELECT title FROM documents WHERE id=? AND workspace_id=?', 'document'],
       chat: ['SELECT title FROM chats WHERE id=? AND workspace_id=?', 'chat'],

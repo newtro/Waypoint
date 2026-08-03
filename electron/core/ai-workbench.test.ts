@@ -33,7 +33,9 @@ describe('AI workbench privilege boundary', () => {
 
   it('normalizes text, tool, and malformed output without treating output as authority', () => {
     expect(parseEvent('codex', JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'answer'}}))).toMatchObject({type:'text',text:'answer'})
-    expect(parseEvent('claude', JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Read'}]}}))).toMatchObject({type:'tool',name:'Read'})
+    expect(parseEvent('claude', JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Read'}]}}))).toMatchObject({type:'tool',name:'Read started'})
+    expect(parseEvent('claude',JSON.stringify({type:'user',message:{content:[{type:'tool_result',content:'ok'}]}}))).toMatchObject({type:'tool',name:'Tool completed',text:'ok'})
+    expect(parseEvent('claude',JSON.stringify({type:'user',message:{content:[{type:'text',text:'ignored'},{type:'tool_result',is_error:true,content:'token=hidden'}]}}))).toMatchObject({type:'tool',name:'Tool failed',text:'token=[REDACTED]'})
     expect(parseEvent('claude',JSON.stringify({type:'stream_event',event:{type:'content_block_delta',delta:{type:'text_delta',text:'live'}}}))).toMatchObject({type:'text',text:'live'})
     expect(parseEvent('claude',JSON.stringify({type:'system',subtype:'init',model:'claude-sonnet'}))).toMatchObject({type:'diagnostic',name:'model: claude-sonnet'})
     expect(parseEvent('codex', 'not json')).toEqual({type:'diagnostic',text:'CLI emitted an unparseable event'})

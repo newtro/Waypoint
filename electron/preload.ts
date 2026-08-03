@@ -299,4 +299,11 @@ contextBridge.exposeInMainWorld('waypoint', {
   diagnostics: (workspaceId: string) => ipcRenderer.invoke('waypoint:diagnostics', { workspaceId }),
   rebuildSearch: (workspaceId: string) => ipcRenderer.invoke('waypoint:rebuild-search', { workspaceId }),
   exportDiagnostics: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-diagnostics', { workspaceId }),
+  toolGatewayCapabilities:()=>ipcRenderer.invoke('waypoint:tool-gateway-capabilities'),
+  toolGatewaySettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-settings',{workspaceId}),
+  updateToolGatewaySettings:(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean})=>ipcRenderer.invoke('waypoint:tool-gateway-update-settings',{workspaceId,...value}),
+  toolGatewayReceipts:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-gateway-receipts',{workspaceId,limit}),
+  executeTool:(request:unknown)=>ipcRenderer.invoke('waypoint:tool-gateway-execute',request),
+  cancelTool:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-cancel',{workspaceId,runId}),
+  onToolProgress:(listener:(event:unknown)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:unknown)=>listener(value);ipcRenderer.on('waypoint:tool-gateway-progress',handler);return()=>ipcRenderer.removeListener('waypoint:tool-gateway-progress',handler)},
 });

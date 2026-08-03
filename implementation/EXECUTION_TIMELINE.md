@@ -223,3 +223,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Independent review drove two repair rounds across authorization, retention, duplicate identity, expiry, AES-GCM AAD, key recovery, backup provenance, and future-time bounds. Final verdict: SHIP, blocker 0 / high 0 / medium 0 / low 0.
 - Terminal local gate: 73 suites / 333 tests, lint/build, zero dependency vulnerabilities, SBOM, native arm64 package/runtime closure, and diff hygiene.
 - Hosted gate passed at the existing dedicated TLS endpoint: encrypted pre-migration backup, protected paired webhook key recovery, versioned release, relay-only restart, signed/replay/rotation/kill/delete tests, restart persistence, outage/recovery, exact synthetic cleanup, empty production registry, zero queued webhook data, and SQLite integrity `ok`. Caddy/PostgreSQL remained active and unchanged.
+
+## P6B — Generic Tool Gateway vertical slice (2026-08-03)
+
+- User selected P6B ahead of the remaining safe-local sequence. Acceptance is frozen in `implementation/P6B_TOOL_GATEWAY_PLAN.md`; no external account, provider, browser, peer, PR, deployment, or service authority is implied.
+- Built the trusted-main tool contract, workspace file reads, interactive terminal/local-CLI adapter, domain-only AI bridge, minimized durable receipts, UI status surface, and structured Codex/Claude in-chat timeline.
+- Initial adversarial review returned NO-SHIP (1 blocker/5 high). The repair denied AI-origin inherited process execution, made tool dispatch fail closed, added dominant POSIX process-tree cancellation, reassembled output before redaction, workspace-scoped progress, terminal exception receipts, per-workspace concurrency, strict timeouts, and Claude tool-result normalization.
+- Fresh re-review returned SHIP (0 blocker/0 high; 3 medium/1 low). Full gate passed 74 files/344 tests, lint, build, dependency/SBOM checks, macOS package/runtime closure, isolated native launch, and diff check. Evidence: `implementation/P6B_TOOL_GATEWAY_EVIDENCE.md`.
+- Executor: primary task. Reviewer: fresh independent adversarial context after targeted verification.

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ExportArchive } from './types.js'
 import { ARCHIVE_LIMITS } from './limits.js'
 
-const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','activities','tombstones','security_profiles','executions','execution_events'])
+const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','tool_gateway_settings','tool_gateway_receipts','activities','tombstones','security_profiles','executions','execution_events'])
 
 export function archiveIntegrity(archive: Omit<ExportArchive, 'integrity'>): string {
   return createHash('sha256').update(JSON.stringify(archive)).digest('hex')

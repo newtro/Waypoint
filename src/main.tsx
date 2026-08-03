@@ -22,6 +22,7 @@ type TranscriptionCapability = Awaited<ReturnType<Window['waypoint']['meetingTra
 type TriggerLab=Awaited<ReturnType<Window['waypoint']['listLocalTriggerLab']>>;
 type WebhookChannels=Awaited<ReturnType<Window['waypoint']['webhookChannels']>>;
 type WebhookEvent=Awaited<ReturnType<Window['waypoint']['listWebhookEvents']>>[number];
+type ToolSettings=Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>;type ToolReceipt=Awaited<ReturnType<Window['waypoint']['toolGatewayReceipts']>>[number];type ToolCapabilities=Awaited<ReturnType<Window['waypoint']['toolGatewayCapabilities']>>;
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -74,6 +75,7 @@ export function App() {
     [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>();
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
     [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>(),[webhookChannels,setWebhookChannels]=useState<WebhookChannels>(),[webhookEvents,setWebhookEvents]=useState<WebhookEvent[]>([]);
+  const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState('');
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
@@ -90,6 +92,8 @@ export function App() {
   function showError(reason: unknown) {
     setError(reason instanceof Error ? reason.message : String(reason));
   }
+  async function loadToolGateway(){if(!workspace)return;const[settings,receipts,caps]=await Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolGatewayCapabilities()]);setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolCapabilities(caps)}
+  async function saveToolGateway(overrides:Partial<ToolSettings>={}){if(!workspace||!toolSettings)return;const next={stopped:overrides.stopped??toolSettings.stopped,denyPatterns:overrides.denyPatterns??denyDraft.split('\n').map((item)=>item.trim()).filter(Boolean),suppressCommit:overrides.suppressCommit??toolSettings.suppressCommit,suppressPush:overrides.suppressPush??toolSettings.suppressPush};setToolSettings(await window.waypoint.updateToolGatewaySettings(workspace.id,next));await loadToolGateway();setNotice(next.stopped?'Tool Gateway stopped for this workspace.':'Tool Gateway policy saved.')}
   async function openAutomations() {
     if (!workspace) return;
     const[nextPlaybooks,nextLab,nextSync]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id),window.waypoint.desktopSyncStatus(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);if(nextSync.configured){const[channels,events]=await Promise.all([window.waypoint.webhookChannels(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]);setWebhookChannels(channels);setWebhookEvents(events)}else{setWebhookChannels(undefined);setWebhookEvents([])}
@@ -374,6 +378,7 @@ export function App() {
     const timer = window.setTimeout(() => document.getElementById(`activity-target-${activityKnowledgeTarget}`)?.scrollIntoView({ block: 'center' }), 0);
     return () => window.clearTimeout(timer);
   }, [drawer, activityKnowledgeTarget]);
+  useEffect(()=>{if(drawer!=='settings'||!workspace)return;let current=true;void Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolGatewayCapabilities()]).then(([settings,receipts,caps])=>{if(!current)return;setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolCapabilities(caps)}).catch(showError);return()=>{current=false}},[drawer,workspace]);
   useEffect(()=>{if(drawer!=='knowledge'||!workspace)return;let current=true;void Promise.all(documents.map(async(item)=>[item.id,await window.waypoint.documentIndexStatus(workspace.id,item.id)] as const)).then((entries)=>{if(current)setDocumentIndexes(Object.fromEntries(entries))}).catch(showError);return()=>{current=false}},[drawer,workspace,documents]);
   useEffect(() => {
     if (!drawer && !sidebarOpen) return;
@@ -984,6 +989,7 @@ export function App() {
                   </div>
                 </article>
               ))}
+              {chatRuns.map((value)=>{const run=value as ExecutionRunView,toolEvents=(run.events??[]).filter((event)=>event.type==='tool'||event.type==='agent'||event.type==='diagnostic');return <details className="execution-timeline" key={`timeline-${String(run.id)}`} open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):'Provider status'}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This CLI did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>})}
               {chatRuns
                 .filter((run) => run.status !== 'completed')
                 .map((value) => {
@@ -1472,6 +1478,13 @@ export function App() {
             )}
             {drawer === 'settings' && (
               <div className="drawer-body">
+                <section>
+                  <h3>AI Tool Gateway</h3>
+                  <p className="drawer-intro">Trusted local commands use the Autonomous Developer profile. Receipts are bounded and redacted; browser, hosted providers, cross-device tools, PRs, and deployment remain unavailable.</p>
+                  {toolSettings&&<><div className="automation-boundary" role="status"><strong>{toolSettings.stopped?'Stopped':'Ready · local only'}</strong><span>environment inherited · secrets hidden · deny-list policy</span></div><label className="meeting-consent">Deny patterns (one regular expression per line)<textarea value={denyDraft} onChange={(event)=>setDenyDraft(event.target.value)} rows={4}/></label><label className="meeting-consent"><input type="checkbox" checked={toolSettings.suppressCommit} onChange={(event)=>void saveToolGateway({suppressCommit:event.target.checked}).catch(showError)}/>Suppress Git commit for this workspace</label><label className="meeting-consent"><input type="checkbox" checked={toolSettings.suppressPush} onChange={(event)=>void saveToolGateway({suppressPush:event.target.checked}).catch(showError)}/>Suppress Git push for this workspace</label><div className="drawer-actions"><button onClick={()=>void saveToolGateway().catch(showError)}>Save policy</button><button className="secondary" onClick={()=>void saveToolGateway({stopped:!toolSettings.stopped}).catch(showError)}>{toolSettings.stopped?'Resume gateway':'Stop all tools'}</button></div></>}
+                  {toolCapabilities&&<dl className="settings-list">{toolCapabilities.localClis.map((item)=><div key={item.name}><dt>{item.name}</dt><dd>{item.available?'installed · local identity':'unavailable'}</dd></div>)}</dl>}
+                  <div className="activity-list">{toolReceipts.slice(0,10).map((item)=><article className="activity-item execution" key={item.id}><span/><div><strong>{item.tool} · {item.status}</strong><small>{item.summary}</small><small>{new Date(item.startedAt).toLocaleString()} · {item.origin} · {item.outputBytes} bytes{item.truncated?' · truncated':''}</small></div></article>)}</div>
+                </section>
                 <section>
                   <h3>Secure device sync</h3>
                   <p className="drawer-intro">End-to-end encrypted through the pinned Waypoint relay. Keys stay in protected storage on each device.</p>
