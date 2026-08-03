@@ -107,6 +107,8 @@ Acceptance:
 
 Authority gates: every new provider/API/model/device/cost budget and unattended pattern is separately approved. OpenAI embedding comparisons still require a supplied API key plus explicit data/cost authorization and identical suite provenance.
 
+P6 is implemented in two ordered sub-slices: **P6A policy-bounded paired provider evaluation**, then **P6B model-neutral Tool Gateway / Agent Runtime**. Their implementation-ready acceptance, local-CLI-first developer tooling policy, trusted-workspace terminal/commit policy, and selectable browser-profile boundary are canonical in `outputs/TOOL_GATEWAY_ORCHESTRATION_PLAN.md`. The local slice may build schemas, policy simulation, hostile fixtures, and no-effect UI; it does not activate Kimi K3, DeepSeek V4 Flash, OpenRouter, an API key, an external account, browser session, cross-device execution, PR, or deployment.
+
 ## P7 — unified calendar and meeting copilot
 
 Build local canonical calendar/event/attendee/source-account contracts, fixture adapters, timezone/DST recurrence normalization, conflict/free-busy projection, agenda/meeting-prep suggestions, explicit note linking, and post-meeting review prompts. It remains chat-first: ask about the day, prepare a meeting, or open the optional calendar/meeting view. Fixture events cannot masquerade as real account data.
@@ -122,6 +124,8 @@ External gate: Microsoft 365 requires a user-approved app registration, exact te
 ## E1 — connector and secure public-ingress program
 
 Activate providers one at a time in this order: Outlook/calendar read-only; email/Teams read-only plus draft-only; Azure DevOps read-only plus draft actions; explicit writes; signed public webhooks. Shared requirements are protected OAuth/token references, named tenant/account, minimum scopes, incremental cursors, idempotency, rate/backoff, revocation, deletion/export mapping, prompt-injection quarantine, preview/approval, and observable pause/kill/dead-letter status.
+
+For developer/work-item systems with a supported installed CLI, the first implementation path is the policy-governed local CLI adapter under the user's existing local identity; do not duplicate OAuth/PAT custody. Direct provider APIs/connectors remain a later fallback when no suitable CLI exists or an explicitly approved requirement demands one. External webhook registration still requires authority over the target account/tenant and endpoint permissions even when Waypoint-side channel configuration is automated.
 
 No account connection, app registration, employer/client data, credential, public endpoint, network exposure, background schedule, send/write, or external retention is authorized by this plan. Each provider must pass fixture → authorized sandbox → limited authorized account gates with separate security/privacy review.
 

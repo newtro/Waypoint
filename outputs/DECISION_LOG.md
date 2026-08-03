@@ -316,3 +316,15 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Preserve canonical sources unchanged. CLI output becomes a separate proposed revision with exact provenance and diff/accept/edit/reject review; stale, duplicate, and contradictory claims remain explicit rather than silently merged.
 - Accepted changes retain rollback lineage and source-deletion cascade. Cross-workspace/client inputs fail closed, and backup/restore/deletion/sync must cover both proposals and accepted derivatives.
 - Scheduling and any low-risk auto-apply remain later, separately authorized policy stages with their own safety gate.
+
+## Production inbound webhook and future Tool Gateway (2026-08-03)
+
+- Production inbound webhooks use per-workspace owner-managed channels, one-time HMAC secrets protected at rest, timestamp/nonce replay defense, sender-side sealed boxes, an opaque seven-day relay queue, authenticated desktop pull/ack, and local quarantine. Payloads grant no rule/model/agent/schedule/action authority.
+- The existing dedicated relay hostname/path is reused; Caddy, DNS, firewall, PostgreSQL, and new cloud resources were unnecessary. Relay backup and its webhook protection-key recovery copy are one rollback generation.
+- Future provider comparison is a user-triggered, policy-bounded paired harness. Read-only or isolated worktree execution is the default; results feed explainable routing suggestions only and never self-modify policy.
+- Future Kimi/DeepSeek-style tool use goes through Waypoint's trusted-main-process Tool Gateway with typed schemas, normalized receipts, workspace/client/device policy, finite budgets, cancellation/global stop, hostile-output defenses, and signed peer leases. Codex/Claude keep their encapsulated CLI tool loops.
+- Prefer a generic local CLI adapter and the user's already-authenticated `git`, `gh`, Azure DevOps CLI/tooling, and comparable tools. Duplicate OAuth/PAT storage and direct APIs are fallback-only when no suitable CLI exists or explicitly required.
+- Under the trusted-workspace Autonomous Developer profile, terminal access is unrestricted by default, inherits the normal local environment and Keychain, and uses a configurable user-managed deny list. Secrets may be consumed locally but are never surfaced, logged, exported, placed in receipts/provider context, or relayed.
+- Trusted-workspace policy may allow commit and push by default with clear notification; task instructions can suppress either. PR create/update and deployment always require an explicit request.
+- Browser control visibly chooses per invocation/workspace between an existing signed-in profile and an isolated Waypoint profile. Neither mode exposes passwords, cookies, tokens, or browser secrets.
+- UI and AI share the same trusted domain-command surface for ordinary tasks and non-security settings, with identical validation, receipts, provenance, rollback, workspace boundaries, and truthful status. Security-critical configuration and authority/credential/tenant/permission changes remain explicit user-only operations.
