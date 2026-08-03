@@ -282,3 +282,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Treat worker messages as untrusted structured input. Expose only the existing sanitized result contract; worker faults never expose raw errors or absolute paths.
 - Give the parent runner ownership of a per-drill outer temporary root. A five-minute deadline may then terminate a hung worker, await termination, remove the entire outer root independently, and release the single-operation slot without trusting worker cleanup.
 - Keep webhook/calendar, encryption/retention, mobile, peer, Windows, signing, distribution, and physical-device work behind their recorded authority gates.
+
+## Production local document ingestion (2026-08-03)
+
+- Use pinned PDF.js and Mammoth JavaScript libraries for local PDF/DOCX text extraction; TXT/Markdown use strict UTF-8. Do not add Python, Docker, cloud parsing, OCR, macros, or implicit downloads.
+- Preserve the source as a document-owned attachment and extracted text as its canonical revision. Chunks/vectors are owned derived state with exact source offsets and are intentionally rebuilt rather than exported.
+- Use the built-in deterministic sentence-window policy for production document chunks. Keep Chonkie disabled pending its separate packaging/audit gate.
+- Treat Ollama/Qwen3-Embedding 4B as optional local semantic capability. Lexical import remains useful and truthful when unavailable; no fixture vector substitutes for production embeddings.
+- Sequence next: local trigger rules/webhook simulation only, then first-class local voice chat. Public ingress, schedules, external connectors/data/actions, cloud voice, implicit model downloads, and unattended activation remain unauthorized.

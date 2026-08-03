@@ -63,6 +63,9 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS relationships(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(workspace_id,from_id,to_id,type));
       CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, sha256 TEXT NOT NULL, relative_path TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS embeddings(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, object_id TEXT NOT NULL, object_kind TEXT NOT NULL, revision_id TEXT, provider TEXT NOT NULL, provider_version TEXT NOT NULL, model TEXT NOT NULL, model_digest TEXT NOT NULL, dimensions INTEGER NOT NULL, chunking_digest TEXT NOT NULL, vector_json TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS document_chunks(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,revision_id TEXT NOT NULL,attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,chunk_index INTEGER NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,text TEXT NOT NULL,text_digest TEXT NOT NULL,policy TEXT NOT NULL,policy_version TEXT NOT NULL,policy_digest TEXT NOT NULL,generation_digest TEXT NOT NULL,provider TEXT NOT NULL,provider_version TEXT NOT NULL,model TEXT NOT NULL,model_digest TEXT NOT NULL,dimensions INTEGER NOT NULL,vector_json TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(document_id,generation_digest,chunk_index));
+      CREATE TABLE IF NOT EXISTS document_import_sources(document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,revision_id TEXT NOT NULL,attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id) ON DELETE CASCADE,source_digest TEXT NOT NULL,text_digest TEXT NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_document_chunks_search ON document_chunks(workspace_id,provider,provider_version,model,model_digest,policy_digest);
       CREATE TABLE IF NOT EXISTS activities(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, category TEXT NOT NULL, action TEXT NOT NULL, object_id TEXT, object_kind TEXT, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_activities_workspace_created ON activities(workspace_id,created_at DESC,id);
       CREATE TABLE IF NOT EXISTS tombstones(object_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, object_kind TEXT NOT NULL, deleted_at TEXT NOT NULL);
@@ -174,6 +177,12 @@ export class WorkspaceStore {
       {
         version: 14,
         apply: (database) => database.exec("CREATE TABLE IF NOT EXISTS fixture_playbooks(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,title TEXT NOT NULL,version INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('paused','killed')),timezone TEXT NOT NULL,hour INTEGER NOT NULL,minute INTEGER NOT NULL,definition_json TEXT NOT NULL,definition_digest TEXT NOT NULL,permission_json TEXT NOT NULL,last_dry_run_digest TEXT,last_dry_run_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS fixture_playbook_runs(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,playbook_id TEXT NOT NULL REFERENCES fixture_playbooks(id) ON DELETE CASCADE,idempotency_key TEXT,status TEXT NOT NULL CHECK(status IN ('dry_run','completed','retrying','dead_letter')),attempt INTEGER NOT NULL,input_count INTEGER NOT NULL,output_count INTEGER NOT NULL,proposed_effects INTEGER NOT NULL CHECK(proposed_effects=0),permission_json TEXT NOT NULL,created_at TEXT NOT NULL,finished_at TEXT,UNIQUE(playbook_id,idempotency_key))"),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 15,
+        apply: (database) => database.exec("CREATE TABLE IF NOT EXISTS document_chunks(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,revision_id TEXT NOT NULL,attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,chunk_index INTEGER NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,text TEXT NOT NULL,text_digest TEXT NOT NULL,policy TEXT NOT NULL,policy_version TEXT NOT NULL,policy_digest TEXT NOT NULL,generation_digest TEXT NOT NULL,provider TEXT NOT NULL,provider_version TEXT NOT NULL,model TEXT NOT NULL,model_digest TEXT NOT NULL,dimensions INTEGER NOT NULL,vector_json TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(document_id,generation_digest,chunk_index));CREATE INDEX IF NOT EXISTS idx_document_chunks_search ON document_chunks(workspace_id,provider,provider_version,model,model_digest,policy_digest);CREATE TABLE IF NOT EXISTS document_import_sources(document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,revision_id TEXT NOT NULL,attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id) ON DELETE CASCADE,source_digest TEXT NOT NULL,text_digest TEXT NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,created_at TEXT NOT NULL)"),
       },
     ]);
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{ id: string; localPath: string }>) {
@@ -1088,6 +1097,7 @@ export class WorkspaceStore {
       this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='document'").run(documentId);
       this.indexText(document.workspace_id, documentId, 'document', revisionId, title, body);
       this.db.prepare('DELETE FROM embeddings WHERE object_id=?').run(documentId);
+      this.db.prepare('DELETE FROM document_chunks WHERE workspace_id=? AND document_id=?').run(workspaceId,documentId);
       this.syncJournal.enqueue(workspaceId, documentId, 'document', 'upsert', {
         id: documentId,
         title: title.trim() || 'Untitled',
@@ -1315,6 +1325,9 @@ export class WorkspaceStore {
     return this.listAttachments(workspaceId).filter((attachment) => ownerSet.has(attachment.ownerId));
   }
 
+  registerDocumentImportSource(workspaceId:string,source:{documentId:string;revisionId:string;attachmentId:string;sourceDigest:string;textDigest:string;extractor:string;extractorVersion:string}):void{const row=this.db.prepare('SELECT d.current_revision_id revisionId,r.body,a.sha256 sourceDigest FROM documents d JOIN revisions r ON r.id=d.current_revision_id JOIN attachments a ON a.id=? AND a.workspace_id=d.workspace_id AND a.owner_id=d.id WHERE d.id=? AND d.workspace_id=?').get(source.attachmentId,source.documentId,workspaceId) as {revisionId:string;body:string;sourceDigest:string}|undefined;if(!row||row.revisionId!==source.revisionId||row.sourceDigest!==source.sourceDigest||contentDigest(row.body)!==source.textDigest||!source.extractor||source.extractor.length>100||!source.extractorVersion||source.extractorVersion.length>100)throw new Error('Imported document source provenance is invalid');this.db.prepare('INSERT INTO document_import_sources VALUES (?,?,?,?,?,?,?,?,?)').run(source.documentId,workspaceId,source.revisionId,source.attachmentId,source.sourceDigest,source.textDigest,source.extractor,source.extractorVersion,now())}
+  documentSource(workspaceId:string,documentId:string):{metadata:AttachmentMetadata;bytes:Buffer;absolutePath:string;revisionId:string;sourceDigest:string;textDigest:string;extractor:string;extractorVersion:string}{this.assertObjectInWorkspace(workspaceId,documentId,'document');const binding=this.db.prepare('SELECT revision_id revisionId,attachment_id attachmentId,source_digest sourceDigest,text_digest textDigest,extractor,extractor_version extractorVersion FROM document_import_sources WHERE workspace_id=? AND document_id=?').get(workspaceId,documentId) as Record<string,unknown>|undefined;if(!binding)throw new Error('Imported document source provenance is missing');const metadata=this.listAttachments(workspaceId,documentId).find((item)=>item.id===String(binding.attachmentId));if(!metadata)throw new Error('Imported document source attachment is missing');const row=this.db.prepare('SELECT relative_path relativePath FROM attachments WHERE id=? AND workspace_id=? AND owner_id=?').get(metadata.id,workspaceId,documentId) as {relativePath:string}|undefined;if(!row)throw new Error('Imported document source attachment is invalid');const absolutePath=this.attachmentPath(row.relativePath);return{metadata,bytes:readFileSync(absolutePath),absolutePath,revisionId:String(binding.revisionId),sourceDigest:String(binding.sourceDigest),textDigest:String(binding.textDigest),extractor:String(binding.extractor),extractorVersion:String(binding.extractorVersion)}}
+
   deleteAttachment(workspaceId: string, attachmentId: string): void {
     const row = this.db.prepare('SELECT relative_path relativePath FROM attachments WHERE id=? AND workspace_id=?').get(attachmentId, workspaceId) as { relativePath: string } | undefined;
     if (!row) throw new Error('Attachment not found in workspace');
@@ -1395,6 +1408,24 @@ export class WorkspaceStore {
     });
   }
 
+  replaceDocumentChunkGeneration(workspaceId:string,source:{documentId:string;revisionId:string;attachmentId:string},chunks:Array<{index:number;startOffset:number;endOffset:number;text:string;textDigest:string;policy:string;policyVersion:string;policyDigest:string;vector:number[]}>,provenance:{provider:string;providerVersion:string;model:string;modelDigest:string}):{generationDigest:string;chunkCount:number}{
+    this.assertObjectInWorkspace(workspaceId,source.documentId,'document');
+    const document=this.db.prepare('SELECT d.current_revision_id revisionId,r.body FROM documents d JOIN revisions r ON r.id=d.current_revision_id WHERE d.id=? AND d.workspace_id=?').get(source.documentId,workspaceId) as {revisionId:string;body:string}|undefined,binding=this.db.prepare('SELECT revision_id revisionId,attachment_id attachmentId,text_digest textDigest FROM document_import_sources WHERE workspace_id=? AND document_id=?').get(workspaceId,source.documentId) as {revisionId:string;attachmentId:string;textDigest:string}|undefined;
+    if(!document||document.revisionId!==source.revisionId||!binding||binding.revisionId!==source.revisionId||binding.attachmentId!==source.attachmentId||binding.textDigest!==contentDigest(document.body))throw new Error('Document chunk source provenance is stale or invalid');
+    if(!chunks.length||chunks.length>2_000||chunks.some((chunk,index)=>chunk.index!==index||chunk.startOffset<0||chunk.endOffset<=chunk.startOffset||chunk.text.length>1_200||chunk.textDigest!==contentDigest(chunk.text)||document.body.slice(chunk.startOffset,chunk.endOffset)!==chunk.text||!chunk.vector.length||chunk.vector.length>65_536||chunk.vector.some((value)=>!Number.isFinite(value))))throw new Error('Document chunks violate bounded provenance');
+    const dimensions=chunks[0].vector.length;if(chunks.some((chunk)=>chunk.vector.length!==dimensions))throw new Error('Document chunk vector dimensions differ');
+    const policy=chunks[0];if(chunks.some((chunk)=>chunk.policy!==policy.policy||chunk.policyVersion!==policy.policyVersion||chunk.policyDigest!==policy.policyDigest))throw new Error('Document chunk policy cannot mix within a generation');
+    const generationDigest=contentDigest(JSON.stringify({revisionId:source.revisionId,attachmentId:source.attachmentId,provider:provenance.provider,providerVersion:provenance.providerVersion,model:provenance.model,modelDigest:provenance.modelDigest,policy:policy.policy,policyVersion:policy.policyVersion,policyDigest:policy.policyDigest,dimensions})),timestamp=now();
+    this.transaction(()=>{this.db.prepare('DELETE FROM document_chunks WHERE workspace_id=? AND document_id=? AND generation_digest=?').run(workspaceId,source.documentId,generationDigest);const insert=this.db.prepare('INSERT INTO document_chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');for(const chunk of chunks)insert.run(randomUUID(),workspaceId,source.documentId,source.revisionId,source.attachmentId,chunk.index,chunk.startOffset,chunk.endOffset,chunk.text,chunk.textDigest,chunk.policy,chunk.policyVersion,chunk.policyDigest,generationDigest,provenance.provider,provenance.providerVersion,provenance.model,provenance.modelDigest,dimensions,JSON.stringify(chunk.vector),timestamp);const generations=this.db.prepare('SELECT generation_digest digest,MAX(rowid) newest FROM document_chunks WHERE workspace_id=? AND document_id=? GROUP BY generation_digest ORDER BY newest DESC').all(workspaceId,source.documentId) as Array<{digest:string}>;for(const stale of generations.slice(2))this.db.prepare('DELETE FROM document_chunks WHERE workspace_id=? AND document_id=? AND generation_digest=?').run(workspaceId,source.documentId,stale.digest);this.activity(workspaceId,'maintenance','document.indexed',source.documentId,'document',{chunkCount:chunks.length,provider:provenance.provider,model:provenance.model})});
+    return{generationDigest,chunkCount:chunks.length};
+  }
+
+  documentIndexStatus(workspaceId:string,documentId:string):{state:'indexed'|'not_indexed';chunkCount:number;sourceAvailable:boolean;sourceName?:string;provider?:string;model?:string;modelDigest?:string;policy?:string;generationDigest?:string;retainedGenerations:number}{
+    this.assertObjectInWorkspace(workspaceId,documentId,'document');const rows=this.db.prepare('SELECT generation_digest generationDigest,provider,model,model_digest modelDigest,policy,count(*) chunkCount,MAX(rowid) newest FROM document_chunks WHERE workspace_id=? AND document_id=? GROUP BY generation_digest ORDER BY newest DESC').all(workspaceId,documentId) as Array<Record<string,unknown>>,row=rows[0],source=this.db.prepare('SELECT a.name FROM document_import_sources s JOIN attachments a ON a.id=s.attachment_id WHERE s.workspace_id=? AND s.document_id=?').get(workspaceId,documentId) as {name:string}|undefined;return row?{state:'indexed',chunkCount:Number(row.chunkCount),sourceAvailable:Boolean(source),sourceName:source?.name,provider:String(row.provider),model:String(row.model),modelDigest:String(row.modelDigest),policy:String(row.policy),generationDigest:String(row.generationDigest),retainedGenerations:rows.length}:{state:'not_indexed',chunkCount:0,sourceAvailable:Boolean(source),sourceName:source?.name,retainedGenerations:0};
+  }
+
+  rollbackDocumentIndex(workspaceId:string,documentId:string){this.assertObjectInWorkspace(workspaceId,documentId,'document');const generations=this.db.prepare('SELECT generation_digest digest,MAX(rowid) newest FROM document_chunks WHERE workspace_id=? AND document_id=? GROUP BY generation_digest ORDER BY newest DESC').all(workspaceId,documentId) as Array<{digest:string}>;if(generations.length<2)throw new Error('No prior complete document index generation is retained');this.transaction(()=>{this.db.prepare('DELETE FROM document_chunks WHERE workspace_id=? AND document_id=? AND generation_digest=?').run(workspaceId,documentId,generations[0].digest);this.activity(workspaceId,'maintenance','document.index_rolled_back',documentId,'document',{})});return this.documentIndexStatus(workspaceId,documentId)}
+
   semanticSearch(
     workspaceId: string,
     queryVector: number[],
@@ -1408,7 +1439,7 @@ export class WorkspaceStore {
     limit = 20,
   ): SearchResult[] {
     const rows = this.db.prepare('SELECT * FROM embeddings WHERE workspace_id=? AND provider=? AND provider_version=? AND model=? AND model_digest=? AND chunking_digest=?').all(workspaceId, provenance.provider, provenance.providerVersion, provenance.model, provenance.modelDigest, provenance.chunkingDigest) as Array<Record<string, unknown>>;
-    return rows
+    const ordinary=rows
       .map((row) => {
         const vector = JSON.parse(String(row.vector_json)) as number[];
         const score = cosine(queryVector, vector);
@@ -1426,6 +1457,7 @@ export class WorkspaceStore {
       .filter((result) => Number.isFinite(result.score))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
+    const chunks=this.db.prepare('SELECT document_id objectId,revision_id revisionId,text,vector_json vector FROM document_chunks WHERE workspace_id=? AND provider=? AND provider_version=? AND model=? AND model_digest=? AND policy_digest=?').all(workspaceId,provenance.provider,provenance.providerVersion,provenance.model,provenance.modelDigest,provenance.chunkingDigest) as Array<Record<string,unknown>>,chunkResults=chunks.map((row)=>{const vector=JSON.parse(String(row.vector)) as number[],score=cosine(queryVector,vector),source=this.sourceTitle(String(row.objectId),'document');return{objectId:String(row.objectId),objectKind:'document' as const,revisionId:String(row.revisionId),title:source.title,excerpt:String(row.text).slice(0,500),score,method:'semantic' as const}}).filter((item)=>Number.isFinite(item.score));return[...ordinary,...chunkResults].sort((left,right)=>right.score-left.score).slice(0,limit);
   }
 
   graph(workspaceId: string): { nodes: GraphNode[]; edges: GraphEdge[] } {
@@ -1867,7 +1899,7 @@ export class WorkspaceStore {
   exportWorkspace(workspaceId: string): ExportArchive {
     const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId) as Record<string, unknown> | undefined;
     if (!workspace) throw new Error('Workspace not found');
-    const tables = ['documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'meetings', 'fixture_playbooks', 'fixture_playbook_runs', 'activities', 'tombstones', 'security_profiles', 'executions', 'execution_events'];
+    const tables = ['documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'document_import_sources', 'meetings', 'fixture_playbooks', 'fixture_playbook_runs', 'activities', 'tombstones', 'security_profiles', 'executions', 'execution_events'];
     const objects: Record<string, unknown[]> = {};
     for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId);
     objects.attachments = (objects.attachments ?? []).map((value) => {
@@ -2126,6 +2158,7 @@ export class WorkspaceStore {
           writtenFiles.push(targetPath);
           this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, owner, validated.safeName, String(attachment.media_type), sha256, relativePath, String(attachment.created_at));
         }
+        for(const sourceValue of archive.objects.document_import_sources??[]){const source=sourceValue as Record<string,unknown>,documentId=idMap.get(String(source.document_id)),revisionId=idMap.get(String(source.revision_id)),attachmentId=idMap.get(String(source.attachment_id));if(!documentId||!revisionId||!attachmentId)throw new Error('Imported document source archive references are invalid');this.registerDocumentImportSource(workspace.id,{documentId,revisionId,attachmentId,sourceDigest:String(source.source_digest),textDigest:String(source.text_digest),extractor:String(source.extractor),extractorVersion:String(source.extractor_version)});this.db.prepare('UPDATE document_import_sources SET created_at=? WHERE document_id=?').run(String(source.created_at),documentId)}
         for (const tombstoneValue of archive.objects.tombstones ?? []) {
           const tombstone = tombstoneValue as Record<string, unknown>,
             mapped = idMap.get(String(tombstone.object_id))!;
@@ -2148,7 +2181,7 @@ export class WorkspaceStore {
   }
 
   counts(): Record<string, number> {
-    const tables = ['workspaces', 'documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'embeddings', 'activities', 'tombstones', 'queued_work', 'security_profiles', 'executions', 'execution_events', 'search_fts'];
+    const tables = ['workspaces', 'documents', 'revisions', 'chats', 'messages', 'memories', 'memory_suggestions', 'commitments', 'rule_suggestions', 'rule_suggestion_sources', 'learned_rules', 'rule_outcomes', 'relationships', 'attachments', 'document_import_sources', 'document_chunks', 'embeddings', 'activities', 'tombstones', 'queued_work', 'security_profiles', 'executions', 'execution_events', 'search_fts'];
     return Object.fromEntries(
       tables.map((table) => [
         table,
@@ -2190,6 +2223,7 @@ export class WorkspaceStore {
       }
       if (createHash('sha256').update(readFileSync(file)).digest('hex') !== attachment.sha256) digestMismatches += 1;
     }
+    const invalidSources=Number((this.db.prepare("SELECT count(*) count FROM document_import_sources s LEFT JOIN documents d ON d.id=s.document_id AND d.workspace_id=s.workspace_id LEFT JOIN revisions r ON r.id=s.revision_id AND r.document_id=s.document_id LEFT JOIN attachments a ON a.id=s.attachment_id AND a.workspace_id=s.workspace_id AND a.owner_id=s.document_id WHERE s.workspace_id=? AND (d.id IS NULL OR d.current_revision_id<>s.revision_id OR r.id IS NULL OR a.id IS NULL OR a.sha256<>s.source_digest)").get(workspaceId) as {count:number}).count),sourceTexts=this.db.prepare('SELECT s.text_digest textDigest,r.body FROM document_import_sources s JOIN revisions r ON r.id=s.revision_id AND r.document_id=s.document_id WHERE s.workspace_id=?').all(workspaceId) as Array<{textDigest:string;body:string}>;digestMismatches+=invalidSources+sourceTexts.filter((item)=>contentDigest(item.body)!==item.textDigest).length;
     let orphanFiles = readdirSync(this.attachmentRoot).filter((entry) => !entry.includes('.deleting-') && !referenced.has(entry)).length;
     const meetingFiles = this.db.prepare('SELECT audio_relative_path relativePath,sha256 FROM meetings WHERE workspace_id=? AND audio_relative_path IS NOT NULL').all(workspaceId) as Array<{ relativePath: string; sha256: string }>;
     const allMeetingReferences = new Set((this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE audio_relative_path IS NOT NULL').all() as Array<{ relativePath: string }>).map((row) => row.relativePath));

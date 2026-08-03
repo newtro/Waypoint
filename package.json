@@ -26,6 +26,7 @@
     "relay:bootstrap-owner": "tsx scripts/relay-bootstrap-owner.ts",
     "verify:package-runtime": "tsx scripts/package-runtime-closure.ts",
     "verify:backup-worker": "npm run build && node scripts/backup-worker-proof.mjs",
+    "verify:document-worker": "npm run build && node scripts/document-ingestion-proof.mjs",
     "spike:embeddings": "tsx spikes/embedding-benchmark.ts",
     "spike:embedding-compare": "tsx spikes/embedding-benchmark-harness.ts",
     "verify:embedding-candidates": "tsx spikes/embedding-benchmark-harness.ts",
@@ -33,6 +34,8 @@
   },
   "dependencies": {
     "libsodium-wrappers-sumo": "0.8.4",
+    "mammoth": "1.12.0",
+    "pdfjs-dist": "6.2.108",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

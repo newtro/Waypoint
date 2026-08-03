@@ -18,6 +18,10 @@ declare global {
           updatedAt: string;
         }>
       >;
+      importDocument(workspaceId:string):Promise<{canceled:boolean;state?:'indexed'|'provider_unavailable'|'index_busy'|'index_failed'|'failed';documentId?:string;revisionId?:string;attachmentId?:string;sourceName?:string;extractor?:string;extractorVersion?:string;warnings?:string[];chunkCount?:number;provider?:string;model?:string;modelDigest?:string;code?:string;message?:string}>;
+      reindexImportedDocument(workspaceId:string,documentId:string):Promise<{state:'indexed'|'provider_unavailable'|'index_busy'|'index_failed'|'source_changed';chunkCount:number;provider:string;model:string;modelDigest?:string;message?:string}>;
+      documentIndexStatus(workspaceId:string,documentId:string):Promise<{state:'indexed'|'not_indexed';chunkCount:number;sourceAvailable:boolean;sourceName?:string;provider?:string;model?:string;modelDigest?:string;policy?:string;generationDigest?:string;retainedGenerations:number}>;
+      rollbackDocumentIndex(workspaceId:string,documentId:string):Promise<{state:'indexed';chunkCount:number;sourceAvailable:boolean;sourceName?:string;provider?:string;model?:string;modelDigest?:string;policy?:string;generationDigest?:string;retainedGenerations:number}>;
       syncStatus(workspaceId: string): Promise<SanitizedSyncStatus>;
       desktopSyncStatus(workspaceId: string): Promise<{
         configured: boolean;

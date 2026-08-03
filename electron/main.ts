@@ -4,16 +4,18 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { accessSync, constants, readFileSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { WorkspaceStore } from './core/store.js';
 import { LocalOllamaEmbeddings } from './core/ollama.js';
-import { CHUNKING_POLICIES, storedChunkingProvenance } from './core/embedding-benchmark.js';
+import { CHUNKING_POLICIES, chunkingDigest, storedChunkingProvenance } from './core/embedding-benchmark.js';
 import { CliWorkbench, type ExecutionEvent } from './core/ai-workbench.js';
 import { detectCli } from '../spikes/cli-capabilities.js';
 import { deleteWithExecutionCancellation, startDurableChild, validateOneChildDelegation } from './core/execution-lifecycle.js';
 import { finalizeExecution } from './core/execution-finalization.js';
 import { readBackup, writeAtomicBackup } from './core/backup.js';
 import {runBackupAdministration} from './core/backup-administration-runner.js';
+import {extractDocumentOffMain} from './core/document-extraction-runner.js';
+import {chunkExtractedText,DOCUMENT_CHUNKING_POLICY,type DocumentChunk} from './core/document-ingestion.js';
 import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js';
 import { sanitizeSyncStatus } from './core/sync/sync-status.js';
 import { ATTACHMENT_MEDIA_BY_EXTENSION, MAX_ATTACHMENTS_PER_OWNER, readAndValidateAttachment } from './core/chat-attachments.js';
@@ -33,8 +35,16 @@ const syncAbort = new AbortController();
 let trustedSenderId: number | undefined;
 let trustedRendererUrl: string | undefined;
 const embeddings = new LocalOllamaEmbeddings();
+const activeDocumentIndexes=new Set<string>();
 const activeChunkingProvenance=storedChunkingProvenance(CHUNKING_POLICIES[0]);
+const documentChunkingDigest=chunkingDigest(DOCUMENT_CHUNKING_POLICY);
 const workbench = new CliWorkbench();
+
+async function indexImportedDocument(workspaceId:string,documentId:string,revisionId:string,attachmentId:string,chunks:DocumentChunk[]=chunkExtractedText(store.listDocuments(workspaceId).find((item)=>item.id===documentId)?.body??'')){
+  const key=`${workspaceId}:${documentId}`;if(activeDocumentIndexes.has(key))return{state:'index_busy' as const,chunkCount:chunks.length,provider:embeddings.provider,model:embeddings.model};activeDocumentIndexes.add(key);try{const status=await embeddings.status();if(!status.reachable||!status.modelInstalled)return{state:'provider_unavailable' as const,chunkCount:chunks.length,provider:embeddings.provider,model:embeddings.model};
+  const deadline=AbortSignal.timeout(300_000),vectors:number[][]=[];let modelDigest:string|undefined;for(let offset=0;offset<chunks.length;offset+=32){const result=await embeddings.embed(chunks.slice(offset,offset+32).map((chunk)=>chunk.text),deadline);if(modelDigest&&result.modelDigest!==modelDigest)throw new Error('Embedding model changed during indexing');modelDigest=result.modelDigest;vectors.push(...result.vectors)}
+  if(!modelDigest)throw new Error('Embedding provider returned no model provenance');store.replaceDocumentChunkGeneration(workspaceId,{documentId,revisionId,attachmentId},chunks.map((chunk,index)=>({...chunk,vector:vectors[index]})),{provider:embeddings.provider,providerVersion:embeddings.providerVersion,model:embeddings.model,modelDigest});return{state:'indexed' as const,chunkCount:chunks.length,provider:embeddings.provider,model:embeddings.model,modelDigest};}finally{activeDocumentIndexes.delete(key)}
+}
 
 function handle(channel: string, listener: (event: IpcMainInvokeEvent, input: unknown) => unknown): void {
   ipcMain.handle(channel, (event, input) => {
@@ -122,6 +132,10 @@ function registerIpc(): void {
     return store.updateDocument(text(value.workspaceId, 'workspace ID', 64), text(value.objectId, 'document ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000));
   });
   handle('waypoint:list-documents', (_event, input: unknown) => store.listDocuments(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
+  handle('waypoint:import-document',async(_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64);if(!store.listWorkspaces().some((item)=>item.id===workspaceId))throw new Error('Workspace not found');const chosen=await dialog.showOpenDialog({title:'Import local document',properties:['openFile'],filters:[{name:'Documents',extensions:['pdf','docx','txt','md','markdown']}]});if(chosen.canceled||!chosen.filePaths[0])return{canceled:true};const sourcePath=chosen.filePaths[0],mediaType=ATTACHMENT_MEDIA_BY_EXTENSION[path.extname(sourcePath).toLowerCase()];if(!mediaType||mediaType.startsWith('image/'))throw new Error('This file type has no approved local text extractor');readAndValidateAttachment(sourcePath,path.basename(sourcePath),mediaType);const extracted=await extractDocumentOffMain(sourcePath,mediaType);if(extracted.status==='failed')return{canceled:false,state:'failed',code:extracted.code,message:extracted.message};const title=path.basename(extracted.fileName,path.extname(extracted.fileName)).slice(0,300)||'Imported document',document=store.createDocument(workspaceId,title,extracted.text);let attachmentId:string;try{attachmentId=store.addAttachment(workspaceId,document.id,extracted.fileName,mediaType,sourcePath);store.registerDocumentImportSource(workspaceId,{documentId:document.id,revisionId:document.revisionId,attachmentId,sourceDigest:extracted.sourceDigest,textDigest:createHash('sha256').update(extracted.text).digest('hex'),extractor:extracted.extractor,extractorVersion:extracted.extractorVersion});const stored=store.documentSource(workspaceId,document.id);if(stored.metadata.sha256!==extracted.sourceDigest)throw new Error('The selected file changed during import')}catch(error){store.deleteObject(workspaceId,'document',document.id);throw error}const base={canceled:false,documentId:document.id,revisionId:document.revisionId,attachmentId,sourceName:extracted.fileName,extractor:extracted.extractor,extractorVersion:extracted.extractorVersion,warnings:extracted.warnings};try{return{...base,...await indexImportedDocument(workspaceId,document.id,document.revisionId,attachmentId,extracted.chunks)}}catch{return{...base,state:'index_failed' as const,chunkCount:extracted.chunks.length,provider:embeddings.provider,model:embeddings.model,message:'The document was imported for lexical search, but local semantic indexing failed. Retry from Knowledge after checking the local embedding runtime.'}}});
+  handle('waypoint:reindex-imported-document',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),documentId=text(value.documentId,'document ID',64),document=store.listDocuments(workspaceId).find((item)=>item.id===documentId);if(!document)throw new Error('Document not found in workspace');const source=store.documentSource(workspaceId,documentId),extracted=await extractDocumentOffMain(source.absolutePath,source.metadata.mediaType);if(extracted.status==='failed')return{state:extracted.code==='busy'?'index_busy':'index_failed',chunkCount:0,provider:embeddings.provider,model:embeddings.model,message:extracted.message};if(extracted.sourceDigest!==source.metadata.sha256||extracted.text!==document.body)return{state:'source_changed',chunkCount:extracted.chunks.length,provider:embeddings.provider,model:embeddings.model,message:'This document was edited after import. Reindexing the original source would create false provenance; import the edited file as a new document instead.'};try{return await indexImportedDocument(workspaceId,documentId,document.revisionId,source.metadata.id,extracted.chunks)}catch{return{state:'index_failed',chunkCount:extracted.chunks.length,provider:embeddings.provider,model:embeddings.model,message:'Local semantic indexing failed without replacing the last complete index generation.'}}});
+  handle('waypoint:document-index-status',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.documentIndexStatus(text(value.workspaceId,'workspace ID',64),text(value.documentId,'document ID',64))});
+  handle('waypoint:rollback-document-index',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.rollbackDocumentIndex(text(value.workspaceId,'workspace ID',64),text(value.documentId,'document ID',64))});
   handle('waypoint:sync-status', (_event, input: unknown) => sanitizeSyncStatus(store.syncStatus(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64))));
   handle('waypoint:desktop-sync-status', (_event, input: unknown) => syncService.status(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
   handle('waypoint:desktop-sync-initialize', async (_event, input: unknown) => {
@@ -211,13 +225,13 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, 'workspace ID', 64);
     const embedded = await embeddings.embed([text(value.query, 'query', 2_000)]);
-    return store.semanticSearch(workspaceId, embedded.vectors[0], {
+    const provenance={
       provider: embeddings.provider,
       providerVersion: embeddings.providerVersion,
       model: embeddings.model,
       modelDigest: embedded.modelDigest,
-      chunkingDigest: activeChunkingProvenance,
-    });
+      chunkingDigest: activeChunkingProvenance};
+    const ordinary=store.semanticSearch(workspaceId,embedded.vectors[0],provenance),documents=store.semanticSearch(workspaceId,embedded.vectors[0],{...provenance,chunkingDigest:documentChunkingDigest});return[...ordinary,...documents].sort((left,right)=>right.score-left.score).filter((item,index,all)=>all.findIndex((candidate)=>candidate.objectId===item.objectId&&candidate.revisionId===item.revisionId)===index).slice(0,20);
   });
   handle('waypoint:index-document', async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,

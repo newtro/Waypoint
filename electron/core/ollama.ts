@@ -33,14 +33,14 @@ export class LocalOllamaEmbeddings {
     } catch { return { configured: true, reachable: false, model: this.model, modelInstalled: false } }
   }
 
-  async embed(inputs: string[]): Promise<{ vectors: number[][]; modelDigest: string }> {
+  async embed(inputs: string[], signal?: AbortSignal): Promise<{ vectors: number[][]; modelDigest: string }> {
     if (!inputs.length) throw new Error('Embedding input is required')
     const [embeddingResponse, tagsResponse] = await Promise.all([
       fetch(`${this.baseUrl}/api/embed`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: this.model, input: inputs, keep_alive: '5m' }),
-        signal: AbortSignal.timeout(120_000), redirect: 'error',
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000), redirect: 'error',
       }),
-      fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(5_000), redirect: 'error' }),
+      fetch(`${this.baseUrl}/api/tags`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000), redirect: 'error' }),
     ])
     if (!embeddingResponse.ok) throw new Error(`Ollama embedding failed (${embeddingResponse.status})`)
     if (!tagsResponse.ok) throw new Error(`Ollama model listing failed (${tagsResponse.status})`)

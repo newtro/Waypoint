@@ -39,6 +39,7 @@ export function App() {
     [chatCli, setChatCli] = useState<'codex' | 'claude'>('codex'),
     [routeProposal,setRouteProposal]=useState<Awaited<ReturnType<Window['waypoint']['proposeChatRoute']>>>(),
     [selectedProfileId,setSelectedProfileId]=useState('');
+  const [documentIndexes,setDocumentIndexes]=useState<Record<string,Awaited<ReturnType<Window['waypoint']['documentIndexStatus']>>>>({}),[documentImportBusy,setDocumentImportBusy]=useState(false);
   const [drawer, setDrawer] = useState<Drawer>(),
     [sidebarOpen, setSidebarOpen] = useState(false),
     [historyQuery, setHistoryQuery] = useState(''),
@@ -361,6 +362,7 @@ export function App() {
     const timer = window.setTimeout(() => document.getElementById(`activity-target-${activityKnowledgeTarget}`)?.scrollIntoView({ block: 'center' }), 0);
     return () => window.clearTimeout(timer);
   }, [drawer, activityKnowledgeTarget]);
+  useEffect(()=>{if(drawer!=='knowledge'||!workspace)return;let current=true;void Promise.all(documents.map(async(item)=>[item.id,await window.waypoint.documentIndexStatus(workspace.id,item.id)] as const)).then((entries)=>{if(current)setDocumentIndexes(Object.fromEntries(entries))}).catch(showError);return()=>{current=false}},[drawer,workspace,documents]);
   useEffect(() => {
     if (!drawer && !sidebarOpen) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -423,6 +425,9 @@ export function App() {
       setAttachmentBusy(false);
     }
   }
+  async function importDocument(){if(!workspace)return;setDocumentImportBusy(true);setError('');try{const result=await window.waypoint.importDocument(workspace.id);if(result.canceled)return;if(result.state==='failed'){setError(result.message??'Local document extraction failed.');return}setNotice(result.state==='indexed'?`${result.sourceName} imported and indexed in ${result.chunkCount} local chunks with ${result.model}.`:result.state==='provider_unavailable'?`${result.sourceName} imported for lexical search. ${result.model} is unavailable, so semantic indexing is waiting.`:`${result.sourceName} imported for lexical search. ${result.message??'Local semantic indexing is busy or failed; retry from Knowledge.'}`);await refresh()}catch(reason){showError(reason)}finally{setDocumentImportBusy(false)}}
+  async function reindexDocument(documentId:string){if(!workspace)return;setDocumentImportBusy(true);setError('');try{const result=await window.waypoint.reindexImportedDocument(workspace.id,documentId);setNotice(result.state==='indexed'?`Local semantic index rebuilt in ${result.chunkCount} chunks with ${result.model}.`:result.state==='provider_unavailable'?`${result.model} is unavailable. The imported document remains available to lexical search.`:result.message??'Local semantic indexing is busy or failed.');if(result.state==='indexed')setDocumentIndexes((current)=>({...current,[documentId]:{...current[documentId],state:'indexed',chunkCount:result.chunkCount,sourceAvailable:true,provider:result.provider,model:result.model,modelDigest:result.modelDigest,retainedGenerations:Math.max(1,current[documentId]?.retainedGenerations??0)}}))}catch(reason){showError(reason)}finally{setDocumentImportBusy(false)}}
+  async function rollbackDocumentIndex(documentId:string){if(!workspace)return;setDocumentImportBusy(true);try{const result=await window.waypoint.rollbackDocumentIndex(workspace.id,documentId);setDocumentIndexes((current)=>({...current,[documentId]:result}));setNotice(`Prior complete index generation selected (${result.model}). Semantic search resumes only when its exact local model digest is installed.`)}catch(reason){showError(reason)}finally{setDocumentImportBusy(false)}}
   async function removeAttachment(id: string) {
     if (!workspace || !selectedChatId) return;
     setAttachmentBusy(true);
@@ -1129,16 +1134,20 @@ export function App() {
                   <h3>
                     Notes <span>{documents.length}</span>
                   </h3>
+                  <div className="knowledge-actions"><button disabled={documentImportBusy} onClick={()=>void importDocument()}>Import PDF, Word, or text</button></div>
                   {documents.map((item) => (
                     <article id={`activity-target-${item.id}`} className={`knowledge-item ${activityKnowledgeTarget === item.id ? 'activity-target' : ''}`} key={item.id}>
                       <div>
                         <strong>{item.title}</strong>
                         <p>{item.body.slice(0, 180)}</p>
+                        {documentIndexes[item.id]?.sourceAvailable&&<small>{documentIndexes[item.id].sourceName} · {documentIndexes[item.id].state==='indexed'?`${documentIndexes[item.id].chunkCount} semantic chunks · ${documentIndexes[item.id].model}`:'lexical search ready · local embedding unavailable or not built'}</small>}
                       </div>
                       <div className="knowledge-actions">
                         <button aria-label={`Edit ${item.title}`} onClick={() => void editDocument(item)}>
                           Edit
                         </button>
+                        {documentIndexes[item.id]?.sourceAvailable&&<button disabled={documentImportBusy} aria-label={`Reindex ${item.title}`} onClick={()=>void reindexDocument(item.id)}>Reindex</button>}
+                        {(documentIndexes[item.id]?.retainedGenerations??0)>1&&<button disabled={documentImportBusy} aria-label={`Roll back index for ${item.title}`} onClick={()=>void rollbackDocumentIndex(item.id)}>Roll back index</button>}
                         <button aria-label={`Delete ${item.title}`} onClick={() => void remove('document', item.id)}>
                           Delete
                         </button>

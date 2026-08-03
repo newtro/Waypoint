@@ -199,3 +199,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Acceptance frozen in `implementation/HEALTH_BACKUP_RESPONSIVENESS_PLAN.md`; implemented one-at-a-time worker execution with strict result reconstruction and compiled/package worker proofs.
 - Initial review found two highs, two mediums, and one low. Repairs added parent-owned drill cleanup, bounded hang termination, slot retention through clean exit/cleanup, and a repeatable compiled-worker gate.
 - Final verdict: gate clean, blocker 0 / high 0 / medium 0 / low 1. Terminal gate: 67 suites / 303 tests, lint/build, dependency/SBOM checks, compiled and packaged worker verify/drill/cleanup, native arm64 package/runtime closure/launch, and diff hygiene.
+
+## Production local document ingestion and chunking (2026-08-03)
+
+- Selected as the next substantive safe local phase. Acceptance frozen in `implementation/LOCAL_DOCUMENT_INGESTION_PLAN.md` and terminal evidence recorded in `implementation/LOCAL_DOCUMENT_INGESTION_EVIDENCE.md`.
+- Recorded the next two safe streams: local trigger/webhook simulation, then capability-gated local voice chat. Neither authorizes public ingress, unattended actions, cloud voice, or model downloads.
+- Independent review initially found four highs, three mediums, and one low. Repairs bounded/concurrency-guarded indexing, prohibited mixed model digests, separated truthful failure states, bound/re-extracted original-source provenance, hardened worker messages, and revalidated provenance through backup/restore/drills/diagnostics. Final verdict: ship, blocker 0 / high 0 / medium 1 / low 1.
+- Terminal gate: 69 suites / 313 tests, lint/build, zero vulnerabilities/undeclared licenses, SBOM, compiled and packaged worker proof, native arm64 package/runtime closure, isolated-profile packaged launch, and diff hygiene.
