@@ -42,7 +42,7 @@ describe('destructive and recovery confidence', () => {
     let store=new WorkspaceStore(database);const first=store.createWorkspace('First',root),second=store.createWorkspace('Second',root)
     const firstDoc=store.createDocument(first.id,'First','Body'),secondDoc=store.createDocument(second.id,'Second','Body'),source=path.join(root,'shared.txt');writeFileSync(source,'bytes')
     store.addAttachment(first.id,firstDoc.id,'first.txt','text/plain',source);store.addAttachment(second.id,secondDoc.id,'second.txt','text/plain',source)
-    expect(store.localDiagnostics(first.id)).toMatchObject({schemaVersion:12,expectedSchemaVersion:12,foreignKeyViolations:0,orphanFiles:0,missingFiles:0,digestMismatches:0})
+    expect(store.localDiagnostics(first.id)).toMatchObject({schemaVersion:13,expectedSchemaVersion:13,foreignKeyViolations:0,orphanFiles:0,missingFiles:0,digestMismatches:0})
     store.close()
     const raw=new DatabaseSync(database);raw.exec('PRAGMA foreign_keys=OFF');raw.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run('broken','missing-document','body',new Date().toISOString());raw.close()
     store=new WorkspaceStore(database)

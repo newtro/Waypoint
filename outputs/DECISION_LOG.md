@@ -217,3 +217,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Normalize existing producers into stable content, execution, sync, rules, lifecycle, and maintenance families. Reserve meeting and automation families without fabricating events or implying those features are active.
 - Preserve deletion events as non-navigable historical evidence while resolving only currently surviving object labels. This keeps deletion auditable without retaining deleted titles or bodies.
 - Bound each timeline query to 500 inspected records and 500 maximum returned records, with a default of 250, and add a workspace/time index in schema 12.
+
+## R3 Slice 5 — local audio-only meetings (2026-08-03)
+
+- Require per-session participant-consent acknowledgment, an explicit Start action, OS microphone permission, a persistent red recording state, and explicit Stop. Waypoint explains that the user remains responsible for legal/participant consent.
+- Keep meeting audio, transcripts, and derived memory local-only and unsynced. Retain until explicit delete, display size/status, cap capture at two hours and 100 MiB, and preserve a 256-MiB disk reserve.
+- Do not invoke the installed Whisper executable: its capability probe stalled and no reviewed cached/packaged model exists. Do not download a model implicitly. Expose a truthful unavailable capability and bounded manual transcript draft until model packaging/licensing/performance pass a separate gate.
+- Treat all speaker labels as uncertain. Require explicit transcript review before creating a source-owned memory; meeting deletion removes that memory, its search entry/relationship, transcript, and audio.
+- Include bounded integrity-checked meeting artifacts in explicit backup/restore and user-selected audio export, while keeping sync and external delivery disabled.

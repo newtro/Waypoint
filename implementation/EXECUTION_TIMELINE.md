@@ -138,3 +138,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - External accounts, work data, scheduling, automation execution, audio recording, Windows hardware, signing, and two-instance validation remain outside this slice.
 - Independent review initially found one high and three mediums. Repairs made sync audit writes non-interfering with revoke/rotation, covered the full bounded query window, added exact safe-target navigation, and eliminated token-shaped secret projection. Final verdict: blocker 0 / high 0 / medium 0 / low 0.
 - Terminal gate: 56 suites / 259 tests, lint, production build, zero production vulnerabilities, native macOS package/runtime closure, diff hygiene, and isolated-profile packaged launch.
+
+## R3 Slice 5 — local audio-only meetings (2026-08-03)
+
+- Selected as the next safe ordered R3 slice. Executor: primary task. Reviewer: fresh independent privacy/lifecycle context supplied the acceptance criteria and diff.
+- Implemented explicit-consent audio-only local capture, visible recording/stop state, strict duration/size/media/disk bounds, interruption reconciliation, playback/export, bounded manual transcript review, uncertain speakers, review-before-memory, backup/restore, and cascade deletion.
+- A stalled local Whisper probe was terminated. No model download, external transcription, meeting sync, account data, scheduling, Windows claim, or two-instance validation was attempted.
+- Independent review initially found five highs and three mediums; repairs closed sync leakage, crash residue, consent reuse, hidden controls, recorder failures, limit truthfulness, stale derived knowledge, and media integrity. A follow-up workspace-origin high was also repaired. Final verdict: blocker 0 / high 0 / medium 0 / low 0.
+- Terminal gate: 59 suites / 268 tests, lint, production build, zero production vulnerabilities, native macOS package/runtime closure, microphone-purpose declaration, diff hygiene, and isolated-profile packaged launch.

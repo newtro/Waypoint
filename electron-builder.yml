@@ -9,5 +9,7 @@ files:
 mac:
   target: dir
   category: public.app-category.productivity
+  extendInfo:
+    NSMicrophoneUsageDescription: Waypoint records audio only after you explicitly start a local meeting recording.
 win:
   target: dir

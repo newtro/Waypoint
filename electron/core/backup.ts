@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ExportArchive } from './types.js'
 import { ARCHIVE_LIMITS } from './limits.js'
 
-const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','activities','tombstones','security_profiles','executions','execution_events'])
+const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','meetings','activities','tombstones','security_profiles','executions','execution_events'])
 
 export function archiveIntegrity(archive: Omit<ExportArchive, 'integrity'>): string {
   return createHash('sha256').update(JSON.stringify(archive)).digest('hex')
@@ -41,7 +41,8 @@ export function validateArchive(value: unknown): ExportArchive {
     totalAttachmentBytes += bytes.length
   }
   if (totalAttachmentBytes > ARCHIVE_LIMITS.maxTotalAttachmentBytes) throw new Error('Archive attachments exceed the total size limit')
-  boundedStrings({ workspace: archive.workspace, objects: Object.fromEntries(Object.entries(objects).map(([key, rows]) => [key, key === 'attachments' ? (rows as Array<Record<string, unknown>>).map((row) => Object.fromEntries(Object.entries(row).filter(([field]) => field !== 'data_base64'))) : rows])) })
+  const meetings=(objects.meetings??[]) as Array<Record<string,unknown>>;if(meetings.length>ARCHIVE_LIMITS.maxMeetings)throw new Error('Archive contains too many meetings');let totalMeetingBytes=0;for(const meeting of meetings){if(meeting.audio_data_base64==null)continue;if(typeof meeting.audio_data_base64!=='string'||!/^[A-Za-z0-9+/]*={0,2}$/.test(meeting.audio_data_base64))throw new Error('Meeting audio encoding is invalid');const bytes=Buffer.from(meeting.audio_data_base64,'base64');if(bytes.length>ARCHIVE_LIMITS.maxMeetingAudioBytes)throw new Error('Archive meeting audio exceeds the size limit');totalMeetingBytes+=bytes.length}if(totalMeetingBytes>ARCHIVE_LIMITS.maxTotalMeetingAudioBytes)throw new Error('Archive meeting audio exceeds the total size limit')
+  boundedStrings({ workspace: archive.workspace, objects: Object.fromEntries(Object.entries(objects).map(([key, rows]) => [key, key === 'attachments' ? (rows as Array<Record<string, unknown>>).map((row) => Object.fromEntries(Object.entries(row).filter(([field]) => field !== 'data_base64'))) : key==='meetings'?(rows as Array<Record<string,unknown>>).map((row)=>Object.fromEntries(Object.entries(row).filter(([field])=>field!=='audio_data_base64'))):rows])) })
   const typed = archive as unknown as ExportArchive
   if (typed.integrity !== archiveIntegrity({ version: typed.version, exportedAt: typed.exportedAt, workspace: typed.workspace, objects: typed.objects })) throw new Error('Archive integrity check failed')
   return typed
