@@ -1,0 +1,12 @@
+appId: com.waypoint.desktop
+productName: Waypoint
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/electron/**/*
+mac:
+  target: dir
+  category: public.app-category.productivity
+win:
+  target: dir

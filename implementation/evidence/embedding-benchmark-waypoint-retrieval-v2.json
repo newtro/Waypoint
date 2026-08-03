@@ -1,0 +1,53 @@
+{
+  "capturedAt": "2026-08-03T01:08:00Z",
+  "host": "Apple Silicon macOS 26.5.1",
+  "suiteVersion": "waypoint-retrieval-v2",
+  "acceptanceThresholds": {
+    "recallAt1": 0.8,
+    "recallAt3": 0.95,
+    "meanReciprocalRank": 0.9
+  },
+  "runtime": {
+    "provider": "ollama-local",
+    "version": "0.30.10",
+    "license": "MIT",
+    "source": "native local Ollama installation",
+    "applicationNpmAudit": "0 vulnerabilities",
+    "supplyChainStatus": "separate runtime; pin version and model digest, review official releases/advisories before supported adoption"
+  },
+  "isolatedIndex": true,
+  "corpusDocuments": 32,
+  "queries": 24,
+  "reports": [
+    {
+      "model": "qwen3-embedding:4b",
+      "digest": "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907",
+      "blobDigest": "2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b",
+      "dimensions": 2560,
+      "license": "Apache-2.0",
+      "format": "GGUF",
+      "quantization": "Q4_K_M",
+      "modelSizeBytes": 2496704041,
+      "quality": { "recallAt1": 0.8333333333, "recallAt3": 1, "meanReciprocalRank": 0.9166666667 },
+      "performance": { "coldLatencyMs": 917, "indexMs": 1575, "documentsPerSecond": 20, "queryBatchMs": 1190 }
+    },
+    {
+      "model": "bge-m3",
+      "digest": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+      "blobDigest": "daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c",
+      "dimensions": 1024,
+      "license": "MIT",
+      "format": "GGUF",
+      "quantization": "F16",
+      "modelSizeBytes": 1157672605,
+      "quality": { "recallAt1": 0.8333333333, "recallAt3": 0.9583333333, "meanReciprocalRank": 0.90625 },
+      "performance": { "coldLatencyMs": 958, "indexMs": 458, "documentsPerSecond": 70, "queryBatchMs": 349 }
+    }
+  ],
+  "recommendation": {
+    "default": "qwen3-embedding:4b",
+    "reason": "Both pass thresholds; Qwen has higher MRR and Recall@3 on the harder suite.",
+    "lighterFallback": "bge-m3",
+    "reranker": "not justified by current evidence"
+  }
+}
