@@ -41,8 +41,33 @@ export interface EnrollmentApproval {
   ownerDeviceId: string
   membershipEpoch: number
   approvedAt: string
+  deviceKeyDigest?: string
+  wrappedWorkspaceKeyDigest?: string
   signature: string
 }
+
+export interface EnrollmentInvitation {
+  version: 1
+  invitationId: string
+  workspaceId: string
+  ownerDeviceId: string
+  membershipEpoch: number
+  secretHash: string
+  expiresAt: string
+  signature: string
+}
+
+export interface EnrollmentConsumeProof {
+  version: 1
+  requestId: string
+  workspaceId: string
+  deviceId: string
+  approvalSignatureDigest: string
+  nonce: string
+  createdAt: string
+  signature: string
+}
+export interface RotationClaimProof{version:1;workspaceId:string;deviceId:string;targetEpoch:number;nonce:string;createdAt:string;signature:string}
 
 export interface DeviceRecord extends DeviceIdentity {
   workspaceId: string

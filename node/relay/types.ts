@@ -13,6 +13,7 @@ export interface OpaqueRelayMessage {
 
 export interface RelayAuthority {
   isActive(workspaceId:string, deviceId:string, keyEpoch:number): boolean
+  canReadEpoch?(workspaceId:string,deviceId:string,keyEpoch:number):boolean
   verifySignature(message:OpaqueRelayMessage): boolean
 }
 

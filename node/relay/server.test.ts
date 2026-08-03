@@ -30,6 +30,19 @@ describe('hosted authenticated relay',()=>{
     expect((await signedFetch(base,'POST','/v1/acks',b,workspaceId,1,{workspaceId,recipientDeviceId:b.deviceId,messageId:message.messageId})).status).toBe(200)
     const healthStatuses=await Promise.all(Array.from({length:61},()=>fetch(`${base}/v1/health`).then((response)=>response.status)));expect(healthStatuses.filter((status)=>status===200)).toHaveLength(60);expect(healthStatuses).toContain(429);expect((await signedFetch(base,'GET',`/v1/messages?workspaceId=${workspaceId}&recipientDeviceId=${a.deviceId}`,a,workspaceId,1)).status).toBe(200)
   })
+  it('completes signed one-use HTTP enrollment with fresh peer proof',async()=>{
+    const root=mkdtempSync(path.join(tmpdir(),'waypoint-enroll-http-')),database=path.join(root,'relay.sqlite'),registry=path.join(root,'authority.json'),crypto=await WaypointCrypto.create(),owner=crypto.generateDevice('opaque_owner_http01'),peer=crypto.generateDevice('opaque_peer_http_01'),workspaceId='opaque_workspace_http01',workspaceKey=crypto.generateWorkspaceKey()
+    writeFileSync(registry,JSON.stringify({version:1,workspaces:[{workspaceId,keyEpoch:1,devices:[{...publicDevice(owner),active:true,role:'owner'}]}]}))
+    const instance=await createRelayServer({host:'127.0.0.1',port:8789,databasePath:database,authorityRegistryPath:registry,tlsMode:'proxy-loopback',logLevel:'info'});running.push(instance.server);await new Promise<void>((resolve)=>instance.server.listen(0,'127.0.0.1',resolve));const address=instance.server.address();if(!address||typeof address==='string')throw new Error('missing address');const base=`http://127.0.0.1:${address.port}`
+    const token=crypto.createEnrollmentInvitation(workspaceId,owner,1,new Date(Date.now()+60_000));expect((await signedFetch(base,'POST','/v1/invitations',owner,workspaceId,1,{invitation:token.invitation})).status).toBe(201)
+    const request=crypto.createEnrollmentRequest({workspaceId,device:peer});expect((await fetch(`${base}/v1/enrollments/submit`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({invitationId:token.invitation.invitationId,secret:token.secret,request})})).status).toBe(202)
+    const pending=await signedFetch(base,'GET','/v1/enrollments',owner,workspaceId,1);expect((await pending.json() as {requests:unknown[]}).requests).toHaveLength(1)
+    const wrapped=crypto.wrapWorkspaceKey(workspaceKey,peer),approval=crypto.approveEnrollment(request,owner,1,new Date(),wrapped);expect((await signedFetch(base,'POST','/v1/enrollments/approve',owner,workspaceId,1,{approval,wrappedWorkspaceKey:wrapped})).status).toBe(200)
+    const approvalResponse=await fetch(`${base}/v1/enrollments/approval`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId:request.requestId})}),published=await approvalResponse.json() as {approval:typeof approval};expect(published.approval).toEqual(approval)
+    const proof=crypto.createEnrollmentConsumeProof(request,published.approval,peer),consume=await fetch(`${base}/v1/enrollments/consume`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({proof})});expect(consume.status).toBe(200);expect(crypto.unwrapWorkspaceKey((await consume.json() as {wrappedWorkspaceKey:string}).wrappedWorkspaceKey,peer)).toBe(workspaceKey)
+    expect((await fetch(`${base}/v1/enrollments/consume`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({proof})})).status).toBe(400)
+    expect((await signedFetch(base,'GET','/v1/devices',peer,workspaceId,1)).status).toBe(200)
+  })
 })
 
 const publicDevice=({deviceId,signingPublicKey,encryptionPublicKey}:DeviceKeyPair)=>({deviceId,signingPublicKey,encryptionPublicKey})

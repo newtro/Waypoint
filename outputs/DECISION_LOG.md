@@ -180,3 +180,12 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Terminate TLS 1.3 at the marker-bounded Caddy site. Requests bind workspace/device/epoch and content through device signatures and durable nonces; enrollment remains offline/disabled until its canonical workflow exists.
 - Retain messages for at most seven days and authenticated same-host rollback backups for at most fourteen days. Same-host backup is not represented as disaster protection.
 - Leave the deployed registry empty after isolated validation. Rationale: validation private keys are ephemeral and must not become implicit production enrollment.
+
+## R1 desktop sync integration — 2026-08-03
+
+- Keep all workspace/device private keys in the OS-protected main-process vault; the relay and renderer receive only public identity, wrapped keys, opaque envelopes, and sanitized status.
+- Retain exactly the prior workspace key after rotation only to drain already-accepted prior-epoch messages. Refuse a subsequent rotation while such relay messages remain, rather than silently dropping them or retaining an unbounded key history.
+- Treat re-enrollment as an explicit owner-authorized replacement snapshot. Bind it to the requester, stage all content atomically, send the destructive manifest last, and require a durable outstanding local request before pruning.
+- Use 4 MiB independently authenticated attachment chunks under the existing 25 MiB product limit. Persist missing-index requests and bounded sender metadata so an interrupted transfer resumes selectively without Docker or a new external service.
+- Preserve ambiguous snapshot enqueue authorization until its 24-hour expiry because a transport failure cannot prove server rejection. This prevents an accepted response from becoming permanently unauthorized at the queue head.
+- Production enrollment remains empty by default. Enabling a real workspace requires the explicit public-only first-owner bootstrap ceremony; no private key or workspace key is copied to the VM.

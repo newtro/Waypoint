@@ -11,6 +11,17 @@ declare global {
       updateDocument(workspaceId: string, objectId: string, title: string, body: string): Promise<string>
       listDocuments(workspaceId: string): Promise<Array<{ id: string; title: string; body: string; revisionId: string; updatedAt: string }>>
       syncStatus(workspaceId:string):Promise<SanitizedSyncStatus>
+      desktopSyncStatus(workspaceId:string):Promise<{configured:boolean;pendingEnrollment:boolean;deviceId?:string;keyEpoch:number;rotationTargetEpoch?:number;endpoint:string}>
+      initializeDesktopSync(workspaceId:string):Promise<{canceled:boolean;bootstrap?:{workspaceId:string;deviceId:string;signingPublicKey:string;encryptionPublicKey:string;endpoint:string;bootstrapRequired:true}}>
+      createSyncInvitation(workspaceId:string):Promise<{token:string;expiresAt:string}>
+      submitSyncEnrollment(token:string):Promise<{workspaceId:string;requestId:string;status:'pending'}>
+      completeSyncEnrollment(workspaceId:string):Promise<{configured:true;deviceId:string;keyEpoch:number}>
+      pendingSyncEnrollments(workspaceId:string):Promise<Array<{requestId:string;deviceId:string;createdAt:string;expiresAt:string}>>
+      approveSyncEnrollment(workspaceId:string,requestId:string):Promise<{canceled:boolean;status?:'approved'}>
+      syncDevices(workspaceId:string):Promise<Array<{deviceId:string;role:string;status:string;enrolledAt:string;revokedAt?:string}>>
+      revokeSyncDevice(workspaceId:string,deviceId:string):Promise<{canceled:boolean;rotation?:{keyEpoch:number}}>
+      resumeSyncRotation(workspaceId:string):Promise<{keyEpoch:number}>
+      syncNow(workspaceId:string):Promise<{sent:number;received:number;activePeers:number}>
       searchText(workspaceId: string, query: string): Promise<SearchResult[]>
       searchSemantic(workspaceId: string, query: string): Promise<SearchResult[]>
       indexDocument(workspaceId: string, objectId: string): Promise<{ ok: true; model: string; modelDigest: string }>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, screen } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
@@ -16,9 +16,14 @@ import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js'
 import { sanitizeSyncStatus } from './core/sync/sync-status.js'
 import { ATTACHMENT_MEDIA_BY_EXTENSION, MAX_ATTACHMENTS_PER_OWNER, readAndValidateAttachment } from './core/chat-attachments.js'
 import { isEffectivelyMaximized, restoreWindowState, type SavedWindowState, type WindowBounds } from './core/window-state.js'
+import {ProtectedSyncVault} from './core/sync/protected-sync-vault.js'
+import {DesktopSyncService} from './core/sync/desktop-sync-service.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let store: WorkspaceStore
+let syncService:DesktopSyncService
+const activeSyncRuns=new Set<string>()
+const syncAbort=new AbortController()
 let trustedSenderId: number | undefined
 let trustedRendererUrl: string | undefined
 const embeddings = new LocalOllamaEmbeddings()
@@ -44,7 +49,7 @@ async function collectDiagnostics(workspaceId:string) {
     attachments:async()=>({missingFiles:local.missingFiles,orphanFiles:local.orphanFiles,digestMismatches:local.digestMismatches}),
     search:async()=>({indexedObjects:local.indexedObjects,expectedObjects:local.expectedObjects}), embeddings:()=>embeddings.status(),
     cli:async(provider)=>{const state=capabilities.find((candidate)=>candidate.name===provider);return {configured:Boolean(state?.executable),available:Boolean(state?.available),version:state?.version}},
-    sync:async()=>({configured:false,pending:0,conflicts:0,activePeers:0}),
+    sync:async()=>{const sync=store.syncStatus(workspaceId);return{configured:syncService.status(workspaceId).configured,pending:Number(sync.pendingMutations??0),conflicts:Number(sync.conflicts??0),activePeers:0}},
   })
 }
 
@@ -66,6 +71,17 @@ function registerIpc(): void {
   })
   handle('waypoint:list-documents', (_event, input: unknown) => store.listDocuments(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
   handle('waypoint:sync-status',(_event,input:unknown)=>sanitizeSyncStatus(store.syncStatus(text((input as Record<string,unknown>).workspaceId,'workspace ID',64))))
+  handle('waypoint:desktop-sync-status',(_event,input:unknown)=>syncService.status(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)))
+  handle('waypoint:desktop-sync-initialize',async(_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64);if(!store.listWorkspaces().some((item)=>item.id===workspaceId))throw new Error('Workspace not found');const confirmation=await dialog.showMessageBox({type:'warning',buttons:['Create protected sync identity','Cancel'],defaultId:1,cancelId:1,message:'Set up this Mac as the first sync owner?',detail:'This creates local protected keys. An authorized operator must register the displayed public bootstrap bundle before sync connects.'});if(confirmation.response!==0)return{canceled:true};const bootstrap=syncService.initializeOwner(workspaceId);store.configureSyncDevice(workspaceId,bootstrap.deviceId);return{canceled:false,bootstrap}})
+  handle('waypoint:desktop-sync-create-invitation',async(_event,input:unknown)=>syncService.createInvitation(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)))
+  handle('waypoint:desktop-sync-submit-enrollment',async(_event,input:unknown)=>syncService.submitEnrollment(text((input as Record<string,unknown>).token,'enrollment token',8192)))
+  handle('waypoint:desktop-sync-complete-enrollment',async(_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64),result=await syncService.completeEnrollment(workspaceId);store.configureSyncDevice(workspaceId,result.deviceId);return result})
+  handle('waypoint:desktop-sync-pending',async(_event,input:unknown)=>syncService.pendingEnrollments(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)))
+  handle('waypoint:desktop-sync-approve',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),requestId=text(value.requestId,'request ID',64),confirmation=await dialog.showMessageBox({type:'warning',buttons:['Approve device','Cancel'],defaultId:1,cancelId:1,message:'Approve this device for workspace sync?',detail:'The device will receive a wrapped copy of the workspace key and request a fresh encrypted workspace snapshot after enrollment.'});if(confirmation.response!==0)return{canceled:true};return{canceled:false,...await syncService.approveEnrollment(workspaceId,requestId)}})
+  handle('waypoint:desktop-sync-devices',async(_event,input:unknown)=>syncService.devices(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)))
+  handle('waypoint:desktop-sync-revoke',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),deviceId=text(value.deviceId,'device ID',64),confirmation=await dialog.showMessageBox({type:'warning',buttons:['Revoke and rotate','Cancel'],defaultId:1,cancelId:1,message:'Revoke this device?',detail:'The device will lose relay access immediately. Waypoint will rotate the workspace key for remaining devices.'});if(confirmation.response!==0)return{canceled:true};await syncService.revoke(workspaceId,deviceId);return{canceled:false,rotation:await syncService.rotate(workspaceId)}})
+  handle('waypoint:desktop-sync-resume-rotation',async(_event,input:unknown)=>syncService.rotate(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)))
+  handle('waypoint:desktop-sync-now',async(_event,input:unknown)=>syncService.syncOnce(text((input as Record<string,unknown>).workspaceId,'workspace ID',64),store))
   handle('waypoint:search-text', (_event, input: unknown) => {
     const value = input as Record<string, unknown>
     const workspaceId = text(value.workspaceId, 'workspace ID', 64)
@@ -237,8 +253,8 @@ if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.whenReady().then(() => {
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'waypoint.sqlite'))
-    registerIpc()
-    createWindow()
+    const vault=new ProtectedSyncVault(path.join(app.getPath('userData'),'sync-secrets'),{available:()=>safeStorage.isEncryptionAvailable(),encrypt:(value)=>safeStorage.encryptString(value),decrypt:(value)=>safeStorage.decryptString(Buffer.from(value))})
+    void DesktopSyncService.create(vault).then((service)=>{syncService=service;registerIpc();createWindow();const timer=setInterval(()=>{for(const workspace of store.listWorkspaces()){if(activeSyncRuns.has(workspace.id)||!syncService.status(workspace.id).configured)continue;activeSyncRuns.add(workspace.id);void syncService.syncOnce(workspace.id,store,syncAbort.signal).catch((error)=>{if(!syncAbort.signal.aborted)console.warn('Workspace sync attempt failed',error instanceof Error?error.message:'unknown')}).finally(()=>activeSyncRuns.delete(workspace.id))}},5_000);timer.unref()}).catch((error)=>{console.error('Protected sync startup failed',error);dialog.showErrorBox('Waypoint protected storage unavailable','Sync requires macOS Keychain or Windows DPAPI. Waypoint cannot start sync safely on this device.');app.quit()})
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   })
   app.on('second-instance', () => { const window = BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.focus() } })
@@ -246,7 +262,7 @@ else {
   app.on('before-quit', (event) => {
     if(shutdownStarted)return
     event.preventDefault();shutdownStarted=true
-    void workbench.shutdown().finally(()=>{store?.close();app.exit(0)})
+    syncAbort.abort();void workbench.shutdown().finally(()=>{store?.close();app.exit(0)})
   })
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 }

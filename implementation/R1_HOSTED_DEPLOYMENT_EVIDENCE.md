@@ -32,6 +32,8 @@
 - Final hosted vertical-slice verdict: clean pass, blocker 0 / high 0 / medium 0 / low 0.
 - Canonical R1 verdict: blocker 1 / high 0 / medium 0 / low 0 for the product/key-lifecycle and physical app-integrated peer matrix below.
 
-## Remaining canonical R1 blocker
+## Desktop integration update
 
-This proves the hosted transport vertical slice, not the entire canonical R1 product exit. The current desktop app still lacks the reviewed one-use enrollment/device-management/key-rotation workflow and actual peer transport integration. Only one physical Mac is available, so the required two-physical-Mac app matrix—attachments, concurrent edits/conflicts, deletion convergence/re-enrollment, outage and recovery—has not run. Windows remains platform-contingent. The deployed authority registry is intentionally empty after validation; actual devices cannot connect until that workflow is implemented and explicitly enrolled.
+The reviewed desktop relay runtime was deployed as the reversible release `r1-desktop-sync-20260803`; only the dedicated relay service restarted. Authority tables, restart persistence, encrypted pre-change backup, SQLite integrity, TLS, loopback binding, service state, and the intentionally empty production registry were verified. Caddy, PostgreSQL, DNS, firewall, backup policy, credentials, and unrelated services/data were not changed.
+
+The automated app-integrated matrix now covers isolated same-Mac identities for canonical convergence, attachments, conflicts, graph changes, offline work/deletion, re-enrollment, outage/recovery, revocation, and rotation. The remaining R1 hardware evidence is two physical Macs; Windows remains platform-contingent. No real workspace was enrolled during deployment, so the production registry remains intentionally empty until the user performs the public-only first-owner bootstrap ceremony.

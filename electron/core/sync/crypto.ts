@@ -1,6 +1,6 @@
 import sodium from 'libsodium-wrappers-sumo'
 import { createHash, randomUUID } from 'node:crypto'
-import type { DeviceIdentity, DeviceKeyPair, EnrollmentApproval, EnrollmentRequest, SignedEncryptedEnvelope } from './types.js'
+import type { DeviceIdentity, DeviceKeyPair, EnrollmentApproval, EnrollmentConsumeProof, EnrollmentInvitation, EnrollmentRequest, RotationClaimProof, SignedEncryptedEnvelope } from './types.js'
 import type { ChunkCrypto } from './attachment-transfer.js'
 import {R0_PROTOCOL_CONTRACT,validateRecoveryManifest,type RecoveryManifest} from './protocol-contract.js'
 
@@ -24,7 +24,11 @@ function canonicalEnrollment(request: Omit<EnrollmentRequest, 'signature'>): str
     request.createdAt, request.expiresAt,
   ])
 }
-function canonicalApproval(approval:Omit<EnrollmentApproval,'signature'>):string{return JSON.stringify([approval.version,approval.requestId,approval.workspaceId,approval.ownerDeviceId,approval.membershipEpoch,approval.approvedAt])}
+function canonicalApproval(approval:Omit<EnrollmentApproval,'signature'>):string{return JSON.stringify([approval.version,approval.requestId,approval.workspaceId,approval.ownerDeviceId,approval.membershipEpoch,approval.approvedAt,approval.deviceKeyDigest??'',approval.wrappedWorkspaceKeyDigest??''])}
+function canonicalInvitation(invitation:Omit<EnrollmentInvitation,'signature'>):string{return JSON.stringify([invitation.version,invitation.invitationId,invitation.workspaceId,invitation.ownerDeviceId,invitation.membershipEpoch,invitation.secretHash,invitation.expiresAt])}
+function canonicalConsume(proof:Omit<EnrollmentConsumeProof,'signature'>):string{return JSON.stringify([proof.version,proof.requestId,proof.workspaceId,proof.deviceId,proof.approvalSignatureDigest,proof.nonce,proof.createdAt])}
+function canonicalRotationClaim(proof:Omit<RotationClaimProof,'signature'>):string{return JSON.stringify([proof.version,proof.workspaceId,proof.deviceId,proof.targetEpoch,proof.nonce,proof.createdAt])}
+const digest=(value:string)=>createHash('sha256').update(value).digest('hex')
 
 export class WaypointCrypto {
   static async create(): Promise<WaypointCrypto> {
@@ -128,7 +132,7 @@ export class WaypointCrypto {
     envelope: SignedEncryptedEnvelope
     sender: DeviceIdentity
     recipient: DeviceKeyPair
-    workspaceKey: string
+    workspaceKey: string | string[]
   }): T {
     const { envelope } = input
     if (envelope.version !== 1 || envelope.senderDeviceId !== input.sender.deviceId ||
@@ -140,10 +144,8 @@ export class WaypointCrypto {
     const created=Date.parse(envelope.createdAt),expires=Date.parse(envelope.expiresAt)
     if(!Number.isFinite(created)||!Number.isFinite(expires)||expires<=created||expires-created>R0_PROTOCOL_CONTRACT.retention.relayEnvelopeMaximumDays*86_400_000)throw new Error('Envelope lifetime is invalid')
     const header = [1, envelope.workspaceId, envelope.senderDeviceId, envelope.recipientDeviceId, envelope.keyEpoch, envelope.sequence]
-    const plaintext = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-      null, unb64(envelope.ciphertext), utf8(JSON.stringify(header)), unb64(envelope.nonce), unb64(input.workspaceKey),
-    )
-    return JSON.parse(sodium.to_string(plaintext)) as T
+    for(const candidate of(Array.isArray(input.workspaceKey)?input.workspaceKey:[input.workspaceKey]))try{const plaintext=sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null,unb64(envelope.ciphertext),utf8(JSON.stringify(header)),unb64(envelope.nonce),unb64(candidate));return JSON.parse(sodium.to_string(plaintext)) as T}catch{/* Try the retained previous epoch key. */}
+    throw new Error('Envelope cannot be opened by an active workspace key')
   }
 
   verifyEnvelopeSignature(envelope:SignedEncryptedEnvelope,sender:DeviceIdentity):boolean{
@@ -209,9 +211,29 @@ export class WaypointCrypto {
     }
   }
 
-  approveEnrollment(request:EnrollmentRequest,owner:DeviceKeyPair,membershipEpoch:number,now=new Date()):EnrollmentApproval{
+  createEnrollmentInvitation(workspaceId:string,owner:DeviceKeyPair,membershipEpoch:number,expiresAt:Date){
+    if(!Number.isSafeInteger(membershipEpoch)||membershipEpoch<1||expiresAt.getTime()<=Date.now()||expiresAt.getTime()>Date.now()+24*60*60_000)throw new Error('Invitation authority or expiry is invalid')
+    const secret=b64(sodium.randombytes_buf(32)),unsigned:Omit<EnrollmentInvitation,'signature'>={version:1,invitationId:randomUUID(),workspaceId,ownerDeviceId:owner.deviceId,membershipEpoch,secretHash:digest(secret),expiresAt:expiresAt.toISOString()}
+    return{secret,invitation:{...unsigned,signature:b64(sodium.crypto_sign_detached(utf8(canonicalInvitation(unsigned)),unb64(owner.signingPrivateKey)))}}
+  }
+  verifyEnrollmentInvitation(invitation:EnrollmentInvitation,owner:DeviceIdentity,now=new Date()):boolean{
+    try{return invitation.version===1&&invitation.ownerDeviceId===owner.deviceId&&Date.parse(invitation.expiresAt)>now.getTime()&&Date.parse(invitation.expiresAt)<=now.getTime()+24*60*60_000&&sodium.crypto_sign_verify_detached(unb64(invitation.signature),utf8(canonicalInvitation(invitation)),unb64(owner.signingPublicKey))}catch{return false}
+  }
+  createEnrollmentConsumeProof(request:EnrollmentRequest,approval:EnrollmentApproval,device:DeviceKeyPair,now=new Date()):EnrollmentConsumeProof{
+    if(request.device.deviceId!==device.deviceId||approval.requestId!==request.requestId)throw new Error('Enrollment consumption authority mismatch')
+    const unsigned:Omit<EnrollmentConsumeProof,'signature'>={version:1,requestId:request.requestId,workspaceId:request.workspaceId,deviceId:device.deviceId,approvalSignatureDigest:digest(approval.signature),nonce:randomUUID(),createdAt:now.toISOString()}
+    return{...unsigned,signature:b64(sodium.crypto_sign_detached(utf8(canonicalConsume(unsigned)),unb64(device.signingPrivateKey)))}
+  }
+  verifyEnrollmentConsumeProof(proof:EnrollmentConsumeProof,device:DeviceIdentity,approval:EnrollmentApproval,now=new Date()):boolean{
+    try{const created=Date.parse(proof.createdAt);return proof.version===1&&proof.deviceId===device.deviceId&&proof.requestId===approval.requestId&&proof.workspaceId===approval.workspaceId&&proof.approvalSignatureDigest===digest(approval.signature)&&Number.isFinite(created)&&Math.abs(now.getTime()-created)<=60_000&&sodium.crypto_sign_verify_detached(unb64(proof.signature),utf8(canonicalConsume(proof)),unb64(device.signingPublicKey))}catch{return false}
+  }
+  createRotationClaim(workspaceId:string,targetEpoch:number,device:DeviceKeyPair,at=new Date()):RotationClaimProof{const unsigned:Omit<RotationClaimProof,'signature'>={version:1,workspaceId,deviceId:device.deviceId,targetEpoch,nonce:randomUUID(),createdAt:at.toISOString()};return{...unsigned,signature:b64(sodium.crypto_sign_detached(utf8(canonicalRotationClaim(unsigned)),unb64(device.signingPrivateKey)))}}
+  verifyRotationClaim(proof:RotationClaimProof,device:DeviceIdentity,at=new Date()):boolean{try{const created=Date.parse(proof.createdAt);return proof.version===1&&proof.deviceId===device.deviceId&&Number.isSafeInteger(proof.targetEpoch)&&proof.targetEpoch>1&&Math.abs(at.getTime()-created)<=60_000&&sodium.crypto_sign_verify_detached(unb64(proof.signature),utf8(canonicalRotationClaim(proof)),unb64(device.signingPublicKey))}catch{return false}}
+
+  approveEnrollment(request:EnrollmentRequest,owner:DeviceKeyPair,membershipEpoch:number,now=new Date(),wrappedWorkspaceKey?:string):EnrollmentApproval{
     if(!Number.isSafeInteger(membershipEpoch)||membershipEpoch<1)throw new Error('Valid owner membership epoch required')
-    const unsigned:Omit<EnrollmentApproval,'signature'>={version:1,requestId:request.requestId,workspaceId:request.workspaceId,ownerDeviceId:owner.deviceId,membershipEpoch,approvedAt:now.toISOString()}
+    const deviceKeyDigest=digest(JSON.stringify([request.device.deviceId,request.device.signingPublicKey,request.device.encryptionPublicKey]))
+    const unsigned:Omit<EnrollmentApproval,'signature'>={version:1,requestId:request.requestId,workspaceId:request.workspaceId,ownerDeviceId:owner.deviceId,membershipEpoch,approvedAt:now.toISOString(),deviceKeyDigest,...(wrappedWorkspaceKey?{wrappedWorkspaceKeyDigest:digest(wrappedWorkspaceKey)}:{})}
     return {...unsigned,signature:b64(sodium.crypto_sign_detached(utf8(canonicalApproval(unsigned)),unb64(owner.signingPrivateKey)))}
   }
   verifyEnrollmentApproval(approval:EnrollmentApproval,owner:DeviceIdentity):boolean{

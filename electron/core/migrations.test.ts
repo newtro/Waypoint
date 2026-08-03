@@ -15,11 +15,11 @@ describe('ordered schema migration', () => {
   it('snapshots known old data and applies each migration once', () => {
     const {root,file,db}=legacy(), before=assertSupportedSchema(db)
     expect(createMigrationSnapshot(db,file,before)).toBeTruthy()
-    runMigrations(db,before,[{version:5,apply:(database)=>database.exec('CREATE TABLE settings(key TEXT PRIMARY KEY)')},{version:6,apply:(database)=>database.exec('CREATE TABLE execution_sources(id TEXT PRIMARY KEY)')}])
+    runMigrations(db,before,[{version:5,apply:(database)=>database.exec('CREATE TABLE settings(key TEXT PRIMARY KEY)')},{version:6,apply:(database)=>database.exec('CREATE TABLE execution_sources(id TEXT PRIMARY KEY)')},{version:7,apply:(database)=>database.exec('CREATE TABLE sync_state(id TEXT PRIMARY KEY)')}])
     expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION)
     expect((db.prepare('SELECT value FROM content').get() as {value:string}).value).toBe('preserved')
     expect(readdirSync(path.join(root,'migration-snapshots')).filter((name)=>name.endsWith('.sqlite'))).toHaveLength(1)
-    runMigrations(db,schemaVersion(db),[{version:5,apply:()=>{throw new Error('must not rerun')}},{version:6,apply:()=>{throw new Error('must not rerun')}}])
+    runMigrations(db,schemaVersion(db),[{version:5,apply:()=>{throw new Error('must not rerun')}},{version:6,apply:()=>{throw new Error('must not rerun')}},{version:7,apply:()=>{throw new Error('must not rerun')}}])
     db.close()
   })
 

@@ -16,6 +16,7 @@ const encoder = new TextEncoder()
 function aad(transferId: string, attachmentId: string, index: number, total: number, plaintextBytes: number): Uint8Array {
   return encoder.encode(JSON.stringify([transferId, attachmentId, index, total, plaintextBytes]))
 }
+export async function decryptAttachmentChunk(chunk:EncryptedChunk,crypto:ChunkCrypto):Promise<Uint8Array>{if(!Number.isSafeInteger(chunk.total)||chunk.total<1||chunk.total>1024||!Number.isSafeInteger(chunk.index)||chunk.index<0||chunk.index>=chunk.total||!Number.isSafeInteger(chunk.plaintextBytes)||chunk.plaintextBytes<0||chunk.plaintextBytes>8*1024*1024||chunk.ciphertext.byteLength>8*1024*1024+65_536)throw new Error('Invalid encrypted attachment chunk');const plaintext=await crypto.open(chunk.ciphertext,aad(chunk.transferId,chunk.attachmentId,chunk.index,chunk.total,chunk.plaintextBytes));if(plaintext.byteLength!==chunk.plaintextBytes)throw new Error('Plaintext size mismatch');return plaintext}
 
 export async function encryptAttachment(input: {
   transferId: string; attachmentId: string; bytes: Uint8Array; chunkBytes: number; crypto: ChunkCrypto

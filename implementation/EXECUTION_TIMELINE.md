@@ -101,3 +101,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Hosted transport evidence: real public TLS, two isolated same-Mac identities, bidirectional encryption, authorization/replay/revocation/epoch denial, restart persistence, and authenticated backup/restore.
 - Independent hosted vertical-slice final verdict: clean, blocker 0 / high 0 / medium 0 / low 0. Final local gate: 41 suites / 201 tests, lint, build, zero-vulnerability audit, native macOS package, and runtime closure.
 - Canonical R1 remains blocked on desktop enrollment/device/key lifecycle integration and the two-physical-Mac application sync matrix. Evidence: `implementation/R1_HOSTED_DEPLOYMENT_EVIDENCE.md`.
+
+## 2026-08-03 — R1 desktop sync integration
+
+- Implemented the native desktop enrollment, device/revocation, resumable rotation, signed relay pump, canonical convergence, replacement snapshot, and selective attachment-resume paths.
+- Expanded the isolated peer matrix through conflicts, offline deletion, graph updates, re-enrollment, three-peer isolation, old-epoch drain, malicious snapshot rejection, outage recovery, and dropped attachment chunks.
+- Repaired every blocker/high independent-review finding through repeated adversarial passes; terminal reviewer and deployment evidence are recorded in `implementation/R1_DESKTOP_SYNC_EVIDENCE.md`.
+- Physical two-Mac validation and Windows-native verification remain honest hardware-contingent gates; they are not represented by the isolated same-Mac matrix.
