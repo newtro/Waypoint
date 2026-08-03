@@ -58,3 +58,9 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Repaired three independent-review high findings: stale startup-failure state, inexact historical retry, and provider-receipt overclaim. Exact retry provenance required schema 6.
 - Passed 161 tests, lint, production build, high-severity audit, bounded live Codex/Claude completion/failure/cancellation checks, native arm64 packaging, and focused independent re-review.
 - Windows-native and signed/published release verification remain explicitly deferred.
+
+## 2026-08-03 — Packaged runtime path repair
+
+- Reproduced the macOS `ERR_MODULE_NOT_FOUND` before SQLite opened: the package excluded the compiled CLI-capability module required by main-process startup.
+- Included the required compiled runtime subtree and added an `app.asar` relative-import closure gate plus exact regression test.
+- Preserved and reopened the existing workspace/messages through the normal schema migration; native package launch now renders without the error dialog.

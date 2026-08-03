@@ -3,7 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "packageManager": "npm@10.9.2",
-  "engines": { "node": "22.16.x", "npm": "10.9.x" },
+  "engines": {
+    "node": "22.16.x",
+    "npm": "10.9.x"
+  },
   "description": "Personal-first second-brain desktop application",
   "type": "module",
   "main": "dist-electron/electron/main.js",
@@ -20,6 +23,7 @@
     "spike:cli": "tsx spikes/cli-capabilities.ts",
     "verify:cli-live": "tsx spikes/live-cli-verification.ts",
     "diagnose:chat-runtime": "tsx scripts/chat-runtime-diagnostics.ts",
+    "verify:package-runtime": "tsx scripts/package-runtime-closure.ts",
     "spike:embeddings": "tsx spikes/embedding-benchmark.ts",
     "spike:embedding-compare": "tsx spikes/embedding-benchmark-harness.ts",
     "package:dir": "npm run build && electron-builder --dir --config electron-builder.yml"
@@ -30,6 +34,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@eslint/js": "10.0.1",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
