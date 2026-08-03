@@ -16,3 +16,5 @@ export interface SanitizedSyncStatus {
   enrollmentAvailable: false
   connectionConfigured: false
 }
+export type ActivityFamily='content'|'execution'|'sync'|'rules'|'automation'|'meeting'|'lifecycle'|'maintenance'
+export interface ActivityTimelineItem {id:string;category:string;family:ActivityFamily;action:string;objectId?:string;objectKind:string;objectState:'available'|'deleted'|'historical';objectTitle?:string;targetId?:string;targetKind?:'chat'|'document'|'memory'|'commitment'|'rule';details:Record<string,string|number|boolean|null>;createdAt:string}

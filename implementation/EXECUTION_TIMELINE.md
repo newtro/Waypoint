@@ -130,3 +130,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Added schema 11, source-loss invalidation triggers, workspace isolation, deterministic bounds, backup/restore remapping, and chat-first Graph & rules UI.
 - Independent review initially found three highs and two mediums in approved-rule invalidation, later-source merging, outcome expectations, graph endpoint visibility, and migration realism. All were repaired; final verdict: blocker 0 / high 0 / medium 0 / low 0.
 - Terminal gate: 53 suites / 254 tests, lint, production build, zero production vulnerabilities, native macOS package/runtime closure, diff hygiene, and isolated-profile packaged launch.
+
+## R3 Slice 4 — unified activity timeline (2026-08-03)
+
+- Selected as the next safe ordered R3 slice after the knowledge graph/rules gate. Executor: primary task. Reviewer: fresh independent adversarial context supplied the acceptance criteria and implementation diff.
+- Implemented a bounded workspace timeline projection, normalized event families, safe filtering, surviving-object navigation, deleted-target truthfulness, strict metadata minimization, and schema-12 activity indexing.
+- External accounts, work data, scheduling, automation execution, audio recording, Windows hardware, signing, and two-instance validation remain outside this slice.
+- Independent review initially found one high and three mediums. Repairs made sync audit writes non-interfering with revoke/rotation, covered the full bounded query window, added exact safe-target navigation, and eliminated token-shaped secret projection. Final verdict: blocker 0 / high 0 / medium 0 / low 0.
+- Terminal gate: 56 suites / 259 tests, lint, production build, zero production vulnerabilities, native macOS package/runtime closure, diff hygiene, and isolated-profile packaged launch.

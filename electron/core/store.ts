@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync,existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync,statSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { ExportArchive, GraphEdge, GraphNode, ObjectKind, SearchResult, WorkspaceSummary } from './types.js'
+import type { ActivityFamily, ActivityTimelineItem, ExportArchive, GraphEdge, GraphNode, ObjectKind, SearchResult, WorkspaceSummary } from './types.js'
 import { WorkspaceSyncJournal } from './sync/workspace-sync-journal.js'
 import type { InboundChange, LocalMutation } from './sync/sync-store.js'
 import { archiveIntegrity, validateArchive } from './backup.js'
@@ -11,6 +11,7 @@ import { MAX_ATTACHMENT_BYTES,MAX_ATTACHMENTS_PER_OWNER,MAX_ATTACHMENTS_PER_WORK
 import {extractSuggestions,SUGGESTION_EXTRACTOR,SUGGESTION_SCAN_LIMITS} from './derived-suggestions.js'
 import {composeDailyBriefing,localDayAt,type DailyBriefing,type BriefingSource} from './daily-briefing.js'
 import {extractRuleDirectives,RULE_EXTRACTOR} from './learned-rules.js'
+import {ACTIVITY_FAMILIES,activityFamily,safeActivityDetails} from './activity-timeline.js'
 
 const now = () => new Date().toISOString()
 const contentDigest=(value:string)=>createHash('sha256').update(value).digest('hex')
@@ -51,6 +52,7 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, sha256 TEXT NOT NULL, relative_path TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS embeddings(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, object_id TEXT NOT NULL, object_kind TEXT NOT NULL, revision_id TEXT, provider TEXT NOT NULL, provider_version TEXT NOT NULL, model TEXT NOT NULL, model_digest TEXT NOT NULL, dimensions INTEGER NOT NULL, chunking_digest TEXT NOT NULL, vector_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS activities(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, category TEXT NOT NULL, action TEXT NOT NULL, object_id TEXT, object_kind TEXT, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_activities_workspace_created ON activities(workspace_id,created_at DESC,id);
       CREATE TABLE IF NOT EXISTS tombstones(object_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, object_kind TEXT NOT NULL, deleted_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_work(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, context_object_id TEXT NOT NULL, status TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS security_profiles(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, roots_json TEXT NOT NULL, filesystem TEXT NOT NULL, network TEXT NOT NULL, tools_json TEXT NOT NULL, approval TEXT NOT NULL, max_duration_ms INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, peer_eligible INTEGER NOT NULL, secret_names_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(workspace_id,name));
@@ -98,6 +100,7 @@ export class WorkspaceStore {
     }}])
     runMigrations(this.db,schemaVersion(this.db),[{version:10,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS briefing_dismissals(workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,source_id TEXT NOT NULL,source_kind TEXT NOT NULL CHECK(source_kind IN ('commitment','document','memory')),local_day TEXT NOT NULL,dismissed_at TEXT NOT NULL,PRIMARY KEY(workspace_id,source_id,source_kind,local_day));CREATE INDEX IF NOT EXISTS idx_briefing_dismissals_day ON briefing_dismissals(workspace_id,local_day);CREATE TRIGGER IF NOT EXISTS delete_commitment_briefing_dismissal AFTER DELETE ON commitments BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='commitment'; END;CREATE TRIGGER IF NOT EXISTS delete_document_briefing_dismissal AFTER DELETE ON documents BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='document'; END;CREATE TRIGGER IF NOT EXISTS delete_memory_briefing_dismissal AFTER DELETE ON memories BEGIN DELETE FROM briefing_dismissals WHERE workspace_id=OLD.workspace_id AND source_id=OLD.id AND source_kind='memory'; END;")}])
     runMigrations(this.db,schemaVersion(this.db),[{version:11,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS rule_suggestions(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,statement TEXT NOT NULL,normalized TEXT NOT NULL,fingerprint TEXT NOT NULL UNIQUE,scope TEXT NOT NULL CHECK(scope='workspace'),confidence REAL NOT NULL,extractor TEXT NOT NULL,extractor_version TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),last_dry_run_digest TEXT,last_dry_run_at TEXT,resolved_at TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS rule_suggestion_sources(suggestion_id TEXT NOT NULL REFERENCES rule_suggestions(id) ON DELETE CASCADE,message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,excerpt TEXT NOT NULL,source_digest TEXT NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,PRIMARY KEY(suggestion_id,message_id));CREATE TABLE IF NOT EXISTS learned_rules(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,suggestion_id TEXT NOT NULL UNIQUE REFERENCES rule_suggestions(id) ON DELETE CASCADE,statement TEXT NOT NULL,scope TEXT NOT NULL CHECK(scope='workspace'),version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),prior_enabled INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS rule_outcomes(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,rule_id TEXT REFERENCES learned_rules(id) ON DELETE CASCADE,suggestion_id TEXT REFERENCES rule_suggestions(id) ON DELETE CASCADE,action TEXT NOT NULL,match_count INTEGER NOT NULL,version INTEGER NOT NULL,created_at TEXT NOT NULL);CREATE TRIGGER IF NOT EXISTS invalidate_rule_after_source_delete AFTER DELETE ON rule_suggestion_sources WHEN (SELECT count(*) FROM rule_suggestion_sources WHERE suggestion_id=OLD.suggestion_id)<2 BEGIN DELETE FROM rule_suggestions WHERE id=OLD.suggestion_id; END;")}])
+    runMigrations(this.db,schemaVersion(this.db),[{version:12,apply:(database)=>database.exec('CREATE INDEX IF NOT EXISTS idx_activities_workspace_created ON activities(workspace_id,created_at DESC,id)')}])
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{id:string;localPath:string}>) {
       const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
       const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)
@@ -178,7 +181,7 @@ export class WorkspaceStore {
     const id=randomUUID(), timestamp=now()
     this.transaction(()=>{
       this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,input.workspaceId,input.chatId,input.sourceMessageId??null,input.parentExecutionId??null,input.cli,input.model??null,'local',input.securityProfileId,createHash('sha256').update(input.prompt).digest('hex'),'queued',input.depth??0,timestamp)
-      this.activity(input.workspaceId,'ai','execution.queued',id,'execution',{cli:input.cli,chatId:input.chatId,profileId:input.securityProfileId,parentExecutionId:input.parentExecutionId??null})
+      this.activity(input.workspaceId,'ai','execution.queued',id,'execution',{cli:input.cli,device:'local'})
     })
     return id
   }
@@ -619,8 +622,20 @@ export class WorkspaceStore {
     for (const file of stagedFiles) rmSync(file.staged, { force: true })
   }
 
-  listActivity(workspaceId: string): Array<Record<string, unknown>> {
-    return this.db.prepare('SELECT id,category,action,object_id objectId,object_kind objectKind,metadata_json metadata,created_at createdAt FROM activities WHERE workspace_id=? ORDER BY created_at DESC').all(workspaceId) as Array<Record<string, unknown>>
+  listActivity(workspaceId:string,filters:{families?:ActivityFamily[];query?:string;limit?:number}={}):ActivityTimelineItem[] {
+    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
+    if(filters.limit!==undefined&&!Number.isFinite(filters.limit))throw new Error('Activity limit is invalid')
+    if(filters.families?.some((family)=>!ACTIVITY_FAMILIES.includes(family)))throw new Error('Activity family is invalid')
+    const limit=Math.min(Math.max(Math.trunc(filters.limit??250),1),500),query=(filters.query??'').trim().toLocaleLowerCase(),families=new Set(filters.families??[])
+    const rows=this.db.prepare('SELECT id,category,action,object_id objectId,object_kind objectKind,metadata_json metadata,created_at createdAt FROM activities WHERE workspace_id=? ORDER BY created_at DESC,id DESC LIMIT 500').all(workspaceId) as Array<Record<string,unknown>>
+    const timeline:ActivityTimelineItem[]=[]
+    for(const row of rows){const family=activityFamily(String(row.category));if(families.size&&!families.has(family))continue;const objectId=row.objectId?String(row.objectId):undefined,objectKind=String(row.objectKind),object=this.activityObject(workspaceId,objectId,objectKind),action=String(row.action);if(query&&![family,String(row.category),action,objectKind,object.title??''].some((value)=>value.toLocaleLowerCase().includes(query)))continue;timeline.push({id:String(row.id),category:String(row.category),family,action,objectId,objectKind,objectState:action==='deleted'||action.endsWith('.deleted')?'deleted':object.title?'available':'historical',objectTitle:object.title,targetId:object.targetId,targetKind:object.targetKind,details:safeActivityDetails(String(row.metadata)),createdAt:String(row.createdAt)});if(timeline.length>=limit)break}
+    return timeline
+  }
+
+  recordSyncActivity(workspaceId:string,action:'device.initialized'|'device.enrolled'|'device.approved'|'device.revoked'|'key.rotated'|'sync.completed',details:Record<string,unknown>={}):void {
+    if(!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(workspaceId))throw new Error('Workspace not found')
+    this.activity(workspaceId,'sync',action,workspaceId,'workspace',details)
   }
 
   exportWorkspace(workspaceId: string): ExportArchive {
@@ -789,6 +804,13 @@ export class WorkspaceStore {
 
   private activity(workspaceId: string, category: string, action: string, objectId: string, objectKind: string, metadata: Record<string, unknown>): void {
     this.db.prepare('INSERT INTO activities VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(), workspaceId, category, action, objectId, objectKind, JSON.stringify(metadata), now())
+  }
+  private activityObject(workspaceId:string,objectId:string|undefined,kind:string):{title?:string;targetId?:string;targetKind?:'chat'|'document'|'memory'|'commitment'|'rule'}{
+    if(!objectId)return{}
+    if(kind==='message'){const row=this.db.prepare('SELECT c.id chatId,c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=?').get(objectId,workspaceId) as {chatId:string;title:string}|undefined;return row?{title:`Message in ${row.title}`,targetId:row.chatId,targetKind:'chat'}:{}}
+    if(kind==='execution'){const row=this.db.prepare("SELECT cli||' · '||status title,chat_id chatId FROM executions WHERE id=? AND workspace_id=?").get(objectId,workspaceId) as {title:string;chatId:string}|undefined;return row?{title:row.title,targetId:row.chatId,targetKind:'chat'}:{}}
+    const lookups:Record<string,[string,'chat'|'document'|'memory'|'commitment'|'rule']>={document:['SELECT title FROM documents WHERE id=? AND workspace_id=?','document'],chat:['SELECT title FROM chats WHERE id=? AND workspace_id=?','chat'],memory:['SELECT title FROM memories WHERE id=? AND workspace_id=?','memory'],commitment:['SELECT title FROM commitments WHERE id=? AND workspace_id=?','commitment'],rule:['SELECT statement title FROM learned_rules WHERE id=? AND workspace_id=?','rule']}
+    const lookup=lookups[kind];if(!lookup){if(kind==='workspace'){const row=this.db.prepare('SELECT name title FROM workspaces WHERE id=? AND id=?').get(objectId,workspaceId) as {title:string}|undefined;return row??{}}return{}};const row=this.db.prepare(lookup[0]).get(objectId,workspaceId) as {title:string}|undefined;return row?{title:row.title,targetId:objectId,targetKind:lookup[1]}:{}
   }
   private indexText(workspaceId: string, objectId: string, kind: ObjectKind, revisionId: string | undefined, title: string, body: string): void { this.db.prepare('INSERT INTO search_fts VALUES (?,?,?,?,?,?)').run(workspaceId, objectId, kind, revisionId ?? null, title, body) }
   private attachmentPath(relativePath:string):string{if(relativePath!==path.basename(relativePath)||relativePath.includes('\0'))throw new Error('Stored attachment path is invalid');return path.join(this.attachmentRoot,relativePath)}

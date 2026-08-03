@@ -210,3 +210,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Require two distinct user-message directives, exact source provenance, and a current dry run before approval. Do not learn from assistant/system text or rejection behavior.
 - Treat suggestions and approved rules as source-owned. If valid provenance falls below two messages, delete the inferred rule rather than retaining a hidden profile.
 - Version rules from `local-directives` extractor `1.0.0`; outcome history records only action, counts, version, and timestamps, never copied source text.
+
+## R3 Slice 4 — unified activity timeline (2026-08-03)
+
+- Project activities through a content-minimized display contract instead of exposing stored metadata JSON to the renderer. Only an explicit primitive-value allowlist is visible; authored content, paths, credentials, keys, raw output, and payloads remain excluded.
+- Normalize existing producers into stable content, execution, sync, rules, lifecycle, and maintenance families. Reserve meeting and automation families without fabricating events or implying those features are active.
+- Preserve deletion events as non-navigable historical evidence while resolving only currently surviving object labels. This keeps deletion auditable without retaining deleted titles or bodies.
+- Bound each timeline query to 500 inspected records and 500 maximum returned records, with a default of 250, and add a workspace/time index in schema 12.

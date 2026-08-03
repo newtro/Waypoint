@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('waypoint', {
   listChatAttachments:(workspaceId:string,chatId:string)=>ipcRenderer.invoke('waypoint:list-chat-attachments',{workspaceId,chatId}),
   deleteAttachment:(workspaceId:string,attachmentId:string)=>ipcRenderer.invoke('waypoint:delete-attachment',{workspaceId,attachmentId}),
   graph: (workspaceId: string) => ipcRenderer.invoke('waypoint:graph', { workspaceId }),
-  activity: (workspaceId: string) => ipcRenderer.invoke('waypoint:activity', { workspaceId }),
+  activity: (workspaceId:string,filters?:{families?:string[];query?:string;limit?:number}) => ipcRenderer.invoke('waypoint:activity', { workspaceId,...filters }),
   listChats: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-chats', { workspaceId }),
   cliCapabilities: () => ipcRenderer.invoke('waypoint:cli-capabilities'),
   listSecurityProfiles: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-security-profiles', {workspaceId}),

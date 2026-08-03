@@ -1,4 +1,4 @@
-import type { AttachmentMetadata, GraphEdge, GraphNode, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types'
+import type { ActivityFamily, ActivityTimelineItem, AttachmentMetadata, GraphEdge, GraphNode, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types'
 import type { DiagnosticsReport } from '../electron/core/diagnostics'
 
 declare global {
@@ -32,7 +32,7 @@ declare global {
       listChatAttachments(workspaceId:string,chatId:string):Promise<AttachmentMetadata[]>
       deleteAttachment(workspaceId:string,attachmentId:string):Promise<{ok:true}>
       graph(workspaceId: string): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>
-      activity(workspaceId: string): Promise<Array<Record<string, unknown>>>
+      activity(workspaceId:string,filters?:{families?:ActivityFamily[];query?:string;limit?:number}):Promise<ActivityTimelineItem[]>
       listChats(workspaceId: string): Promise<Array<{ id: string; title: string; updatedAt: string; messages: Array<{ id: string; role: string; body: string; createdAt: string }> }>>
       cliCapabilities(): Promise<Array<{name:'codex'|'claude';available:boolean;executable?:string;version?:string;error?:string;compatible?:boolean;compatibilityError?:string}>>
       listSecurityProfiles(workspaceId:string): Promise<Array<{id:string;name:string;roots:string[];filesystem:'read-only'|'workspace-write';network:'provider-only'|'disabled';tools:string[];approval:'always'|'on-write';maxDurationMs:number;maxConcurrency:number;peerEligible:boolean;secretNames:string[]}>>

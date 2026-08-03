@@ -14,7 +14,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Commitments and memory suggestions | Implemented in R3 Slice 1; local review-first gate passed | Provider-assisted extraction and cross-device canonical commitment sync remain later separately reviewed extensions |
 | Daily briefing | Implemented in R3 Slice 2 as manual local review | Scheduling/delivery and authorized external sources remain later explicit gates |
 | Learned rule suggestions and navigable graph | Implemented in R3 Slice 3 as local advisory rules | Automatic rule application remains a separately reviewed authority boundary |
-| Unified activity timeline | Partial first-pass activity exists | R3 Slice 4 adds derived/rule/meeting/automation event families without content duplication |
+| Unified activity timeline | Implemented in R3 Slice 4 with normalized families, safe filtering/linking, deletion truthfulness, and content-minimized projection | New meeting/automation producers appear only with their separately authorized feature slices |
 | Audio-only meeting capture | Not implemented | R3 Slice 5; local explicit-consent defaults require a separate retention/transcription decision record |
 | Schedules and playbooks | Not implemented | R4 fixture engine after R3 provenance; no unattended external action |
 | Email/Teams/Outlook/calendar/DevOps/webhooks | Architecture/plans only | R4 local fixture contracts may proceed; any app registration, account, tenant, credential, real data, webhook exposure, or write needs explicit authorization |
