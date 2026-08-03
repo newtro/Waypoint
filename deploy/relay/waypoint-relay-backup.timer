@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Waypoint relay encrypted backup
+
+[Timer]
+OnCalendar=*-*-* 03:37:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=waypoint-relay-backup.service
+
+[Install]
+WantedBy=timers.target

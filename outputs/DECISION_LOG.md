@@ -173,3 +173,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Freeze the local durable relay store on SQLite schema version 1 with canonical ISO timestamps, serialized replay/quota enforcement, authenticated-recipient binding, a 256 MiB disk reserve, and opaque aggregate health. Rationale: fail closed on retention, concurrency, impersonation, schema, and disk-pressure hazards before any hosted surface exists.
 - Keep the AWS artifact inert and ARM64-only (`t4g.small`) with explicit CIDR ingress, IMDSv2, encrypted retained root storage, and a localhost-only egress rule. Rationale: CloudFormation creates default allow-all egress when no rule is supplied; deployment must not silently open it.
 - Condition the native service on a future reviewed public authority registry and exit with configuration status 78 before any listener starts. Rationale: no unauthenticated placeholder transport and no restart loop; hosted authority/TLS/transport remains an explicit user-authorized R1 gate.
+
+## R1 hosted vertical slice — 2026-08-03
+
+- Reuse the approved shared x64 Lightsail VM at zero incremental host cost; dedicate `waypoint-relay.johnnycode.ai`, loopback port 8789, a locked service identity, and isolated SQLite paths. Do not use PostgreSQL or Docker.
+- Terminate TLS 1.3 at the marker-bounded Caddy site. Requests bind workspace/device/epoch and content through device signatures and durable nonces; enrollment remains offline/disabled until its canonical workflow exists.
+- Retain messages for at most seven days and authenticated same-host rollback backups for at most fourteen days. Same-host backup is not represented as disaster protection.
+- Leave the deployed registry empty after isolated validation. Rationale: validation private keys are ephemeral and must not become implicit production enrollment.

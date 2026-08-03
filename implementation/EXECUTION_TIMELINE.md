@@ -93,3 +93,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Independent first pass found blocker 1, high 5, medium 5. Repairs and expanded fixtures produced a final clean verdict: blocker 0, high 0, medium 0, low 0.
 - Final gate: 39 suites / 196 tests, lint, build, zero-vulnerability high audit, native macOS package, packaged runtime closure, and diff-check pass.
 - External stop: no AWS resources, DNS, TLS identity, firewall, credentials, backup destination, public network, employer environment, or real two-peer claim without explicit user authority/access.
+
+## 2026-08-03 — R1 hosted relay vertical slice
+
+- Deployed the authenticated opaque relay to the approved shared Ubuntu VM behind a dedicated Caddy/TLS hostname without touching PostgreSQL or unrelated sites.
+- Repaired native launch, signed-principal binding, proxy-aware rate isolation, authenticated backup encryption, exact retention, real health, TLS floor, and malformed-registry failure behavior through the Build to Complete review loop.
+- Hosted transport evidence: real public TLS, two isolated same-Mac identities, bidirectional encryption, authorization/replay/revocation/epoch denial, restart persistence, and authenticated backup/restore.
+- Independent hosted vertical-slice final verdict: clean, blocker 0 / high 0 / medium 0 / low 0. Final local gate: 41 suites / 201 tests, lint, build, zero-vulnerability audit, native macOS package, and runtime closure.
+- Canonical R1 remains blocked on desktop enrollment/device/key lifecycle integration and the two-physical-Mac application sync matrix. Evidence: `implementation/R1_HOSTED_DEPLOYMENT_EVIDENCE.md`.

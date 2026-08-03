@@ -1,0 +1,17 @@
+[Unit]
+Description=Waypoint relay encrypted SQLite backup
+ConditionPathExists=/var/lib/waypoint-relay/relay.sqlite
+
+[Service]
+Type=oneshot
+User=waypoint-relay
+Group=waypoint-relay
+ExecStart=/usr/local/libexec/waypoint-relay-backup
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/waypoint-relay/backups
+ReadOnlyPaths=/etc/waypoint-relay
+UMask=0077
