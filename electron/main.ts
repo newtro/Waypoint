@@ -19,6 +19,7 @@ import { isEffectivelyMaximized, restoreWindowState, type SavedWindowState, type
 import { ProtectedSyncVault } from './core/sync/protected-sync-vault.js';
 import { DesktopSyncService } from './core/sync/desktop-sync-service.js';
 import { recordSyncActivityBestEffort } from './core/activity-recording.js';
+import { assertRoute, proposeRoute } from './core/provider-routing.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
@@ -436,6 +437,7 @@ function registerIpc(): void {
   });
   handle('waypoint:list-chats', (_event, input: unknown) => store.listChats(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
   handle('waypoint:cli-capabilities', async () => Promise.all([detectCli('codex'), detectCli('claude')]));
+  handle('waypoint:propose-chat-route',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64),preferred=text(value.preferred,'preferred provider',20);if(!['codex','claude'].includes(preferred))throw new Error('Unsupported preferred provider');const profileId=text(value.securityProfileId,'security profile ID',64);if(!store.listSecurityProfiles(workspaceId).some((item)=>item.id===profileId))throw new Error('Security profile not found');const ids=Array.isArray(value.attachmentIds)?value.attachmentIds.map((item)=>text(item,'attachment ID',64)):[],available=new Map(store.listChatAttachments(workspaceId,chatId).map((item)=>[item.id,item]));if(ids.some((id)=>!available.has(id)))throw new Error('Attachment not found in chat');return proposeRoute({capabilities:await Promise.all([detectCli('codex'),detectCli('claude')]),preferred:preferred as 'codex'|'claude',allowFallback:value.allowFallback===true,securityProfileId:profileId,attachments:ids.map((id)=>({id,mediaType:available.get(id)!.mediaType,bytes:available.get(id)!.bytes}))})});
   handle('waypoint:list-security-profiles', (_event, input: unknown) => store.listSecurityProfiles(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
   handle('waypoint:list-executions', (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
@@ -459,6 +461,8 @@ function registerIpc(): void {
     if (!profile) throw new Error('Security profile not found');
     const chatAttachmentIds = new Set(store.listChatAttachments(workspaceId, chatId).map((attachment) => attachment.id));
     if (attachmentIds.some((id) => !chatAttachmentIds.has(id))) throw new Error('Attachment not found in chat');
+    const attachmentMetadata=new Map(store.listChatAttachments(workspaceId,chatId).map((item)=>[item.id,item])),route=proposeRoute({capabilities:await Promise.all([detectCli('codex'),detectCli('claude')]),preferred:cli as 'codex'|'claude',allowFallback:false,securityProfileId:profileId,attachments:attachmentIds.map((id)=>({id,mediaType:attachmentMetadata.get(id)!.mediaType,bytes:attachmentMetadata.get(id)!.bytes}))});
+    assertRoute(route,cli as 'codex'|'claude',profileId);
     const passedToCli: string[] = [],
       unsupported: Array<{ id: string; reason: string }> = [],
       imagePaths: string[] = [],
@@ -501,6 +505,7 @@ function registerIpc(): void {
       chatId,
       sourceMessageId,
       cli: cli as 'codex' | 'claude',
+      routedCliVersion:route.providers.find((item)=>item.provider===cli)?.version,
       model: value.model ? text(value.model, 'model', 120) : undefined,
       securityProfileId: profileId,
       prompt,
@@ -515,6 +520,7 @@ function registerIpc(): void {
         detect: async () => {
           const capability = await detectCli(cli as 'codex' | 'claude');
           if (capability.available && capability.compatible === false) throw new Error(capability.compatibilityError);
+          const routedVersion=route.providers.find((item)=>item.provider===cli)?.version;if(capability.version!==routedVersion)throw new Error('CLI version changed after route approval; review the route and retry');
           return capability;
         },
         executionExists: (owner, id) => store.executionExists(owner, id),

@@ -157,6 +157,7 @@ contextBridge.exposeInMainWorld('waypoint', {
     }),
   listChats: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-chats', { workspaceId }),
   cliCapabilities: () => ipcRenderer.invoke('waypoint:cli-capabilities'),
+  proposeChatRoute:(workspaceId:string,chatId:string,preferred:'codex'|'claude',securityProfileId:string,attachmentIds:string[]=[],allowFallback=false)=>ipcRenderer.invoke('waypoint:propose-chat-route',{workspaceId,chatId,preferred,securityProfileId,attachmentIds,allowFallback}),
   listSecurityProfiles: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-security-profiles', { workspaceId }),
   listExecutions: (workspaceId: string, chatId?: string) => {
     currentWorkspaceId = workspaceId;

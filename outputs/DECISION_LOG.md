@@ -233,3 +233,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Require a current definition-bound dry run before manual fixture execution. Preserve exact permission snapshots, deterministic idempotency, three-attempt dead-lettering, and an immediate kill switch.
 - Keep playbooks and runs device-local and workspace-scoped. Backup restore recomputes definition provenance and clears dry-run and idempotency authority so restored workflows cannot run without fresh review.
 - Treat fixture bodies as untrusted content: they cannot influence capability declarations and are excluded from activity details and sync mutations.
+
+## R5 Slice 1 — local explainable provider routing (2026-08-03)
+
+- Record Outlook/calendar and later R4 connectors as authorization-blocked; do not simulate a real connector or treat fixtures as provider validation. Advance to the next locally safe roadmap foundation without claiming R4 connector completion.
+- Limit the registry to the already-authorized signed-in Codex and Claude Code CLIs, local device, subscription cost class, and existing conservative security profiles.
+- Default fallback off. A proposal may describe opt-in fallback only between currently healthy local signed-in CLIs without changing workspace, device, profile, privacy, cost, or network boundary.
+- Recompute eligibility in the trusted main process immediately before execution creation. Renderer selection is a preference, never authority.
+- Unsupported attachments remain local with truthful per-provider eligibility; they do not silently cross providers or become model input.

@@ -144,6 +144,7 @@ declare global {
           compatibilityError?: string;
         }>
       >;
+      proposeChatRoute(workspaceId:string,chatId:string,preferred:'codex'|'claude',securityProfileId:string,attachmentIds?:string[],allowFallback?:boolean):Promise<{version:1;selected?:'codex'|'claude';eligible:Array<'codex'|'claude'>;fallback:Array<'codex'|'claude'>;fallbackEnabled:boolean;device:'local';securityProfileId:string;explanation:string[];providers:Array<{provider:'codex'|'claude';eligible:boolean;version?:string;reason?:string;deliverableAttachmentIds:string[];localOnlyAttachmentIds:string[];privacyClass:'signed-in-cli';costClass:'subscription'}>}>;
       listSecurityProfiles(workspaceId: string): Promise<
         Array<{
           id: string;

@@ -36,7 +36,9 @@ export function App() {
     [capabilities, setCapabilities] = useState<Awaited<ReturnType<Window['waypoint']['cliCapabilities']>>>([]);
   const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]),
     [attachmentBusy, setAttachmentBusy] = useState(false),
-    [chatCli, setChatCli] = useState<'codex' | 'claude'>('codex');
+    [chatCli, setChatCli] = useState<'codex' | 'claude'>('codex'),
+    [routeProposal,setRouteProposal]=useState<Awaited<ReturnType<Window['waypoint']['proposeChatRoute']>>>(),
+    [selectedProfileId,setSelectedProfileId]=useState('');
   const [drawer, setDrawer] = useState<Drawer>(),
     [sidebarOpen, setSidebarOpen] = useState(false),
     [historyQuery, setHistoryQuery] = useState(''),
@@ -68,7 +70,7 @@ export function App() {
     [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>();
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
     [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({});
-  const refreshGate = useRef(new RefreshGate()),
+  const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
     previousFocusRef = useRef<HTMLElement | null>(null);
@@ -288,6 +290,7 @@ export function App() {
     setCommitments(nextCommitments);
     setActivity(nextActivity);
     setProfiles(nextProfiles);
+    setSelectedProfileId((current)=>nextProfiles.some((item)=>item.id===current)?current:(nextProfiles[0]?.id??''));
     setRuns(nextRuns);
     setSyncStatus(nextSync);
     setDesktopSync(nextDesktop);
@@ -334,6 +337,7 @@ export function App() {
     const timer = window.setTimeout(() => setChatCli(available.name), 0);
     return () => window.clearTimeout(timer);
   }, [capabilities, chatCli]);
+  useEffect(()=>{if(!workspace||!selectedChatId||!selectedProfileId)return;const token=routeGate.current.begin(),timer=window.setTimeout(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)},0),ids=attachments.filter((item)=>item.ownerId===selectedChatId).map((item)=>item.id);void window.waypoint.proposeChatRoute(workspace.id,selectedChatId,chatCli,selectedProfileId,ids,false).then((route)=>{if(routeGate.current.isCurrent(token))setRouteProposal(route)}).catch(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)});return()=>window.clearTimeout(timer)},[workspace,selectedChatId,chatCli,selectedProfileId,attachments]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -1026,7 +1030,7 @@ export function App() {
                         </option>
                       ))}
                     </select>
-                    <select name="profile" aria-label="Security profile">
+                    <select name="profile" value={selectedProfileId} onChange={(event)=>setSelectedProfileId(event.target.value)} aria-label="Security profile">
                       {profiles.map((item) => (
                         <option key={item.id} value={item.id}>
                           {item.name}
@@ -1040,6 +1044,7 @@ export function App() {
                   </button>
                 </div>
                 <p className="capability-copy">{chatCli === 'codex' ? 'Images and text can be passed to the Codex CLI. PDF and Word stay local.' : 'Text can be passed to Claude. Images, PDF, and Word stay local.'}</p>
+                <p className="route-copy" role="status">{routeProposal?.selected?`Route: ${routeProposal.selected} · local signed-in CLI · ${routeProposal.fallbackEnabled?'fallback enabled':'no fallback'} · ${routeProposal.securityProfileId}`:'No eligible local route. Check provider health; fallback remains disabled.'}</p>
               </form>
               <small className="composer-hint">Enter to send · Shift Enter for a new line</small>
             </div>

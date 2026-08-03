@@ -18,7 +18,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Audio-only meeting capture | Implemented in R3 Slice 5 as explicit-consent local-only capture, playback/export, manual transcript review, and source-owned memory | Automatic local transcription model, meeting sync, diarization, Windows media, and external transcription remain separately gated |
 | Schedules and playbooks | R4 Slice 1 implemented locally: synthetic read-only connector, versioned paused playbooks, DST-aware previews, mandatory dry runs, idempotent manual fixture execution, bounded retry/dead-letter, kill, audit, backup/restore, and cascade deletion | Unattended scheduling and every real connector/action remain authorization-gated |
 | Email/Teams/Outlook/calendar/DevOps/webhooks | Architecture/plans only | R4 local fixture contracts may proceed; any app registration, account, tenant, credential, real data, webhook exposure, or write needs explicit authorization |
-| Multi-provider/model routing and multi-agent execution | Partial CLI registry and one-child lineage | R5 policy/capability/budget phase; APIs/costs/providers require separate authorization |
+| Multi-provider/model routing and multi-agent execution | R5 Slice 1 adds a versioned local Codex/Claude capability registry, explainable fail-closed route proposal/enforcement, attachment eligibility, and explicit no-fallback default; one-child lineage remains | Richer budgets/typed agents/peer execution and APIs/costs/providers require later gates and authorization |
 | Mobile companion | Planning only | R6 requires platform/distribution decisions; no store/push/publishing authority exists |
 
 ## Sequencing decision

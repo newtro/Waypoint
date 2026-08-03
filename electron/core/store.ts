@@ -522,7 +522,7 @@ export class WorkspaceStore {
     }));
   }
 
-  createExecution(input: { workspaceId: string; chatId: string; sourceMessageId?: string; parentExecutionId?: string; cli: 'codex' | 'claude'; model?: string; securityProfileId: string; prompt: string; depth?: number }): string {
+  createExecution(input: { workspaceId: string; chatId: string; sourceMessageId?: string; parentExecutionId?: string; cli: 'codex' | 'claude'; routedCliVersion?:string;model?: string; securityProfileId: string; prompt: string; depth?: number }): string {
     this.assertObjectInWorkspace(input.workspaceId, input.chatId, 'chat');
     const profile = this.db.prepare('SELECT id FROM security_profiles WHERE id=? AND workspace_id=?').get(input.securityProfileId, input.workspaceId);
     if (!profile) throw new Error('Security profile not found in workspace');
@@ -534,8 +534,8 @@ export class WorkspaceStore {
     const id = randomUUID(),
       timestamp = now();
     this.transaction(() => {
-      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, input.workspaceId, input.chatId, input.sourceMessageId ?? null, input.parentExecutionId ?? null, input.cli, input.model ?? null, 'local', input.securityProfileId, createHash('sha256').update(input.prompt).digest('hex'), 'queued', input.depth ?? 0, timestamp);
-      this.activity(input.workspaceId, 'ai', 'execution.queued', id, 'execution', { cli: input.cli, device: 'local' });
+      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,source_message_id,parent_execution_id,cli,cli_version,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, input.workspaceId, input.chatId, input.sourceMessageId ?? null, input.parentExecutionId ?? null, input.cli,input.routedCliVersion??null, input.model ?? null, 'local', input.securityProfileId, createHash('sha256').update(input.prompt).digest('hex'), 'queued', input.depth ?? 0, timestamp);
+      this.activity(input.workspaceId, 'ai', 'execution.queued', id, 'execution', { cli: input.cli, device: 'local',routePolicyVersion:1 });
     });
     return id;
   }

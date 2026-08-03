@@ -153,3 +153,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Implemented synthetic connector authority declarations, versioned paused playbooks, DST-aware next-run previews, mandatory dry runs, idempotent manual fixture execution, bounded retry/dead-letter behavior, kill/delete, content-minimized audit, backup/restore, and workspace isolation.
 - Initial review found one high, two mediums, and one low. Repairs persisted and validated a canonical bounded definition, exposed per-playbook authority/version, made synthetic failure/retry reachable, and added archive-tamper/cascade tests.
 - Reverification passed 61 suites / 273 tests, lint, production build, native arm64 macOS packaging, packaged runtime closure, diff hygiene, and isolated-profile native launch. Final independent verdict: clean pass, blocker 0 / high 0 / medium 0.
+
+## R5 Slice 1 — local explainable provider routing (2026-08-03)
+
+- R4 Outlook/calendar is blocked by explicit account/app-registration/tenant/data authority. Selected the next safe local R5 foundation without claiming the blocked connector gate.
+- Implemented a deterministic signed-in CLI capability registry, explainable route proposals, attachment eligibility, fail-closed main-process enforcement, visible local route/profile, and fallback-off default.
+- Initial review found one high and two mediums. Repairs unified displayed/submitted profile state with stale-response suppression, aligned attachment MIME/byte eligibility, and persisted/revalidated routed CLI version before spawn.
+- Final verdict: clean, blocker 0 / high 0 / medium 0. Terminal gate: 62 suites / 276 tests, 39 focused reviewer tests, lint, build, zero vulnerabilities/undeclared licenses, native arm64 package, packaged runtime closure/launch, and diff hygiene.
