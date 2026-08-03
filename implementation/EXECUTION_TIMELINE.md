@@ -70,3 +70,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Replaced the dashboard shell with persistent left chat navigation, full-width transcript, grounded composer, and invoked knowledge/settings drawer.
 - Added history search/grouping/sort, reachable data management, keyboard/modal accessibility, atomic conversation-to-knowledge capture, and validated local window-state restoration.
 - Independent review findings were repaired before final packaging; Windows verification remains platform-contingent.
+
+## 2026-08-03 — Future roadmap R0 readiness audit
+
+- Selected next ordered phase: **R0 — authority, trust, and protocol freeze** from `outputs/FUTURE_IMPLEMENTATION_READINESS.md`.
+- Status: blocked before implementation. The phase exit gate requires explicit user approval of node region/account/cost ceiling, relay-visible metadata, recovery method, peer-expiry/tombstone policy, backup retention, supported platform matrix, and release identity. Those approvals are not present in the canonical decision log.
+- R1 additionally requires user-owned AWS/DNS/TLS/firewall/backup authority; R2 requires Windows hardware and signing/notarization identities. R3 fixture work is permitted only after R0, so it was not started out of order.
+- No source, external account, credential, service, deployment, or third-party data was touched. Resume condition: record the R0 decisions and obtain explicit user approval, then execute its protocol-fixture and independent privacy/security review gate.
