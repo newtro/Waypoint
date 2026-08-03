@@ -1,32 +1,25 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe,expect,it } from 'vitest'
 
-const styles = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8')
-
-describe('desktop responsive shell', () => {
-  it('fills the available viewport instead of retaining a fixed desktop width', () => {
-    const shellRule = styles.match(/\.shell\s*\{([^}]*)\}/)?.[1] ?? ''
-    expect(shellRule).toContain('width: 100%')
-    expect(shellRule).toContain('min-height: 100vh')
-    expect(shellRule).not.toContain('max-width')
+const styles=readFileSync(new URL('../../src/styles.css',import.meta.url),'utf8')
+describe('modern chat-first desktop shell',()=>{
+  it('uses the full viewport with one persistent left navigation and one transcript scroll region',()=>{
+    expect(styles).toMatch(/\.app-frame\{[^}]*height:100dvh[^}]*grid-template-columns:280px minmax\(0,1fr\)[^}]*overflow:hidden/)
+    expect(styles).toMatch(/\.left-sidebar\{[^}]*height:100dvh[^}]*overflow:hidden/)
+    expect(styles).toMatch(/\.transcript\{[^}]*flex:1[^}]*min-height:0[^}]*overflow-y:auto/)
   })
-
-  it('adapts the two-column workspace before the minimum Electron window width', () => {
-    expect(styles).toMatch(/@media \(max-width: 980px\)[\s\S]*?\.columns\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/)
-    expect(styles).toMatch(/\.shell header\s*\{[^}]*flex-wrap: wrap/)
-    expect(styles).toMatch(/\.header-actions,\.card-actions\s*\{[^}]*flex-wrap: wrap/)
+  it('grounds one composer without turning it into another scroll panel',()=>{
+    expect(styles).toMatch(/\.composer-dock\{[^}]*position:absolute[^}]*bottom:0/)
+    expect(styles).toMatch(/\.composer textarea\{[^}]*max-height:180px[^}]*resize:none/)
   })
-
-  it('allows card flex children and long unbroken content to shrink without horizontal overflow', () => {
-    expect(styles).toMatch(/\.card-main\s*\{[^}]*min-width:0/)
-    expect(styles).toMatch(/\.cards article>div:first-child\s*\{[^}]*min-width:0/)
-    expect(styles).toMatch(/\.cards h4,\.cards p,\.cards small\s*\{[^}]*overflow-wrap: anywhere/)
+  it('uses the central pane width at normal and maximized desktop sizes',()=>{
+    expect(styles).toMatch(/\.transcript\{padding-left:clamp\(24px,4vw,64px\);padding-right:clamp\(24px,4vw,64px\)\}/)
+    expect(styles).toMatch(/\.composer-dock\{padding-left:clamp\(24px,4vw,64px\);padding-right:clamp\(24px,4vw,64px\)\}/)
   })
-
-  it('provides visible keyboard focus, reduced motion, and zoom-friendly stacking', () => {
-    expect(styles).toMatch(/button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible\s*\{[^}]*outline:/)
-    expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)/)
-    expect(styles).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.chat-composer,\.search\s*\{\s*grid-template-columns:minmax\(0,1fr\)/)
-    expect(styles).toMatch(/\.diagnostic-grid\s*\{[^}]*minmax\(min\(100%,280px\),1fr\)/)
+  it('keeps secondary knowledge invoked in a right drawer',()=>expect(styles).toMatch(/\.right-drawer\{[^}]*position:fixed[^}]*right:0[^}]*bottom:0/))
+  it('provides keyboard focus, reduced motion, and responsive sidebar behavior',()=>{
+    expect(styles).toMatch(/button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible\{[^}]*outline:/)
+    expect(styles).toMatch(/@media\(prefers-reduced-motion:reduce\)/)
+    expect(styles).toMatch(/@media\(max-width:800px\)[\s\S]*?\.left-sidebar\{[^}]*position:fixed[^}]*transform:translateX\(-103%\)/)
   })
 })

@@ -8,8 +8,9 @@ describe('visible AI workbench evidence',()=>{
     expect(failureAdvice({status:'timed_out',cli:'codex'})).toMatch(/Narrow the task/)
     expect(failureAdvice({status:'failed',cli:'codex'})).toMatch(/Check Health/)
   })
-  it('renders streaming events, provenance, compatibility and child delegation controls',()=>{
+  it('renders streaming state, truthful provider capability, cancellation, and retry controls without dashboard chrome',()=>{
     const source=readFileSync(new URL('../../src/main.tsx',import.meta.url),'utf8')
-    for(const evidence of ['aria-live="polite"','run.events','CLI version','Executable','Lineage','Delegate one child','compatibilityError'])expect(source).toContain(evidence)
+    for(const evidence of ['aria-live="polite"','run.events','local CLI','Images and text can be passed','Stop','Retry','compatibilityError'])expect(source).toContain(evidence)
+    expect(source).not.toContain('Add note')
   })
 })

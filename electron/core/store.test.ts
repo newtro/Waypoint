@@ -189,6 +189,15 @@ describe('durable local workspace', () => {
     store.close()
   })
 
+  it('captures assistant knowledge from conversation without a manual entry form',()=>{
+    const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Research'),assistant=store.addMessage(workspace.id,chat,'assistant','Durable conclusion')
+    const document=store.captureMessageAsDocument(workspace.id,assistant)
+    expect(store.listDocuments(workspace.id)).toEqual([expect.objectContaining({id:document.id,title:'From Research',body:'Durable conclusion'})])
+    expect(store.exportWorkspace(workspace.id).objects.relationships).toEqual([expect.objectContaining({from_id:assistant,to_id:document.id,type:'captured_as'})])
+    expect(()=>store.captureMessageAsDocument(workspace.id,store.addMessage(workspace.id,chat,'user','not eligible'))).toThrow(/Assistant message/)
+    store.close()
+  })
+
   it('never returns text or semantic results from another workspace', () => {
     const { root, store, workspace } = fixture()
     const other = store.createWorkspace('Other', path.join(root, 'other'))

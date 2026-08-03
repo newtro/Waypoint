@@ -64,3 +64,9 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Reproduced the macOS `ERR_MODULE_NOT_FOUND` before SQLite opened: the package excluded the compiled CLI-capability module required by main-process startup.
 - Included the required compiled runtime subtree and added an `app.asar` relative-import closure gate plus exact regression test.
 - Preserved and reopened the existing workspace/messages through the normal schema migration; native package launch now renders without the error dialog.
+
+## 2026-08-03 — Chat-first UI rework
+
+- Replaced the dashboard shell with persistent left chat navigation, full-width transcript, grounded composer, and invoked knowledge/settings drawer.
+- Added history search/grouping/sort, reachable data management, keyboard/modal accessibility, atomic conversation-to-knowledge capture, and validated local window-state restoration.
+- Independent review findings were repaired before final packaging; Windows verification remains platform-contingent.

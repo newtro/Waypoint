@@ -7,6 +7,7 @@ declare global {
       bootstrap(): Promise<{ workspaces: WorkspaceSummary[] }>
       createWorkspace(name: string): Promise<WorkspaceSummary>
       createDocument(workspaceId: string, title: string, body: string): Promise<{ id: string; revisionId: string }>
+      captureMessageAsDocument(workspaceId:string,messageId:string):Promise<{id:string;revisionId:string}>
       updateDocument(workspaceId: string, objectId: string, title: string, body: string): Promise<string>
       listDocuments(workspaceId: string): Promise<Array<{ id: string; title: string; body: string; revisionId: string; updatedAt: string }>>
       syncStatus(workspaceId:string):Promise<SanitizedSyncStatus>

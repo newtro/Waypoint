@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('waypoint', {
   bootstrap: () => ipcRenderer.invoke('waypoint:bootstrap'),
   createWorkspace: (name: string) => ipcRenderer.invoke('waypoint:create-workspace', { name }),
   createDocument: (workspaceId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:create-document', { workspaceId, title, body }),
+  captureMessageAsDocument:(workspaceId:string,messageId:string)=>ipcRenderer.invoke('waypoint:capture-message-as-document',{workspaceId,messageId}),
   updateDocument: (workspaceId: string, objectId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:update-document', { workspaceId, objectId, title, body }),
   listDocuments: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-documents', { workspaceId }),
   syncStatus: (workspaceId:string)=>ipcRenderer.invoke('waypoint:sync-status',{workspaceId}),

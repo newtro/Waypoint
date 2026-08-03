@@ -221,6 +221,23 @@ export class WorkspaceStore {
     })
   }
 
+  captureMessageAsDocument(workspaceId:string,messageId:string):{id:string;revisionId:string}{
+    const message=this.db.prepare("SELECT m.body,c.title FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=? AND c.workspace_id=? AND m.role='assistant'").get(messageId,workspaceId) as {body:string;title:string}|undefined
+    if(!message)throw new Error('Assistant message not found in workspace')
+    const id=randomUUID(),revisionId=randomUUID(),relationshipId=randomUUID(),timestamp=now(),title=`From ${message.title}`
+    return this.transaction(()=>{
+      this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id,workspaceId,title,revisionId,timestamp,timestamp)
+      this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId,id,message.body,timestamp)
+      this.indexText(workspaceId,id,'document',revisionId,title,message.body)
+      this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId,workspaceId,messageId,id,'captured_as',timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'document','upsert',{id,title,revisionId,body:message.body,createdAt:timestamp,updatedAt:timestamp})
+      this.syncJournal.enqueue(workspaceId,relationshipId,'relationship','upsert',{id:relationshipId,fromId:messageId,toId:id,type:'captured_as'})
+      this.activity(workspaceId,'content','document.created',id,'document',{})
+      this.activity(workspaceId,'graph','relationship.created',relationshipId,'relationship',{fromId:messageId,toId:id,type:'captured_as'})
+      return{id,revisionId}
+    })
+  }
+
   updateDocument(workspaceId: string, documentId: string, title: string, body: string): string {
     this.assertObjectInWorkspace(workspaceId, documentId, 'document')
     const document = this.db.prepare('SELECT workspace_id FROM documents WHERE id=?').get(documentId) as { workspace_id: string } | undefined

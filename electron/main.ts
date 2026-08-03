@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
-import { accessSync, constants, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, readFileSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './core/store.js'
 import { LocalOllamaEmbeddings } from './core/ollama.js'
@@ -15,6 +15,7 @@ import { readBackup, writeAtomicBackup } from './core/backup.js'
 import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js'
 import { sanitizeSyncStatus } from './core/sync/sync-status.js'
 import { ATTACHMENT_MEDIA_BY_EXTENSION, MAX_ATTACHMENTS_PER_OWNER, readAndValidateAttachment } from './core/chat-attachments.js'
+import { isEffectivelyMaximized, restoreWindowState, type SavedWindowState, type WindowBounds } from './core/window-state.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let store: WorkspaceStore
@@ -58,6 +59,7 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>
     return store.createDocument(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000))
   })
+  handle('waypoint:capture-message-as-document',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.captureMessageAsDocument(text(value.workspaceId,'workspace ID',64),text(value.messageId,'message ID',64))})
   handle('waypoint:update-document', (_event, input: unknown) => {
     const value = input as Record<string, unknown>
     return store.updateDocument(text(value.workspaceId, 'workspace ID', 64), text(value.objectId, 'document ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000))
@@ -195,8 +197,13 @@ function registerIpc(): void {
 }
 
 function createWindow(): void {
+  const statePath=path.join(app.getPath('userData'),'window-state.json'),fallback={x:130,y:70,width:1180,height:760}
+  let saved:unknown
+  try{saved=JSON.parse(readFileSync(statePath,'utf8'))}catch{/* First launch or invalid local state uses a safe visible default. */}
+  const displays=screen.getAllDisplays().map((display)=>({id:String(display.id),workArea:display.workArea}))
+  const restored=restoreWindowState(saved,displays,fallback)
   const window = new BrowserWindow({
-    width: 1180, height: 760, minWidth: 840, minHeight: 620, backgroundColor: '#111b19',
+    ...restored.bounds, minWidth: 840, minHeight: 620, backgroundColor: '#111b19',
     webPreferences: { preload: path.join(currentDirectory, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   const developmentUrl = process.env.VITE_DEV_SERVER_URL
@@ -208,6 +215,22 @@ function createWindow(): void {
   else void window.loadFile(path.join(currentDirectory, '../../dist/index.html'))
   trustedSenderId = window.webContents.id
   trustedRendererUrl = allowedUrl
+  if(restored.maximized)window.maximize()
+  let timer:NodeJS.Timeout|undefined,lastNormalBounds:WindowBounds=restored.bounds,resizing=false,expanded=restored.maximized
+  const persist=()=>{
+    if(timer)clearTimeout(timer)
+    timer=setTimeout(()=>{
+      const current=window.getBounds(),display=screen.getDisplayMatching(current),maximized=expanded||window.isMaximized()||window.isFullScreen()||isEffectivelyMaximized(current,display.workArea)
+      if(!maximized&&!resizing)lastNormalBounds=current
+      const state:SavedWindowState={bounds:maximized?lastNormalBounds:current,displayId:String(display.id),maximized}
+      const temporary=`${statePath}.partial`
+      try{writeFileSync(temporary,JSON.stringify(state),{mode:0o600});renameSync(temporary,statePath)}catch(error){rmSync(temporary,{force:true});console.error('Failed to persist window state',error)}
+    },180)
+  }
+  window.on('will-resize',()=>{if(!resizing){const current=window.getBounds(),display=screen.getDisplayMatching(current);if(!window.isMaximized()&&!isEffectivelyMaximized(current,display.workArea))lastNormalBounds=current}resizing=true})
+  window.on('resized',()=>{resizing=false;persist()})
+  window.on('move',persist);window.on('resize',persist);window.on('maximize',()=>{expanded=true;persist()});window.on('unmaximize',()=>{expanded=false;persist()});window.on('enter-full-screen',()=>{expanded=true;persist()});window.on('leave-full-screen',()=>{expanded=false;persist()})
+  window.on('close',()=>{if(timer)clearTimeout(timer);const current=window.getBounds(),display=screen.getDisplayMatching(current),maximized=expanded||window.isMaximized()||window.isFullScreen()||isEffectivelyMaximized(current,display.workArea);const state:SavedWindowState={bounds:maximized?lastNormalBounds:current,displayId:String(display.id),maximized};const temporary=`${statePath}.partial`;try{writeFileSync(temporary,JSON.stringify(state),{mode:0o600});renameSync(temporary,statePath)}catch(error){rmSync(temporary,{force:true});console.error('Failed to persist window state',error)}})
 }
 
 if (!app.requestSingleInstanceLock()) app.quit()
