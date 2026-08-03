@@ -303,6 +303,8 @@ contextBridge.exposeInMainWorld('waypoint', {
   toolGatewaySettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-settings',{workspaceId}),
   updateToolGatewaySettings:(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean})=>ipcRenderer.invoke('waypoint:tool-gateway-update-settings',{workspaceId,...value}),
   toolGatewayReceipts:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-gateway-receipts',{workspaceId,limit}),
+  toolFailures:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-failures',{workspaceId,limit}),
+  deleteToolFailure:(workspaceId:string,id:string)=>ipcRenderer.invoke('waypoint:delete-tool-failure',{workspaceId,id}),
   executeTool:(request:unknown)=>ipcRenderer.invoke('waypoint:tool-gateway-execute',request),
   cancelTool:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-cancel',{workspaceId,runId}),
   onToolProgress:(listener:(event:unknown)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:unknown)=>listener(value);ipcRenderer.on('waypoint:tool-gateway-progress',handler);return()=>ipcRenderer.removeListener('waypoint:tool-gateway-progress',handler)},

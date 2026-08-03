@@ -230,4 +230,13 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Built the trusted-main tool contract, workspace file reads, interactive terminal/local-CLI adapter, domain-only AI bridge, minimized durable receipts, UI status surface, and structured Codex/Claude in-chat timeline.
 - Initial adversarial review returned NO-SHIP (1 blocker/5 high). The repair denied AI-origin inherited process execution, made tool dispatch fail closed, added dominant POSIX process-tree cancellation, reassembled output before redaction, workspace-scoped progress, terminal exception receipts, per-workspace concurrency, strict timeouts, and Claude tool-result normalization.
 - Fresh re-review returned SHIP (0 blocker/0 high; 3 medium/1 low). Full gate passed 74 files/344 tests, lint, build, dependency/SBOM checks, macOS package/runtime closure, isolated native launch, and diff check. Evidence: `implementation/P6B_TOOL_GATEWAY_EVIDENCE.md`.
+
+## P6C — Tool Failure Learning / Prevention (2026-08-03)
+
+- User authorized the local P6C vertical slice. Acceptance is frozen in `implementation/P6C_TOOL_FAILURE_LEARNING_PLAN.md`; no hosted provider, external account/service, browser, peer execution, unrestricted AI terminal, or deployment authority is implied.
+- Built v19 failure knowledge, protected HMAC identities, gateway preflight/reasoned retry, success supersession, bounded purge, backup/sync lifecycle, strict provenance validation, and a readable settings view.
+- Initial independent review returned NO-SHIP (0 blocker/3 high/2 medium). Repairs made enrolled-peer keys portable with epoch provenance, journaled expired/overflow deletion, executed-only learning, policy-secret note redaction, and strict archive/inbound validation.
+- First re-review returned SHIP (0 blocker/0 high/2 medium/1 low). Source receipt semantics, canonical ISO enforcement, and deterministic equal-time pruning were repaired before the final review.
+- A final spot-check caught missing supersession provenance in replacement snapshots. Incremental and full snapshot serialization now share one minimized payload builder; a new regression proves superseded snapshot recovery without raw command content. Final review: SHIP (0 blocker/0 high/0 medium/0 low).
+- Terminal gate passed 75 files/352 tests, lint, build, dependency verification/SBOM, macOS arm64 package/runtime closure, isolated native launch, and diff check. Evidence: `implementation/P6C_TOOL_FAILURE_LEARNING_EVIDENCE.md`.
 - Executor: primary task. Reviewer: fresh independent adversarial context after targeted verification.

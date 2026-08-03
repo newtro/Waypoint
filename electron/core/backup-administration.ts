@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto'
 import {readBackupReadonly,validateArchive} from './backup.js'
 import {WorkspaceStore} from './store.js'
 
-const RESTORED_TABLES=['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','tool_gateway_settings','tool_gateway_receipts','activities','tombstones','security_profiles','executions','execution_events'] as const
+const RESTORED_TABLES=['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestion_sources','rule_suggestions','learned_rules','rule_outcomes','relationships','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','tool_gateway_settings','tool_gateway_receipts','tool_failure_knowledge','activities','tombstones','security_profiles','executions','execution_events'] as const
 export type BackupCheckResult={status:'passed';fileName:string;version:2|3;exportedAt:string;counts:Record<string,number>;totalObjects:number}|{status:'failed';fileName:string;code:'invalid'|'unsupported'|'too_large'|'io'|'restore_failed'|'cleanup_failed'|'busy'|'worker_failed';remediation:string}
 export type RestoreDrillResult=BackupCheckResult&{drill?:{databaseIntegrity:'ok';foreignKeyViolations:0;missingFiles:0;digestMismatches:0;searchDifference:0;countsMatch:true;temporaryDataRemoved:true}}
 

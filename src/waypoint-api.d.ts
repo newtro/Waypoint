@@ -343,6 +343,8 @@ declare global {
       toolGatewaySettings(workspaceId:string):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}>;
       updateToolGatewaySettings(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean}):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}>;
       toolGatewayReceipts(workspaceId:string,limit?:number):Promise<Array<{id:string;workspaceId:string;origin:'ui'|'ai';tool:string;status:string;summary:string;code?:string;notification?:string;outputBytes:number;truncated:boolean;startedAt:string;finishedAt:string;durationMs:number}>>;
+      toolFailures(workspaceId:string,limit?:number):Promise<Array<{id:string;tool:string;capabilityVersion:string;errorClass:string;remediation?:string;outcome:'active'|'superseded';expiresAt:string;createdAt:string;updatedAt:string;hadOverride:number}>>;
+      deleteToolFailure(workspaceId:string,id:string):Promise<{deleted:boolean}>;
       executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'terminal.run'|'local_cli.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
       cancelTool(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
       onToolProgress(listener:(event:unknown)=>void):()=>void;

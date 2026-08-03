@@ -12,7 +12,7 @@ type WorkerRequest={operation:Operation;filePath:string;drillParent?:string}
 type WorkerFactory=(request:WorkerRequest)=>WorkerLike
 type RunnerOptions={deadlineMs?:number;temporaryParent?:string;remove?:(target:string)=>Promise<void>}
 let active=false
-const TABLES=['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','tool_gateway_settings','tool_gateway_receipts','activities','tombstones','security_profiles','executions','execution_events'] as const
+const TABLES=['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','tool_gateway_settings','tool_gateway_receipts','tool_failure_knowledge','activities','tombstones','security_profiles','executions','execution_events'] as const
 const CODES=['invalid','unsupported','too_large','io','restore_failed','cleanup_failed','busy','worker_failed'] as const
 
 function safeName(filePath:string):string{return path.basename(filePath).slice(0,255)||'selected backup'}

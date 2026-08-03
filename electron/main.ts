@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { accessSync, constants, readFileSync, renameSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { WorkspaceStore } from './core/store.js';
 import { LocalOllamaEmbeddings } from './core/ollama.js';
 import { CHUNKING_POLICIES, chunkingDigest, storedChunkingProvenance } from './core/embedding-benchmark.js';
@@ -27,6 +27,7 @@ import { assertRoute, proposeRoute } from './core/provider-routing.js';
 import {assertChildAgainstParent,childContext,createChildTask,type ChildTaskManifest} from './core/agent-policy.js';
 import {createExecutionBudget,serializeExecutionBudget} from './core/execution-budget.js';
 import {ToolGateway,discoverLocalCli,validatePolicy,type ToolGatewayPolicy,type ToolRequest} from './core/tool-gateway.js';
+import {failureIdentity,localFailureContext,safeFailureNote,workspaceFailureKey} from './core/tool-failure-learning.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
@@ -41,11 +42,21 @@ const activeChunkingProvenance=storedChunkingProvenance(CHUNKING_POLICIES[0]);
 const documentChunkingDigest=chunkingDigest(DOCUMENT_CHUNKING_POLICY);
 const workbench = new CliWorkbench();
 let toolGateway:ToolGateway;
+let toolFailureFingerprintKey:Buffer;
 const toolWindowWorkspaces=new Map<number,string>();
 
 function gatewayPolicy(workspaceId:string):ToolGatewayPolicy{
   const profile=store.listSecurityProfiles(workspaceId).find((item)=>item.name==='Autonomous developer');if(!profile)throw new Error('Autonomous developer profile is unavailable');const settings=store.toolGatewaySettings(workspaceId),environmentSecrets=Object.keys(process.env).filter((name)=>/(?:TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|AUTH|API_KEY|PRIVATE_KEY|CREDENTIAL)/i.test(name)),policy:ToolGatewayPolicy={profileName:profile.name,roots:profile.roots,denyPatterns:settings.denyPatterns,stopped:settings.stopped,secretNames:[...new Set([...profile.secretNames,...environmentSecrets])],maxDurationMs:Math.min(120_000,profile.maxDurationMs),maxConcurrency:Math.min(4,profile.maxConcurrency),suppressCommit:settings.suppressCommit,suppressPush:settings.suppressPush};validatePolicy(policy);return policy
 }
+
+function loadToolFailureFingerprintKey():Buffer{
+  if(!safeStorage.isEncryptionAvailable())throw new Error('Protected storage is required for tool failure fingerprints')
+  const target=path.join(app.getPath('userData'),'tool-failure-fingerprint.key'),temporary=`${target}.partial`
+  try{const key=Buffer.from(safeStorage.decryptString(readFileSync(target)),'base64');if(key.length!==32)throw new Error('Invalid protected fingerprint key');return key}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
+  const key=randomBytes(32);writeFileSync(temporary,safeStorage.encryptString(key.toString('base64')),{flag:'wx',mode:0o600});renameSync(temporary,target);return key
+}
+
+function toolFailureKeyFor(workspaceId:string,vault:ProtectedSyncVault):{key:Buffer;capabilityVersion:string}{const secrets=vault.load(workspaceId);return secrets?workspaceFailureKey(secrets.workspaceKey,secrets.keyEpoch):{key:toolFailureFingerprintKey,capabilityVersion:'1.0.0/fingerprint:device-v1'}}
 
 async function indexImportedDocument(workspaceId:string,documentId:string,revisionId:string,attachmentId:string,chunks:DocumentChunk[]=chunkExtractedText(store.listDocuments(workspaceId).find((item)=>item.id===documentId)?.body??'')){
   const key=`${workspaceId}:${documentId}`;if(activeDocumentIndexes.has(key))return{state:'index_busy' as const,chunkCount:chunks.length,provider:embeddings.provider,model:embeddings.model};activeDocumentIndexes.add(key);try{const status=await embeddings.status();if(!status.reachable||!status.modelInstalled)return{state:'provider_unavailable' as const,chunkCount:chunks.length,provider:embeddings.provider,model:embeddings.model};
@@ -125,6 +136,8 @@ function registerIpc(): void {
   handle('waypoint:tool-gateway-settings',(event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64);toolWindowWorkspaces.set(event.sender.id,workspaceId);event.sender.once('destroyed',()=>toolWindowWorkspaces.delete(event.sender.id));return store.toolGatewaySettings(workspaceId)});
   handle('waypoint:tool-gateway-update-settings',(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),denyPatterns=Array.isArray(value.denyPatterns)?value.denyPatterns.map((item)=>text(item,'deny pattern',300)):[],next={stopped:value.stopped===true,denyPatterns,suppressCommit:value.suppressCommit===true,suppressPush:value.suppressPush===true};validatePolicy({...gatewayPolicy(workspaceId),...next});if(next.stopped)toolGateway.stop(workspaceId);else toolGateway.resume(workspaceId);return store.setToolGatewaySettings(workspaceId,next)});
   handle('waypoint:tool-gateway-receipts',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.listToolReceipts(text(value.workspaceId,'workspace ID',64),Number(value.limit??100))});
+  handle('waypoint:tool-failures',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.listToolFailures(text(value.workspaceId,'workspace ID',64),Number(value.limit??100))});
+  handle('waypoint:delete-tool-failure',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return{deleted:store.deleteToolFailure(text(value.workspaceId,'workspace ID',64),text(value.id,'failure knowledge ID',64))}});
   handle('waypoint:tool-gateway-execute',async(event,input:unknown)=>{const request=input as ToolRequest,workspaceId=text(request?.workspaceId,'workspace ID',64);toolWindowWorkspaces.set(event.sender.id,workspaceId);return toolGateway.execute({...request,origin:'ui'},gatewayPolicy(workspaceId))});
   handle('waypoint:tool-gateway-cancel',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return{canceled:toolGateway.cancel(text(value.workspaceId,'workspace ID',64),text(value.runId,'tool run ID',64))}});
   handle('waypoint:create-workspace', (_event, input: unknown) => {
@@ -931,12 +944,13 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.whenReady().then(() => {
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'waypoint.sqlite'));
-    toolGateway=new ToolGateway({domain:async(workspaceId,command,input,origin)=>{if(command==='workspace.summary')return{value:{workspace:store.listWorkspaces().find((item)=>item.id===workspaceId),chats:store.listChats(workspaceId).length,documents:store.listDocuments(workspaceId).length,memories:store.listMemories(workspaceId).length},summary:'Read workspace summary'};if(command==='chat.create'){const id=store.createChat(workspaceId,text(input.title,'chat title',300));return{value:{chatId:id},summary:'Created chat',rollbackRef:`delete:chat:${id}`}}if(command==='memory.create'){const id=store.createMemory(workspaceId,text(input.title,'memory title',300),text(input.body,'memory body',10_000));return{value:{memoryId:id},summary:'Created memory',rollbackRef:`delete:memory:${id}`}}throw new Error(origin==='ai'?'tool_domain_command_unavailable':'Unknown domain command')},progress:(event)=>{for(const window of BrowserWindow.getAllWindows())if(toolWindowWorkspaces.get(window.webContents.id)===event.workspaceId)window.webContents.send('waypoint:tool-gateway-progress',event)},complete:(result)=>{store.saveToolReceipt(result.receipt)}})
+    toolFailureFingerprintKey=loadToolFailureFingerprintKey();
     const vault = new ProtectedSyncVault(path.join(app.getPath('userData'), 'sync-secrets'), {
       available: () => safeStorage.isEncryptionAvailable(),
       encrypt: (value) => safeStorage.encryptString(value),
       decrypt: (value) => safeStorage.decryptString(Buffer.from(value)),
     });
+    toolGateway=new ToolGateway({domain:async(workspaceId,command,input,origin)=>{if(command==='workspace.summary')return{value:{workspace:store.listWorkspaces().find((item)=>item.id===workspaceId),chats:store.listChats(workspaceId).length,documents:store.listDocuments(workspaceId).length,memories:store.listMemories(workspaceId).length},summary:'Read workspace summary'};if(command==='chat.create'){const id=store.createChat(workspaceId,text(input.title,'chat title',300));return{value:{chatId:id},summary:'Created chat',rollbackRef:`delete:chat:${id}`}}if(command==='memory.create'){const id=store.createMemory(workspaceId,text(input.title,'memory title',300),text(input.body,'memory body',10_000));return{value:{memoryId:id},summary:'Created memory',rollbackRef:`delete:memory:${id}`}}throw new Error(origin==='ai'?'tool_domain_command_unavailable':'Unknown domain command')},progress:(event)=>{for(const window of BrowserWindow.getAllWindows())if(toolWindowWorkspaces.get(window.webContents.id)===event.workspaceId)window.webContents.send('waypoint:tool-gateway-progress',event)},complete:(result)=>{store.saveToolReceipt(result.receipt)},preflight:(request)=>{const material=toolFailureKeyFor(request.workspaceId,vault);return store.findToolFailure(request.workspaceId,failureIdentity(material.key,request,material.capabilityVersion,localFailureContext()))},learn:(request,result,overrideReason,remediation)=>{const material=toolFailureKeyFor(request.workspaceId,vault);store.recordToolOutcome(request,failureIdentity(material.key,request,material.capabilityVersion,localFailureContext()),result,safeFailureNote(overrideReason),safeFailureNote(remediation))}})
     void DesktopSyncService.create(vault)
       .then((service) => {
         syncService = service;

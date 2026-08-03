@@ -23,6 +23,7 @@ type TriggerLab=Awaited<ReturnType<Window['waypoint']['listLocalTriggerLab']>>;
 type WebhookChannels=Awaited<ReturnType<Window['waypoint']['webhookChannels']>>;
 type WebhookEvent=Awaited<ReturnType<Window['waypoint']['listWebhookEvents']>>[number];
 type ToolSettings=Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>;type ToolReceipt=Awaited<ReturnType<Window['waypoint']['toolGatewayReceipts']>>[number];type ToolCapabilities=Awaited<ReturnType<Window['waypoint']['toolGatewayCapabilities']>>;
+type ToolFailure=Awaited<ReturnType<Window['waypoint']['toolFailures']>>[number];
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -75,7 +76,7 @@ export function App() {
     [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>();
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
     [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>(),[webhookChannels,setWebhookChannels]=useState<WebhookChannels>(),[webhookEvents,setWebhookEvents]=useState<WebhookEvent[]>([]);
-  const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState('');
+  const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolFailures,setToolFailures]=useState<ToolFailure[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState('');
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
@@ -92,7 +93,7 @@ export function App() {
   function showError(reason: unknown) {
     setError(reason instanceof Error ? reason.message : String(reason));
   }
-  async function loadToolGateway(){if(!workspace)return;const[settings,receipts,caps]=await Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolGatewayCapabilities()]);setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolCapabilities(caps)}
+  async function loadToolGateway(){if(!workspace)return;const[settings,receipts,failures,caps]=await Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities()]);setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps)}
   async function saveToolGateway(overrides:Partial<ToolSettings>={}){if(!workspace||!toolSettings)return;const next={stopped:overrides.stopped??toolSettings.stopped,denyPatterns:overrides.denyPatterns??denyDraft.split('\n').map((item)=>item.trim()).filter(Boolean),suppressCommit:overrides.suppressCommit??toolSettings.suppressCommit,suppressPush:overrides.suppressPush??toolSettings.suppressPush};setToolSettings(await window.waypoint.updateToolGatewaySettings(workspace.id,next));await loadToolGateway();setNotice(next.stopped?'Tool Gateway stopped for this workspace.':'Tool Gateway policy saved.')}
   async function openAutomations() {
     if (!workspace) return;
@@ -378,7 +379,7 @@ export function App() {
     const timer = window.setTimeout(() => document.getElementById(`activity-target-${activityKnowledgeTarget}`)?.scrollIntoView({ block: 'center' }), 0);
     return () => window.clearTimeout(timer);
   }, [drawer, activityKnowledgeTarget]);
-  useEffect(()=>{if(drawer!=='settings'||!workspace)return;let current=true;void Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolGatewayCapabilities()]).then(([settings,receipts,caps])=>{if(!current)return;setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolCapabilities(caps)}).catch(showError);return()=>{current=false}},[drawer,workspace]);
+  useEffect(()=>{if(drawer!=='settings'||!workspace)return;let current=true;void Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities()]).then(([settings,receipts,failures,caps])=>{if(!current)return;setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps)}).catch(showError);return()=>{current=false}},[drawer,workspace]);
   useEffect(()=>{if(drawer!=='knowledge'||!workspace)return;let current=true;void Promise.all(documents.map(async(item)=>[item.id,await window.waypoint.documentIndexStatus(workspace.id,item.id)] as const)).then((entries)=>{if(current)setDocumentIndexes(Object.fromEntries(entries))}).catch(showError);return()=>{current=false}},[drawer,workspace,documents]);
   useEffect(() => {
     if (!drawer && !sidebarOpen) return;
@@ -1484,6 +1485,9 @@ export function App() {
                   {toolSettings&&<><div className="automation-boundary" role="status"><strong>{toolSettings.stopped?'Stopped':'Ready · local only'}</strong><span>environment inherited · secrets hidden · deny-list policy</span></div><label className="meeting-consent">Deny patterns (one regular expression per line)<textarea value={denyDraft} onChange={(event)=>setDenyDraft(event.target.value)} rows={4}/></label><label className="meeting-consent"><input type="checkbox" checked={toolSettings.suppressCommit} onChange={(event)=>void saveToolGateway({suppressCommit:event.target.checked}).catch(showError)}/>Suppress Git commit for this workspace</label><label className="meeting-consent"><input type="checkbox" checked={toolSettings.suppressPush} onChange={(event)=>void saveToolGateway({suppressPush:event.target.checked}).catch(showError)}/>Suppress Git push for this workspace</label><div className="drawer-actions"><button onClick={()=>void saveToolGateway().catch(showError)}>Save policy</button><button className="secondary" onClick={()=>void saveToolGateway({stopped:!toolSettings.stopped}).catch(showError)}>{toolSettings.stopped?'Resume gateway':'Stop all tools'}</button></div></>}
                   {toolCapabilities&&<dl className="settings-list">{toolCapabilities.localClis.map((item)=><div key={item.name}><dt>{item.name}</dt><dd>{item.available?'installed · local identity':'unavailable'}</dd></div>)}</dl>}
                   <div className="activity-list">{toolReceipts.slice(0,10).map((item)=><article className="activity-item execution" key={item.id}><span/><div><strong>{item.tool} · {item.status}</strong><small>{item.summary}</small><small>{new Date(item.startedAt).toLocaleString()} · {item.origin} · {item.outputBytes} bytes{item.truncated?' · truncated':''}</small></div></article>)}</div>
+                  <h4>Failure prevention</h4>
+                  <p className="settings-copy">Equivalent active failures pause before retry. A changed tool/context or an explicit reason allows a truthful retry; success supersedes the warning.</p>
+                  <div className="activity-list">{toolFailures.length?toolFailures.slice(0,20).map((item)=><article className="activity-item execution" key={item.id}><span/><div><strong>{item.tool} · {item.outcome}</strong><small>{item.errorClass}{item.remediation?` · remedy: ${item.remediation}`:''}</small><small>{item.outcome==='active'?`Expires ${new Date(item.expiresAt).toLocaleString()}`:`Superseded ${new Date(item.updatedAt).toLocaleString()}`}{item.hadOverride?' · reasoned retry':''}</small></div><button className="quiet-button" onClick={()=>void window.waypoint.deleteToolFailure(workspace!.id,item.id).then(loadToolGateway).catch(showError)}>Delete</button></article>):<p className="empty-copy">No learned tool failures in this workspace.</p>}</div>
                 </section>
                 <section>
                   <h3>Secure device sync</h3>
