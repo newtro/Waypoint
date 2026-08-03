@@ -128,6 +128,12 @@ contextBridge.exposeInMainWorld('waypoint', {
       meetingId,
     }),
   meetingTranscriptionCapability: () => ipcRenderer.invoke('waypoint:meeting-transcription-capability'),
+  createLocalWebhookFixture:(workspaceId:string,eventType:string,idempotencyKey:string,payload:Record<string,string|number|boolean|null>)=>ipcRenderer.invoke('waypoint:create-local-webhook-fixture',{workspaceId,eventType,idempotencyKey,payload}),
+  listLocalTriggerLab:(workspaceId:string)=>ipcRenderer.invoke('waypoint:list-local-trigger-lab',{workspaceId}),
+  approveLocalTriggerRule:(workspaceId:string,ruleId:string)=>ipcRenderer.invoke('waypoint:approve-local-trigger-rule',{workspaceId,ruleId}),
+  dryRunLocalTriggerRule:(workspaceId:string,ruleId:string,simulateFailure=false)=>ipcRenderer.invoke('waypoint:dry-run-local-trigger-rule',{workspaceId,ruleId,simulateFailure}),
+  setLocalTriggerKill:(workspaceId:string,enabled:boolean)=>ipcRenderer.invoke('waypoint:set-local-trigger-kill',{workspaceId,enabled}),
+  deleteLocalTriggerEvent:(workspaceId:string,eventId:string)=>ipcRenderer.invoke('waypoint:delete-local-trigger-event',{workspaceId,eventId}),
   createFixturePlaybook: (workspaceId: string, title: string, timezone: string, hour: number, minute: number) =>
     ipcRenderer.invoke('waypoint:create-fixture-playbook', {
       workspaceId,

@@ -301,3 +301,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Build unified calendar/meeting-copilot contracts against local fixtures before any Microsoft authorization. Multi-provider handoff, parallel adversarial review, and typed agent orchestration remain bounded and explainable; new providers/costs/devices/unattended authority require approval.
 - Activate Outlook, Teams, email, DevOps, calendar, and signed public webhooks one provider/capability at a time after app/tenant/account/scope/data/retention/model/sync/write authority. Mobile remains a post-sync companion with separate platform/store/push/device decisions.
 - Run two isolated instances and then two physical Macs after all eligible safe local slices, before claiming cross-device readiness. Windows and release/signing/update evidence remain hardware/identity gated.
+
+## P1 local proactive trigger lab (2026-08-03)
+
+- Persist only synthetic local fixture envelopes and simulation-only rules. Every rule begins suggested, requires explicit approval into a paused state, and can only produce a deterministic zero-effect preview.
+- Recompute exact event, rule, and run provenance before display or use; reject authority-shaped payload keys, non-record JSON, replay/staleness, tampering, and cross-workspace access rather than repairing data silently.
+- Keep retry/dead-letter history finite and truthful, make terminal dead letters idempotent, and let the workspace kill switch dominate evaluation.
+- Public ingress, schedules, real senders/accounts/data, models, outbound effects, and unattended stages remain separate activation decisions.

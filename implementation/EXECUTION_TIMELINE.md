@@ -206,3 +206,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Recorded the next two safe streams: local trigger/webhook simulation, then capability-gated local voice chat. Neither authorizes public ingress, unattended actions, cloud voice, or model downloads.
 - Independent review initially found four highs, three mediums, and one low. Repairs bounded/concurrency-guarded indexing, prohibited mixed model digests, separated truthful failure states, bound/re-extracted original-source provenance, hardened worker messages, and revalidated provenance through backup/restore/drills/diagnostics. Final verdict: ship, blocker 0 / high 0 / medium 1 / low 1.
 - Terminal gate: 69 suites / 313 tests, lint/build, zero vulnerabilities/undeclared licenses, SBOM, compiled and packaged worker proof, native arm64 package/runtime closure, isolated-profile packaged launch, and diff hygiene.
+
+## P1 — local proactive triggers and webhook lab (2026-08-03)
+
+- Selected after the document gate and separately committed roadmap addendum. Acceptance frozen in `implementation/LOCAL_TRIGGER_WEBHOOK_LAB_PLAN.md`.
+- Scope is local synthetic event/rule simulation only. Public ingress, schedules, accounts, network calls, external data/actions, models, and unattended activation remain unavailable.
+- Implemented quarantined fixture events, suggested/paused rules, deterministic zero-effect dry runs, bounded retry/dead-letter history, kill/delete controls, workspace isolation, schema migration, backup/restore, and chat-first Automations UI.
+- Independent review drove repair of stored event/rule/run provenance, payload authority/shape validation, canonical event grammar, retry/success idempotency, terminal dead letters, and a real schema-15 migration test. Final verdict: ship, blocker 0 / high 0 / medium 0 / low 0.
+- Terminal gate: 71 suites / 326 tests, lint/build, zero high dependency vulnerabilities, native arm64 package/runtime closure, diff hygiene, and isolated-profile native launch.

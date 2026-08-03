@@ -19,6 +19,7 @@ type LearnedRule = Awaited<ReturnType<Window['waypoint']['listLearnedRules']>>[n
 type KnowledgeGraph = Awaited<ReturnType<Window['waypoint']['graph']>>;
 type Meeting = Awaited<ReturnType<Window['waypoint']['listMeetings']>>[number];
 type TranscriptionCapability = Awaited<ReturnType<Window['waypoint']['meetingTranscriptionCapability']>>;
+type TriggerLab=Awaited<ReturnType<Window['waypoint']['listLocalTriggerLab']>>;
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -70,7 +71,7 @@ export function App() {
     [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({}),
     [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>();
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
-    [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({});
+    [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>();
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
@@ -89,10 +90,15 @@ export function App() {
   }
   async function openAutomations() {
     if (!workspace) return;
-    setPlaybooks(await window.waypoint.listFixturePlaybooks(workspace.id));
+    const[nextPlaybooks,nextLab]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);
     setSidebarOpen(false);
     setDrawer('automations');
   }
+  async function createTriggerFixture(){if(!workspace)return;const eventType=window.prompt('Local fixture event type','document.imported')?.trim();if(!eventType)return;const title=window.prompt('Synthetic fixture title','Local webhook simulation')?.trim();if(!title)return;await window.waypoint.createLocalWebhookFixture(workspace.id,eventType,crypto.randomUUID(),{title,fixture:true});setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));setNotice('Synthetic webhook event quarantined locally. A suggested rule is waiting for review; no listener or action was enabled.')}
+  async function approveTriggerRule(ruleId:string){if(!workspace)return;await window.waypoint.approveLocalTriggerRule(workspace.id,ruleId);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));setNotice('Rule approved into paused, simulation-only state. It cannot run unattended.')}
+  async function dryRunTrigger(ruleId:string,simulateFailure=false){if(!workspace)return;const result=await window.waypoint.dryRunLocalTriggerRule(workspace.id,ruleId,simulateFailure);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));setNotice(result.idempotent?'This exact zero-effect dry run was already recorded.':`${result.status.replace('_',' ')} recorded at attempt ${result.attempt}, with zero proposed effects.`)}
+  async function toggleTriggerKill(){if(!workspace||!triggerLab)return;await window.waypoint.setLocalTriggerKill(workspace.id,!triggerLab.killSwitch);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));setNotice(triggerLab.killSwitch?'Local trigger evaluation resumed; rules remain paused and simulation-only.':'Workspace trigger kill switch enabled. All evaluations are blocked.')}
+  async function deleteTriggerEvent(eventId:string){if(!workspace||!window.confirm('Permanently delete this local fixture event, its suggested rule, and all dry-run history?'))return;await window.waypoint.deleteLocalTriggerEvent(workspace.id,eventId);setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id))}
   async function createPlaybook() {
     if (!workspace) return;
     const title = window.prompt('Fixture playbook title', 'Morning fixture review')?.trim();
@@ -1573,14 +1579,25 @@ export function App() {
             )}
             {drawer === 'automations' && (
               <div className="drawer-body">
-                <p className="drawer-intro">A safe local lab for synthetic connector data and versioned playbooks. Every playbook is paused, has no network or account token, and can run only after a current dry run. Background schedules and external effects are unavailable.</p>
+                <p className="drawer-intro">A safe local lab for synthetic events, suggested rules, and versioned playbooks. Everything remains paused or dry-run-only. No port, public webhook, schedule, account, model, network call, or external effect is available.</p>
                 <div className="automation-boundary" role="status">
-                  <strong>Fixture connector · synthetic-personal</strong>
-                  <span>local-fixture · fixture.read · read only · network off</span>
+                  <strong>{triggerLab?.killSwitch?'Kill switch active':'Local simulation only'}</strong>
+                  <span>webhook.fixture.local · quarantined · zero effects · network off</span>
                 </div>
                 <div className="drawer-actions">
+                  <button onClick={()=>void createTriggerFixture().catch(showError)}>Simulate webhook</button>
+                  <button className="secondary" onClick={()=>void toggleTriggerKill().catch(showError)}>{triggerLab?.killSwitch?'Resume evaluation':'Kill all triggers'}</button>
                   <button onClick={() => void createPlaybook().catch(showError)}>New fixture playbook</button>
                 </div>
+                <section>
+                  <h3>Proactive rule lab <span>{triggerLab?.rules.length??0}</span></h3>
+                  {triggerLab?.rules.map((rule)=>{const event=triggerLab.events.find((item)=>item.id===rule.sourceEventId);return <article className={`playbook-item ${rule.status}`} key={rule.id}>
+                    <header><div><small>v{rule.version} · {rule.status} · {event?.status??'source missing'}</small><strong>{rule.statement}</strong><small>{event?.eventType} · source digest {event?.payloadDigest.slice(0,10)}… · definition {rule.definitionDigest.slice(0,10)}…</small><span>Observed locally. Payload is quarantined untrusted fixture data and is not shown or interpreted as authority.</span></div><button onClick={()=>void deleteTriggerEvent(rule.sourceEventId).catch(showError)}>Delete</button></header>
+                    <div className="meeting-actions">{rule.status==='suggested'&&<button disabled={triggerLab.killSwitch} onClick={()=>void approveTriggerRule(rule.id).catch(showError)}>Approve paused rule</button>}<button disabled={triggerLab.killSwitch||rule.status!=='paused'} onClick={()=>void dryRunTrigger(rule.id).catch(showError)}>Dry run</button><button disabled={triggerLab.killSwitch||rule.status!=='paused'} onClick={()=>void dryRunTrigger(rule.id,true).catch(showError)}>Simulate failure</button></div>
+                    {rule.runs.slice(0,5).map((run)=><small className="playbook-run" key={run.id}>{run.status.replace('_',' ')} · attempt {run.attempt} · {run.proposedEffects} effects</small>)}
+                  </article>})}
+                  {!triggerLab?.rules.length&&<p className="drawer-empty">No local webhook fixtures. Simulation never exposes a listener or activates a rule.</p>}
+                </section>
                 <section>
                   <h3>
                     Paused playbooks <span>{playbooks.length}</span>

@@ -98,6 +98,12 @@ declare global {
         provider: string;
         reason: string;
       }>;
+      createLocalWebhookFixture(workspaceId:string,eventType:string,idempotencyKey:string,payload:Record<string,string|number|boolean|null>):Promise<{eventId:string}>;
+      listLocalTriggerLab(workspaceId:string):Promise<{killSwitch:boolean;authority:{source:string;network:false;publicIngress:false;schedule:false;model:false;externalEffects:false;unattended:false;proposedEffects:0};events:Array<{id:string;eventType:string;occurredAt:string;receivedAt:string;payloadDigest:string;status:'quarantined'}>;rules:Array<{id:string;sourceEventId:string;statement:string;version:number;definitionDigest:string;status:'suggested'|'paused'|'killed';createdAt:string;updatedAt:string;runs:Array<{id:string;status:'dry_run'|'retrying'|'dead_letter';attempt:number;proposedEffects:0;digest:string;createdAt:string}>}>}>;
+      approveLocalTriggerRule(workspaceId:string,ruleId:string):Promise<{ok:true}>;
+      dryRunLocalTriggerRule(workspaceId:string,ruleId:string,simulateFailure?:boolean):Promise<{status:'dry_run'|'retrying'|'dead_letter';attempt:number;proposedEffects:0;digest:string;idempotent:boolean}>;
+      setLocalTriggerKill(workspaceId:string,enabled:boolean):Promise<{ok:true}>;
+      deleteLocalTriggerEvent(workspaceId:string,eventId:string):Promise<{ok:true}>;
       createFixturePlaybook(workspaceId: string, title: string, timezone: string, hour: number, minute: number): Promise<{ playbookId: string }>;
       listFixturePlaybooks(workspaceId: string): Promise<FixturePlaybookView[]>;
       dryRunFixturePlaybook(

@@ -426,6 +426,12 @@ function registerIpc(): void {
     provider: 'local-whisper',
     reason: 'No reviewed packaged local transcription model is configured. Audio will not be uploaded or sent to a CLI. You can enter and review a transcript draft manually.',
   }));
+  handle('waypoint:create-local-webhook-fixture',(_event,input:unknown)=>{const value=input as Record<string,unknown>,payload=value.payload;if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error('Local fixture payload is invalid');return{eventId:store.createLocalWebhookFixture(text(value.workspaceId,'workspace ID',64),text(value.eventType,'event type',80),text(value.idempotencyKey,'idempotency key',128),payload as Record<string,string|number|boolean|null>)}});
+  handle('waypoint:list-local-trigger-lab',(_event,input:unknown)=>store.listLocalTriggerLab(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)));
+  handle('waypoint:approve-local-trigger-rule',(_event,input:unknown)=>{const value=input as Record<string,unknown>;store.approveLocalTriggerRule(text(value.workspaceId,'workspace ID',64),text(value.ruleId,'rule ID',64));return{ok:true}});
+  handle('waypoint:dry-run-local-trigger-rule',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.dryRunLocalTriggerRule(text(value.workspaceId,'workspace ID',64),text(value.ruleId,'rule ID',64),value.simulateFailure===true)});
+  handle('waypoint:set-local-trigger-kill',(_event,input:unknown)=>{const value=input as Record<string,unknown>;store.setLocalTriggerKillSwitch(text(value.workspaceId,'workspace ID',64),value.enabled===true);return{ok:true}});
+  handle('waypoint:delete-local-trigger-event',(_event,input:unknown)=>{const value=input as Record<string,unknown>;store.deleteLocalTriggerEvent(text(value.workspaceId,'workspace ID',64),text(value.eventId,'event ID',64));return{ok:true}});
   handle('waypoint:create-fixture-playbook', (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
       hour = Number(value.hour),
