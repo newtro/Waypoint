@@ -8,7 +8,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Durable chats, documents, memories, graph, attachments, text/semantic search | R5 Slice 3 adds a versioned isolated embedding/chunking benchmark, evidence-backed local model comparison, explicit reindex provenance, and disabled provider/peer seams | PDF/DOCX extraction, production chunking beyond whole-document, direct llama.cpp, Chonkie packaging, and peer embeddings remain separately gated |
 | Signed-in Codex/Claude CLI chat, streaming, cancel/retry/failure, visible routing | Implemented and packaged-Mac verified | Windows CLI/process matrix remains hardware-contingent |
 | Security profiles and bounded one-child lineage | R5 Slices 2/4 add explicit typed Claude child tasks plus trusted, visible, durable root/child budgets for prompt/output/duration/concurrency/depth/children/attempts/attachments/fallback/cost/device authority and cancel/recovery | Codex no-tool child mode, user-approved wider policies, and real peer execution remain later reviewed gates |
-| Activity, local cascade deletion, export/restore, diagnostics, backup/migrations | Local backup administration now provides read-only integrity verification and isolated real-path restore drills; gate passed | Off-main responsiveness, encryption, automation/retention, cloud destinations, live replacement, Windows, and signed release remain later gates |
+| Activity, local cascade deletion, export/restore, diagnostics, backup/migrations | Local backup administration provides read-only integrity verification and isolated real-path restore drills in a bounded off-main worker; Slices 1–2 passed | Encryption, automation/retention, cloud destinations, live replacement, Windows, and signed release remain later gates |
 | Hosted opaque relay, enrollment/revocation/rotation, canonical sync, resumable attachments | Implemented; live dedicated relay updated | Two-physical-Mac and Mac↔Windows matrices intentionally deferred until planned features finish |
 | Windows delivery, signing, notarization, updates | Not implemented/validated | R2 requires Windows hardware plus Apple/Windows signing and update-channel authority; deferred, not treated as a feature-development blocker |
 | Commitments and memory suggestions | Implemented in R3 Slice 1; local review-first gate passed | Provider-assisted extraction and cross-device canonical commitment sync remain later separately reviewed extensions |
@@ -24,6 +24,8 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 ## Post-R5 safe sequencing
 
 The remaining R5 expansions require a wider user policy or device/network authority: wider execution budgets, Codex no-tool child mode, peer execution, new providers/APIs, and remote embedding workers. R6 mobile requires platform/cache/distribution/notification/device decisions and hardware. These gates are recorded without inventing permission. The next documented safe local feature is therefore backup administration: explicit verification and isolated restore drills using the existing local export/restore contract.
+
+After Backup Slice 1, proactive webhooks/calendar remain external-authority gated, backup encryption/automatic retention require key-recovery/retention policy, and mobile/peer execution remain device-policy gated. Backup Slice 2 is the next safe ordered local work: off-main responsiveness hardening for the already approved explicit verification/drill operations.
 
 ## Sequencing decision
 

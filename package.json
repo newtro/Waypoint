@@ -25,6 +25,7 @@
     "diagnose:chat-runtime": "tsx scripts/chat-runtime-diagnostics.ts",
     "relay:bootstrap-owner": "tsx scripts/relay-bootstrap-owner.ts",
     "verify:package-runtime": "tsx scripts/package-runtime-closure.ts",
+    "verify:backup-worker": "npm run build && node scripts/backup-worker-proof.mjs",
     "spike:embeddings": "tsx spikes/embedding-benchmark.ts",
     "spike:embedding-compare": "tsx spikes/embedding-benchmark-harness.ts",
     "verify:embedding-candidates": "tsx spikes/embedding-benchmark-harness.ts",

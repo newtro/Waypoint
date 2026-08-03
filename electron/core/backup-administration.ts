@@ -7,7 +7,7 @@ import {readBackupReadonly,validateArchive} from './backup.js'
 import {WorkspaceStore} from './store.js'
 
 const RESTORED_TABLES=['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','attachments','meetings','fixture_playbooks','fixture_playbook_runs','activities','tombstones','security_profiles','executions','execution_events'] as const
-export type BackupCheckResult={status:'passed';fileName:string;version:2|3;exportedAt:string;counts:Record<string,number>;totalObjects:number}|{status:'failed';fileName:string;code:'invalid'|'unsupported'|'too_large'|'io'|'restore_failed'|'cleanup_failed';remediation:string}
+export type BackupCheckResult={status:'passed';fileName:string;version:2|3;exportedAt:string;counts:Record<string,number>;totalObjects:number}|{status:'failed';fileName:string;code:'invalid'|'unsupported'|'too_large'|'io'|'restore_failed'|'cleanup_failed'|'busy'|'worker_failed';remediation:string}
 export type RestoreDrillResult=BackupCheckResult&{drill?:{databaseIntegrity:'ok';foreignKeyViolations:0;missingFiles:0;digestMismatches:0;searchDifference:0;countsMatch:true;temporaryDataRemoved:true}}
 
 function safeName(filePath:string):string{return path.basename(filePath).slice(0,255)||'selected backup'}

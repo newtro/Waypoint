@@ -275,3 +275,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Return only basename, version/time, aggregate counts, stable failure code, and remediation to the renderer. Absolute paths, workspace identity, content, keys, prompts, and raw exceptions remain in the trusted process.
 - Keep plaintext export an explicit user choice. Encryption, scheduling, retention, destination persistence, remote storage, and restore-over-live require separate product/security authority.
 - Record remaining R5 wider authority and R6 mobile/platform choices as gates, then advance to this safe local health slice without claiming them complete.
+
+## Post-MVP health — responsive backup administration (2026-08-03)
+
+- Run backup verification and restore drills in one dedicated worker at a time so a large explicit local archive cannot freeze the chat UI or compete through unbounded worker creation.
+- Treat worker messages as untrusted structured input. Expose only the existing sanitized result contract; worker faults never expose raw errors or absolute paths.
+- Give the parent runner ownership of a per-drill outer temporary root. A five-minute deadline may then terminate a hung worker, await termination, remove the entire outer root independently, and release the single-operation slot without trusting worker cleanup.
+- Keep webhook/calendar, encryption/retention, mobile, peer, Windows, signing, distribution, and physical-device work behind their recorded authority gates.
