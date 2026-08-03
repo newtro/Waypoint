@@ -7,12 +7,16 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './core/store.js'
 import { LocalOllamaEmbeddings } from './core/ollama.js'
+import { CliWorkbench } from './core/ai-workbench.js'
+import { detectCli } from '../spikes/cli-capabilities.js'
+import { deleteWithExecutionCancellation, startDurableChild } from './core/execution-lifecycle.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let store: WorkspaceStore
 let trustedSenderId: number | undefined
 let trustedRendererUrl: string | undefined
 const embeddings = new LocalOllamaEmbeddings()
+const workbench = new CliWorkbench()
 
 function handle(channel: string, listener: (event: IpcMainInvokeEvent, input: unknown) => unknown): void {
   ipcMain.handle(channel, (event, input) => {
@@ -68,9 +72,9 @@ function registerIpc(): void {
     return { ok: true }
   })
   handle('waypoint:delete-object', (_event, input: unknown) => {
-    const value = input as Record<string, unknown>, kind = text(value.kind, 'object kind', 20)
+    const value = input as Record<string, unknown>, kind = text(value.kind, 'object kind', 20),workspaceId=text(value.workspaceId, 'workspace ID', 64),objectId=text(value.objectId, 'object ID', 64)
     if (!['document','chat','memory'].includes(kind)) throw new Error('Invalid deletable object kind')
-    store.deleteObject(text(value.workspaceId, 'workspace ID', 64), kind as 'document'|'chat'|'memory', text(value.objectId, 'object ID', 64))
+    deleteWithExecutionCancellation(store,workbench,workspaceId,kind as 'document'|'chat'|'memory',objectId)
     return { ok: true }
   })
   handle('waypoint:attach-document', async (_event, input: unknown) => {
@@ -84,6 +88,37 @@ function registerIpc(): void {
   handle('waypoint:graph', (_event, input: unknown) => store.graph(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
   handle('waypoint:activity', (_event, input: unknown) => store.listActivity(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
   handle('waypoint:list-chats', (_event, input: unknown) => store.listChats(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
+  handle('waypoint:cli-capabilities', async () => Promise.all([detectCli('codex'), detectCli('claude')]))
+  handle('waypoint:list-security-profiles', (_event,input:unknown)=>store.listSecurityProfiles(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)))
+  handle('waypoint:list-executions', (_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.listExecutions(text(value.workspaceId,'workspace ID',64),value.chatId?text(value.chatId,'chat ID',64):undefined)})
+  handle('waypoint:run-chat', async (_event,input:unknown)=>{
+    const value=input as Record<string,unknown>, workspaceId=text(value.workspaceId,'workspace ID',64), chatId=text(value.chatId,'chat ID',64)
+    const cli=text(value.cli,'CLI',20); if(!['codex','claude'].includes(cli))throw new Error('Unsupported CLI')
+    const prompt=text(value.prompt,'prompt',2_000_000), profileId=text(value.securityProfileId,'security profile ID',64)
+    const workspace=store.listWorkspaces().find((candidate)=>candidate.id===workspaceId); if(!workspace)throw new Error('Workspace not found')
+    const profile=store.listSecurityProfiles(workspaceId).find((candidate)=>candidate.id===profileId);if(!profile)throw new Error('Security profile not found')
+    const runId=store.createExecution({workspaceId,chatId,cli:cli as 'codex'|'claude',model:value.model?text(value.model,'model',120):undefined,securityProfileId:profileId,prompt})
+    try {
+      const running=await startDurableChild({workspaceId,runId,detect:()=>detectCli(cli as 'codex'|'claude'),executionExists:(owner,id)=>store.executionExists(owner,id),spawn:(capability)=>workbench.start(runId,{cli:cli as 'codex'|'claude',prompt,workspaceRoot:profile.roots[0],profile,model:value.model?text(value.model,'model',120):undefined,executable:capability.executable,version:capability.version},(event)=>{try{store.appendExecutionEvent(runId,workspaceId,event)}catch{/* A deleted chat cancels persistence authority. */}}),markRunning:(child)=>store.startExecution(runId,workspaceId,child.executable,child.version)})
+      void running.completion.then((result)=>{
+        try {
+          const events=store.listExecutions(workspaceId,chatId).find((run)=>run.id===runId)?.events as Array<Record<string,unknown>>|undefined
+          const textEvents=(events??[]).filter((event)=>event.type==='text').map((event)=>String(event.text??''))
+          const answer=(cli==='claude' ? textEvents.at(-1)??'' : textEvents.join('')).trim()
+          store.finishExecution(runId,workspaceId,result,answer)
+        } catch { /* Deleting the owning chat deliberately removes the run. */ }
+      })
+      return {runId,status:'running'}
+    } catch(error) {
+      try { store.failQueuedExecution(runId,workspaceId,error instanceof Error?error.message:'Unknown execution error') } catch { /* Preserve the original startup error. */ }
+      throw error
+    }
+  })
+  handle('waypoint:cancel-execution', (_event,input:unknown)=>{
+    const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),runId=text(value.runId,'execution ID',64)
+    if(!store.executionExists(workspaceId,runId))throw new Error('Execution not found in workspace')
+    return {canceled:workbench.cancel(runId)}
+  })
   handle('waypoint:create-chat', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.createChat(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300)) })
   handle('waypoint:capture-chat', (_event, input: unknown) => { const value = input as Record<string, unknown>; return store.captureChat(text(value.workspaceId, 'workspace ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000)) })
   handle('waypoint:add-message', (_event, input: unknown) => { const value = input as Record<string, unknown>; const role = text(value.role, 'role', 20); if (!['user','assistant','system'].includes(role)) throw new Error('Invalid role'); return store.addMessage(text(value.workspaceId, 'workspace ID', 64), text(value.chatId, 'chat ID', 64), role as 'user'|'assistant'|'system', text(value.body, 'body', 2_000_000)) })
@@ -134,6 +169,11 @@ else {
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   })
   app.on('second-instance', () => { const window = BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.focus() } })
-  app.on('before-quit', () => store?.close())
+  let shutdownStarted=false
+  app.on('before-quit', (event) => {
+    if(shutdownStarted)return
+    event.preventDefault();shutdownStarted=true
+    void workbench.shutdown().finally(()=>{store?.close();app.exit(0)})
+  })
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 }

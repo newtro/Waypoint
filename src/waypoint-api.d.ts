@@ -17,6 +17,11 @@ declare global {
       graph(workspaceId: string): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>
       activity(workspaceId: string): Promise<Array<Record<string, unknown>>>
       listChats(workspaceId: string): Promise<Array<{ id: string; title: string; updatedAt: string; messages: Array<{ id: string; role: string; body: string; createdAt: string }> }>>
+      cliCapabilities(): Promise<Array<{name:'codex'|'claude';available:boolean;executable?:string;version?:string;error?:string}>>
+      listSecurityProfiles(workspaceId:string): Promise<Array<{id:string;name:string;roots:string[];filesystem:'read-only'|'workspace-write';network:'provider-only'|'disabled';tools:string[];approval:'always'|'on-write';maxDurationMs:number;maxConcurrency:number;peerEligible:boolean;secretNames:string[]}>>
+      listExecutions(workspaceId:string,chatId?:string): Promise<Array<Record<string,unknown>>>
+      runChat(workspaceId:string,chatId:string,cli:'codex'|'claude',securityProfileId:string,prompt:string,model?:string): Promise<{runId:string;status:'running'}>
+      cancelExecution(runId:string): Promise<{canceled:boolean}>
       createChat(workspaceId: string, title: string): Promise<string>
       captureChat(workspaceId: string, title: string, body: string): Promise<string>
       addMessage(workspaceId: string, chatId: string, role: 'user' | 'assistant' | 'system', body: string): Promise<string>

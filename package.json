@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "spike:cli": "tsx spikes/cli-capabilities.ts",
+    "verify:cli-live": "tsx spikes/live-cli-verification.ts",
     "spike:embeddings": "tsx spikes/embedding-benchmark.ts",
     "spike:embedding-compare": "tsx spikes/embedding-benchmark-harness.ts",
     "package:dir": "npm run build && electron-builder --dir --config electron-builder.yml"

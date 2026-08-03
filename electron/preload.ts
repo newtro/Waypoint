@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+let currentWorkspaceId: string|undefined
 
 contextBridge.exposeInMainWorld('waypoint', {
   bootstrap: () => ipcRenderer.invoke('waypoint:bootstrap'),
@@ -15,6 +16,11 @@ contextBridge.exposeInMainWorld('waypoint', {
   graph: (workspaceId: string) => ipcRenderer.invoke('waypoint:graph', { workspaceId }),
   activity: (workspaceId: string) => ipcRenderer.invoke('waypoint:activity', { workspaceId }),
   listChats: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-chats', { workspaceId }),
+  cliCapabilities: () => ipcRenderer.invoke('waypoint:cli-capabilities'),
+  listSecurityProfiles: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-security-profiles', {workspaceId}),
+  listExecutions: (workspaceId: string, chatId?: string) => {currentWorkspaceId=workspaceId;return ipcRenderer.invoke('waypoint:list-executions', {workspaceId,chatId})},
+  runChat: (workspaceId:string,chatId:string,cli:'codex'|'claude',securityProfileId:string,prompt:string,model?:string)=>ipcRenderer.invoke('waypoint:run-chat',{workspaceId,chatId,cli,securityProfileId,prompt,model}),
+  cancelExecution: (runId:string)=>{if(!currentWorkspaceId)throw new Error('No active workspace');return ipcRenderer.invoke('waypoint:cancel-execution',{workspaceId:currentWorkspaceId,runId})},
   createChat: (workspaceId: string, title: string) => ipcRenderer.invoke('waypoint:create-chat', { workspaceId, title }),
   captureChat: (workspaceId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:capture-chat', { workspaceId, title, body }),
   addMessage: (workspaceId: string, chatId: string, role: string, body: string) => ipcRenderer.invoke('waypoint:add-message', { workspaceId, chatId, role, body }),

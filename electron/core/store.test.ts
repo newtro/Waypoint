@@ -16,6 +16,49 @@ function fixture() {
 const provenance = { provider: 'test', providerVersion: '1', model: 'fixture', modelDigest: 'digest', chunkingDigest: 'chunks-v1' }
 
 describe('durable local workspace', () => {
+  it('recognizes only durable execution capabilities', () => {
+    const { root, store, workspace } = fixture(), other = store.createWorkspace('Other', path.join(root, 'other'))
+    const chat = store.createChat(workspace.id, 'Scoped run'), profile = store.listSecurityProfiles(workspace.id)[0]
+    const run = store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'scoped'})
+    expect(store.executionExists(workspace.id,run)).toBe(true)
+    expect(store.executionExists(other.id,run)).toBe(false)
+    store.close()
+  })
+  it('reconciles queued and running executions to durable interrupted failures on startup',()=>{
+    const {database,store,workspace}=fixture(),chat=store.createChat(workspace.id,'Interrupted'),profile=store.listSecurityProfiles(workspace.id)[0]
+    const queued=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'queued'})
+    const running=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'running'});store.startExecution(running,workspace.id,'/trusted/claude','1')
+    store.close();const reopened=new WorkspaceStore(database)
+    expect(reopened.listExecutions(workspace.id,chat)).toEqual(expect.arrayContaining([expect.objectContaining({id:queued,status:'failed',errorCode:'interrupted'}),expect.objectContaining({id:running,status:'failed',errorCode:'interrupted'})]))
+    expect(reopened.listActivity(workspace.id).filter((event)=>event.action==='execution.failed')).toHaveLength(2)
+    reopened.close()
+  })
+  it('persists CLI detection and process startup failures before returning the error',()=>{
+    const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Unavailable CLI'),profile=store.listSecurityProfiles(workspace.id)[0]
+    const run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'test'})
+    store.failQueuedExecution(run,workspace.id,'claude was not found on PATH')
+    expect(store.listExecutions(workspace.id,chat)[0]).toMatchObject({id:run,status:'failed',errorCode:'startup_failed',errorMessage:'claude was not found on PATH'})
+    store.close()
+  })
+  it('persists complete execution provenance and cascades it with its chat', () => {
+    const { store, workspace } = fixture(), chat = store.createChat(workspace.id, 'Agent work')
+    const profile = store.listSecurityProfiles(workspace.id)[0]
+    expect(profile).toMatchObject({ name: 'Workspace — conservative', filesystem: 'read-only', tools: [], maxConcurrency: 1, peerEligible: false, secretNames: [] })
+    const root = store.createExecution({ workspaceId: workspace.id, chatId: chat, cli: 'codex', model: 'gpt-test', securityProfileId: profile.id, prompt: 'private prompt' })
+    store.startExecution(root, workspace.id, '/trusted/codex', '1.2.3')
+    store.appendExecutionEvent(root, workspace.id, { type:'text', text:'answer', rawType:'item.completed' })
+    store.finishExecution(root, workspace.id, { status:'completed', exitCode:0 })
+    const child = store.createExecution({ workspaceId: workspace.id, chatId: chat, parentExecutionId:root, depth:1, cli:'claude', securityProfileId:profile.id, prompt:'child work' })
+    expect(store.listExecutions(workspace.id, chat)).toEqual(expect.arrayContaining([
+      expect.objectContaining({id:root,cli:'codex',cliVersion:'1.2.3',model:'gpt-test',device:'local',profileName:'Workspace — conservative',status:'completed',depth:0,events:[expect.objectContaining({type:'text',text:'answer'})]}),
+      expect.objectContaining({id:child,parentExecutionId:root,depth:1,status:'queued'}),
+    ]))
+    expect(JSON.stringify(store.listExecutions(workspace.id, chat))).not.toContain('private prompt')
+    expect(() => store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:root,depth:2,cli:'codex',securityProfileId:profile.id,prompt:'bad'})).toThrow(/lineage/)
+    store.deleteObject(workspace.id, 'chat', chat)
+    expect(store.counts()).toMatchObject({ executions:0, execution_events:0 })
+    store.close()
+  })
   it('migrates the pre-ownership memory schema without positional column corruption', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'waypoint-old-schema-')), database = path.join(root, 'workspace.sqlite')
     const legacy = new DatabaseSync(database)
@@ -136,6 +179,8 @@ describe('durable local workspace', () => {
     const document = store.createDocument(workspace.id, 'Exported note', 'restore-search-needle')
     const chat = store.createChat(workspace.id, 'Exported chat')
     store.addMessage(workspace.id, chat, 'assistant', 'restored-message-needle')
+    const profile=store.listSecurityProfiles(workspace.id)[0],run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'archived task'})
+    store.startExecution(run,workspace.id,'/trusted/codex','1.2.3');store.appendExecutionEvent(run,workspace.id,{type:'text',text:'archived answer'});store.finishExecution(run,workspace.id,{status:'completed',exitCode:0})
     const memory = store.createMemory(workspace.id, 'Exported memory', 'remember this', document.id)
     store.createRelationship(workspace.id, document.id, memory, 'supports')
     store.indexEmbedding(workspace.id, { objectId: document.id, objectKind: 'document', revisionId: document.revisionId }, [1, 0], provenance)
@@ -151,6 +196,9 @@ describe('durable local workspace', () => {
     expect(store.searchText(restored.id, 'restore-search')).toHaveLength(1)
     expect(store.searchText(workspace.id, 'restored-message')).toHaveLength(1)
     expect(store.searchText(restored.id, 'restored-message')).toHaveLength(1)
+    expect(archive.version).toBe(3)
+    expect(store.listSecurityProfiles(restored.id)[0]).toMatchObject({name:'Workspace — conservative',filesystem:'read-only'})
+    expect(store.listExecutions(restored.id)).toEqual([expect.objectContaining({cli:'codex',cliVersion:'1.2.3',status:'completed',events:[expect.objectContaining({type:'text',text:'archived answer'})]})])
     expect(store.graph(restored.id)).toMatchObject({ edges: [{ type: 'supports' }] })
     expect(store.counts().embeddings).toBe(1)
     expect(store.counts().attachments).toBe(2)

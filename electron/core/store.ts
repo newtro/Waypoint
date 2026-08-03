@@ -18,6 +18,7 @@ export class WorkspaceStore {
     this.db = new DatabaseSync(databasePath)
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;')
     this.migrate()
+    this.reconcileInterruptedExecutions()
     this.reconcileAttachmentFiles()
   }
 
@@ -39,6 +40,9 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS activities(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, category TEXT NOT NULL, action TEXT NOT NULL, object_id TEXT, object_kind TEXT, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tombstones(object_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, object_kind TEXT NOT NULL, deleted_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_work(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, context_object_id TEXT NOT NULL, status TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS security_profiles(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, roots_json TEXT NOT NULL, filesystem TEXT NOT NULL, network TEXT NOT NULL, tools_json TEXT NOT NULL, approval TEXT NOT NULL, max_duration_ms INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, peer_eligible INTEGER NOT NULL, secret_names_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(workspace_id,name));
+      CREATE TABLE IF NOT EXISTS executions(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, parent_execution_id TEXT REFERENCES executions(id) ON DELETE SET NULL, cli TEXT NOT NULL CHECK(cli IN ('codex','claude')), executable TEXT, cli_version TEXT, model TEXT, device TEXT NOT NULL, security_profile_id TEXT NOT NULL REFERENCES security_profiles(id), prompt_sha256 TEXT NOT NULL, status TEXT NOT NULL, depth INTEGER NOT NULL, started_at TEXT, finished_at TEXT, exit_code INTEGER, error_code TEXT, error_message TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS execution_events(id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, type TEXT NOT NULL, text TEXT, name TEXT, raw_type TEXT, created_at TEXT NOT NULL, UNIQUE(execution_id,sequence));
       CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(workspace_id UNINDEXED, object_id UNINDEXED, object_kind UNINDEXED, revision_id UNINDEXED, title, body);
     `)
     const memoryColumns = this.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>
@@ -55,6 +59,13 @@ export class WorkspaceStore {
     }
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(2, now())
     this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(3, now())
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions VALUES (?,?)').run(4, now())
+    for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{id:string;localPath:string}>) {
+      const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
+      const existing=this.db.prepare("SELECT id FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)
+      if(existing)this.db.prepare("UPDATE security_profiles SET roots_json=? WHERE workspace_id=? AND name='Workspace — conservative'").run(JSON.stringify([executionRoot]),workspace.id)
+      else this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
+    }
   }
 
   private transaction<T>(operation: () => T): T {
@@ -68,9 +79,96 @@ export class WorkspaceStore {
     const workspace = { id: randomUUID(), name: name.trim(), localPath: path.resolve(localPath), createdAt: now() }
     this.transaction(() => {
       this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt)
+      this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
       this.activity(workspace.id, 'workspace', 'created', workspace.id, 'workspace', { localPath: workspace.localPath })
     })
     return workspace
+  }
+
+  private createDefaultSecurityProfile(workspaceId: string, workspaceRoot: string): string {
+    const id = randomUUID(), executionRoot=path.join(path.resolve(workspaceRoot),'waypoint-workspaces',workspaceId)
+    mkdirSync(executionRoot,{recursive:true})
+    this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, workspaceId, 'Workspace — conservative', JSON.stringify([executionRoot]), 'read-only', 'provider-only', '[]', 'always', 120000, 1, 0, '[]', now())
+    return id
+  }
+
+  listSecurityProfiles(workspaceId: string): Array<{id:string;name:string;roots:string[];filesystem:'read-only'|'workspace-write';network:'provider-only'|'disabled';tools:string[];approval:'always'|'on-write';maxDurationMs:number;maxConcurrency:number;peerEligible:boolean;secretNames:string[]}> {
+    const rows = this.db.prepare('SELECT id,name,roots_json roots,filesystem,network,tools_json tools,approval,max_duration_ms maxDurationMs,max_concurrency maxConcurrency,peer_eligible peerEligible,secret_names_json secretNames FROM security_profiles WHERE workspace_id=? ORDER BY created_at').all(workspaceId) as Array<Record<string,unknown>>
+    return rows.map((row) => ({...row, id:String(row.id),name:String(row.name),roots:JSON.parse(String(row.roots)),tools:JSON.parse(String(row.tools)),secretNames:JSON.parse(String(row.secretNames)),filesystem:row.filesystem as 'read-only'|'workspace-write',network:row.network as 'provider-only'|'disabled',approval:row.approval as 'always'|'on-write',maxDurationMs:Number(row.maxDurationMs),maxConcurrency:Number(row.maxConcurrency),peerEligible:Boolean(row.peerEligible)}))
+  }
+
+  createExecution(input: {workspaceId:string;chatId:string;parentExecutionId?:string;cli:'codex'|'claude';model?:string;securityProfileId:string;prompt:string;depth?:number}): string {
+    this.assertObjectInWorkspace(input.workspaceId, input.chatId, 'chat')
+    const profile = this.db.prepare('SELECT id FROM security_profiles WHERE id=? AND workspace_id=?').get(input.securityProfileId,input.workspaceId)
+    if (!profile) throw new Error('Security profile not found in workspace')
+    if (input.parentExecutionId) {
+      const parent = this.db.prepare('SELECT depth FROM executions WHERE id=? AND workspace_id=? AND chat_id=?').get(input.parentExecutionId,input.workspaceId,input.chatId) as {depth:number}|undefined
+      if (!parent || (input.depth ?? 0) !== parent.depth + 1) throw new Error('Invalid execution lineage')
+    }
+    const id=randomUUID(), timestamp=now()
+    this.transaction(()=>{
+      this.db.prepare('INSERT INTO executions(id,workspace_id,chat_id,parent_execution_id,cli,model,device,security_profile_id,prompt_sha256,status,depth,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id,input.workspaceId,input.chatId,input.parentExecutionId??null,input.cli,input.model??null,'local',input.securityProfileId,createHash('sha256').update(input.prompt).digest('hex'),'queued',input.depth??0,timestamp)
+      this.activity(input.workspaceId,'ai','execution.queued',id,'execution',{cli:input.cli,chatId:input.chatId,profileId:input.securityProfileId,parentExecutionId:input.parentExecutionId??null})
+    })
+    return id
+  }
+
+  startExecution(id:string, workspaceId:string, executable:string, version?:string): void {
+    const result=this.db.prepare("UPDATE executions SET status='running',executable=?,cli_version=?,started_at=? WHERE id=? AND workspace_id=? AND status='queued'").run(executable,version??null,now(),id,workspaceId)
+    if (!result.changes) throw new Error('Execution is not queued in workspace')
+  }
+
+  failQueuedExecution(id:string,workspaceId:string,error:string):void {
+    const changed=this.db.prepare("UPDATE executions SET status='failed',finished_at=?,error_code='startup_failed',error_message=? WHERE id=? AND workspace_id=? AND status='queued'").run(now(),error.slice(0,8192),id,workspaceId)
+    if(!changed.changes)throw new Error('Execution is not queued in workspace')
+    this.activity(workspaceId,'ai','execution.failed',id,'execution',{phase:'startup'})
+  }
+
+  appendExecutionEvent(id:string, workspaceId:string, event:{type:string;text?:string;name?:string;rawType?:string}): void {
+    const run=this.db.prepare('SELECT id FROM executions WHERE id=? AND workspace_id=?').get(id,workspaceId)
+    if (!run) throw new Error('Execution not found in workspace')
+    const sequence=(this.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 next FROM execution_events WHERE execution_id=?').get(id) as {next:number}).next
+    this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),id,sequence,event.type,event.text??null,event.name??null,event.rawType??null,now())
+  }
+
+  finishExecution(id:string, workspaceId:string, result:{status:'completed'|'failed'|'canceled'|'timed_out';exitCode:number|null;error?:string}, assistantBody?:string): void {
+    this.transaction(()=>{
+      const execution=this.db.prepare('SELECT chat_id chatId FROM executions WHERE id=? AND workspace_id=?').get(id,workspaceId) as {chatId:string}|undefined
+      const changed=this.db.prepare("UPDATE executions SET status=?,finished_at=?,exit_code=?,error_code=?,error_message=? WHERE id=? AND workspace_id=? AND status='running'").run(result.status,now(),result.exitCode,result.status==='failed'||result.status==='timed_out'?result.status:null,result.error?.slice(0,8192)??null,id,workspaceId)
+      if (!changed.changes||!execution) throw new Error('Execution is not running in workspace')
+      if(result.status==='completed'&&assistantBody?.trim()){
+        const chat=this.db.prepare('SELECT title FROM chats WHERE id=? AND workspace_id=?').get(execution.chatId,workspaceId) as {title:string}|undefined
+        if(!chat)throw new Error('Execution chat was deleted')
+        const messageId=randomUUID(),timestamp=now(),body=assistantBody.trim()
+        this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId,execution.chatId,'assistant',body,timestamp)
+        this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp,execution.chatId)
+        this.indexText(workspaceId,messageId,'message',undefined,chat.title,body)
+        this.activity(workspaceId,'content','message.created',messageId,'message',{role:'assistant',executionId:id})
+      }
+      this.activity(workspaceId,'ai',`execution.${result.status}`,id,'execution',{exitCode:result.exitCode})
+    })
+  }
+
+  listExecutions(workspaceId:string, chatId?:string): Array<Record<string,unknown>> {
+    const rows=this.db.prepare(`SELECT e.id,e.chat_id chatId,e.parent_execution_id parentExecutionId,e.cli,e.executable,e.cli_version cliVersion,e.model,e.device,e.security_profile_id securityProfileId,e.prompt_sha256 promptSha256,e.status,e.depth,e.started_at startedAt,e.finished_at finishedAt,e.exit_code exitCode,e.error_code errorCode,e.error_message errorMessage,e.created_at createdAt,p.name profileName FROM executions e JOIN security_profiles p ON p.id=e.security_profile_id WHERE e.workspace_id=? ${chatId?'AND e.chat_id=?':''} ORDER BY e.created_at DESC`).all(...(chatId?[workspaceId,chatId]:[workspaceId])) as Array<Record<string,unknown>>
+    return rows.map((run)=>({...run,events:this.db.prepare('SELECT sequence,type,text,name,raw_type rawType,created_at createdAt FROM execution_events WHERE execution_id=? ORDER BY sequence').all(String(run.id))}))
+  }
+
+  executionExists(workspaceId: string, id: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM executions WHERE id=? AND workspace_id=?').get(id,workspaceId))
+  }
+
+  activeExecutionIds(workspaceId?:string,chatId?:string):string[]{
+    let sql="SELECT id FROM executions WHERE status IN ('queued','running')";const args:string[]=[]
+    if(workspaceId){sql+=' AND workspace_id=?';args.push(workspaceId)}
+    if(chatId){sql+=' AND chat_id=?';args.push(chatId)}
+    return (this.db.prepare(sql).all(...args) as Array<{id:string}>).map((row)=>row.id)
+  }
+
+  private reconcileInterruptedExecutions():void{
+    const interrupted=this.db.prepare("SELECT id,workspace_id workspaceId,status FROM executions WHERE status IN ('queued','running')").all() as Array<{id:string;workspaceId:string;status:string}>
+    if(!interrupted.length)return
+    this.transaction(()=>{for(const run of interrupted){this.db.prepare("UPDATE executions SET status='failed',finished_at=?,error_code='interrupted',error_message='Waypoint stopped before this run reached a terminal state' WHERE id=?").run(now(),run.id);this.activity(run.workspaceId,'ai','execution.failed',run.id,'execution',{phase:'startup-reconciliation',priorStatus:run.status})}})
   }
 
   listWorkspaces(): WorkspaceSummary[] {
@@ -285,31 +383,41 @@ export class WorkspaceStore {
   exportWorkspace(workspaceId: string): ExportArchive {
     const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId) as Record<string, unknown> | undefined
     if (!workspace) throw new Error('Workspace not found')
-    const tables = ['documents','revisions','chats','messages','memories','relationships','attachments','activities','tombstones']
+    const tables = ['documents','revisions','chats','messages','memories','relationships','attachments','activities','tombstones','security_profiles','executions','execution_events']
     const objects: Record<string, unknown[]> = {}
     for (const table of tables) objects[table] = this.rowsForWorkspace(table, workspaceId)
     objects.attachments = (objects.attachments ?? []).map((value) => {
       const row = value as Record<string, unknown>
       return { ...row, data_base64: readFileSync(path.join(this.attachmentRoot, String(row.relative_path))).toString('base64') }
     })
-    const archive = { version: 2 as const, exportedAt: now(), workspace, objects }
+    const archive = { version: 3 as const, exportedAt: now(), workspace, objects }
     return { ...archive, integrity: archiveIntegrity(archive) }
   }
 
   restoreWorkspace(archive: ExportArchive, newName: string, newLocalPath: string): WorkspaceSummary {
-    if (archive.version !== 2) throw new Error('Unsupported archive version')
+    if (archive.version !== 2 && archive.version !== 3) throw new Error('Unsupported archive version')
     if (!archive.objects || !archive.workspace || archive.integrity !== archiveIntegrity({ version: archive.version, exportedAt: archive.exportedAt, workspace: archive.workspace, objects: archive.objects })) throw new Error('Archive integrity check failed')
     if (!newName.trim() || !path.isAbsolute(newLocalPath)) throw new Error('Workspace name and absolute local path are required')
     const workspace = { id: randomUUID(), name: newName.trim(), localPath: path.resolve(newLocalPath), createdAt: now() }
     const writtenFiles: string[] = []
     try { this.transaction(() => {
       this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt)
+      this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
       const idMap = new Map<string, string>()
       for (const table of ['documents','chats','memories'] as const) {
         for (const row of archive.objects[table] ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
       }
       for (const row of archive.objects.messages ?? []) idMap.set(String((row as Record<string, unknown>).id), randomUUID())
       for (const row of archive.objects.tombstones ?? []) idMap.set(String((row as Record<string, unknown>).object_id), randomUUID())
+      for (const row of archive.objects.executions ?? []) idMap.set(String((row as Record<string,unknown>).id),randomUUID())
+      if((archive.objects.security_profiles??[]).length){
+        this.db.prepare('DELETE FROM security_profiles WHERE workspace_id=?').run(workspace.id)
+        const executionRoot=path.join(workspace.localPath,'waypoint-workspaces',workspace.id);mkdirSync(executionRoot,{recursive:true})
+        for(const value of archive.objects.security_profiles){const row=value as Record<string,unknown>,id=randomUUID();idMap.set(String(row.id),id);this.db.prepare('INSERT INTO security_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,String(row.name),JSON.stringify([executionRoot]),String(row.filesystem),String(row.network),String(row.tools_json),String(row.approval),Number(row.max_duration_ms),Number(row.max_concurrency),Number(row.peer_eligible),String(row.secret_names_json),String(row.created_at))}
+      } else {
+        const profile=this.db.prepare('SELECT id FROM security_profiles WHERE workspace_id=?').get(workspace.id) as {id:string};
+        for(const run of archive.objects.executions??[]){const row=run as Record<string,unknown>;idMap.set(String(row.security_profile_id),profile.id)}
+      }
       for (const rowValue of archive.objects.documents ?? []) {
         const row = rowValue as Record<string, unknown>, id = idMap.get(String(row.id))!
         const revisions = (archive.objects.revisions ?? []).filter((candidate) => String((candidate as Record<string, unknown>).document_id) === String(row.id)) as Array<Record<string, unknown>>
@@ -333,6 +441,13 @@ export class WorkspaceStore {
           this.indexText(workspace.id, messageId, 'message', undefined, String(row.title), String(message.body))
         }
       }
+      for(const value of [...(archive.objects.executions??[])].sort((left,right)=>Number((left as Record<string,unknown>).depth)-Number((right as Record<string,unknown>).depth))){
+        const row=value as Record<string,unknown>,id=idMap.get(String(row.id))!,chatId=idMap.get(String(row.chat_id)),profileId=idMap.get(String(row.security_profile_id))
+        if(!chatId||!profileId)continue
+        const active=['queued','running'].includes(String(row.status)),status=active?'failed':String(row.status)
+        this.db.prepare('INSERT INTO executions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,workspace.id,chatId,row.parent_execution_id?idMap.get(String(row.parent_execution_id))??null:null,String(row.cli),row.executable==null?null:String(row.executable),row.cli_version==null?null:String(row.cli_version),row.model==null?null:String(row.model),String(row.device),profileId,String(row.prompt_sha256),status,Number(row.depth),row.started_at==null?null:String(row.started_at),active?now():row.finished_at==null?null:String(row.finished_at),row.exit_code==null?null:Number(row.exit_code),active?'restored_interrupted':row.error_code==null?null:String(row.error_code),active?'Archive captured a non-terminal run':row.error_message==null?null:String(row.error_message),String(row.created_at))
+      }
+      for(const value of archive.objects.execution_events??[]){const row=value as Record<string,unknown>,executionId=idMap.get(String(row.execution_id));if(executionId)this.db.prepare('INSERT INTO execution_events VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),executionId,Number(row.sequence),String(row.type),row.text==null?null:String(row.text),row.name==null?null:String(row.name),row.raw_type==null?null:String(row.raw_type),String(row.created_at))}
       for (const rowValue of archive.objects.memories ?? []) {
         const row = rowValue as Record<string, unknown>, id = idMap.get(String(row.id))!
         this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.body), row.source_object_id ? idMap.get(String(row.source_object_id)) ?? null : null, String(row.ownership ?? 'workspace-owned'), String(row.created_at), String(row.updated_at))
@@ -374,7 +489,7 @@ export class WorkspaceStore {
   }
 
   counts(): Record<string, number> {
-    const tables = ['workspaces','documents','revisions','chats','messages','memories','relationships','attachments','embeddings','activities','tombstones','queued_work','search_fts']
+    const tables = ['workspaces','documents','revisions','chats','messages','memories','relationships','attachments','embeddings','activities','tombstones','queued_work','security_profiles','executions','execution_events','search_fts']
     return Object.fromEntries(tables.map((table) => [table, Number((this.db.prepare(`SELECT count(*) count FROM ${table}`).get() as { count: number }).count)]))
   }
 
@@ -415,6 +530,7 @@ export class WorkspaceStore {
   private rowsForWorkspace(table: string, workspaceId: string): unknown[] {
     if (table === 'revisions') return this.db.prepare('SELECT r.* FROM revisions r JOIN documents d ON d.id=r.document_id WHERE d.workspace_id=?').all(workspaceId)
     if (table === 'messages') return this.db.prepare('SELECT m.* FROM messages m JOIN chats c ON c.id=m.chat_id WHERE c.workspace_id=?').all(workspaceId)
+    if (table === 'execution_events') return this.db.prepare('SELECT ee.* FROM execution_events ee JOIN executions e ON e.id=ee.execution_id WHERE e.workspace_id=?').all(workspaceId)
     return this.db.prepare(`SELECT * FROM ${table} WHERE workspace_id=?`).all(workspaceId)
   }
 

@@ -5,4 +5,4 @@ export interface SearchResult extends SourceRef { title: string; excerpt: string
 export interface GraphNode { id: string; kind: 'document' | 'chat' | 'memory'; title: string }
 export interface GraphEdge { id: string; fromId: string; toId: string; type: string }
 export interface WorkspaceSummary { id: string; name: string; localPath: string; createdAt: string }
-export interface ExportArchive { version: 2; exportedAt: string; workspace: Record<string, unknown>; objects: Record<string, unknown[]>; integrity: string }
+export interface ExportArchive { version: 2|3; exportedAt: string; workspace: Record<string, unknown>; objects: Record<string, unknown[]>; integrity: string }
