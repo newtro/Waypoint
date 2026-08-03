@@ -50,6 +50,13 @@ declare global {
       setCommitmentCompleted(workspaceId:string,commitmentId:string,completed:boolean):Promise<{ok:true}>
       composeDailyBriefing(workspaceId:string,timezone:string):Promise<{version:1;generatedAt:string;timezone:string;localDay:string;items:Array<{id:string;kind:'commitment'|'document'|'memory';title:string;detail:string;detailTruncated?:boolean;missingSource?:boolean;updatedAt:string;whyIncluded:string;freshness:'today'|'recent'|'stale'}>;coverage:{openCommitments:number;documents:number;memories:number;dismissed:number;missingSources:number;omittedByLimit:number};omissions:string[]}>
       dismissBriefingItem(workspaceId:string,sourceId:string,sourceKind:'commitment'|'document'|'memory',localDay:string):Promise<{ok:true}>
+      scanRuleSuggestions(workspaceId:string):Promise<{created:number}>
+      listRuleSuggestions(workspaceId:string):Promise<Array<{id:string;statement:string;scope:'workspace';confidence:number;extractor:string;extractorVersion:string;status:'pending';lastDryRunAt?:string;createdAt:string;sources:Array<{messageId:string;chatId:string;excerpt:string;startOffset:number;endOffset:number}>}>>
+      dryRunRuleSuggestion(workspaceId:string,suggestionId:string):Promise<{matchCount:number;sourceIds:string[]}>
+      resolveRuleSuggestion(workspaceId:string,suggestionId:string,action:'approve'|'reject'):Promise<{ok:true}>
+      listLearnedRules(workspaceId:string):Promise<Array<{id:string;suggestionId:string;statement:string;scope:'workspace';version:number;enabled:boolean;priorEnabled:boolean|null;createdAt:string;updatedAt:string;outcomes:Array<{action:string;matchCount:number;version:number;createdAt:string}>}>>
+      setLearnedRuleEnabled(workspaceId:string,ruleId:string,enabled:boolean):Promise<{ok:true}>
+      revertLearnedRule(workspaceId:string,ruleId:string):Promise<{ok:true}>
       createMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string): Promise<string>
       captureMemory(workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned?: boolean): Promise<string>
       createRelationship(workspaceId: string, fromId: string, toId: string, type: string): Promise<string>

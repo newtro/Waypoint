@@ -122,3 +122,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Kept schedule/delivery and all external sources outside the slice. Bounded source excerpts and output, pruned expired dismissal metadata, workspace isolation, and source deletion cleanup preserve privacy and responsiveness.
 - Focused timezone/DST, bounds, lifecycle, migration, isolation, and failure fixtures passed before the full package/review gate.
 - Independent review drove repair of four highs and five mediums spanning timezone-stable dismissal, missing-source truthfulness, visible generation/source identity, replicated deletion cleanup, deterministic limits, validation, idempotency, and migration indexing. Final verdict: blocker 0 / high 0 / medium 1 / low 0; the medium is retained content-free historical day keys. Terminal gate: 51 suites / 245 tests, lint, build, zero production vulnerabilities, native macOS package/runtime closure, diff hygiene, and isolated-profile native launch.
+
+## R3 Slice 3 — knowledge graph and learned rules (2026-08-03)
+
+- Added navigable message-aware graph relationships and deterministic repeated-user-directive suggestions with exact multi-source provenance.
+- Required current dry run and explicit approval; kept versioned workspace rules advisory with disable/re-enable/revert and content-minimized history. No authority, prompt, provider, schedule, sync, or external-action behavior is granted.
+- Added schema 11, source-loss invalidation triggers, workspace isolation, deterministic bounds, backup/restore remapping, and chat-first Graph & rules UI.
+- Independent review initially found three highs and two mediums in approved-rule invalidation, later-source merging, outcome expectations, graph endpoint visibility, and migration realism. All were repaired; final verdict: blocker 0 / high 0 / medium 0 / low 0.
+- Terminal gate: 53 suites / 254 tests, lint, production build, zero production vulnerabilities, native macOS package/runtime closure, diff hygiene, and isolated-profile packaged launch.

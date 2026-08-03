@@ -13,7 +13,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Windows delivery, signing, notarization, updates | Not implemented/validated | R2 requires Windows hardware plus Apple/Windows signing and update-channel authority; deferred, not treated as a feature-development blocker |
 | Commitments and memory suggestions | Implemented in R3 Slice 1; local review-first gate passed | Provider-assisted extraction and cross-device canonical commitment sync remain later separately reviewed extensions |
 | Daily briefing | Implemented in R3 Slice 2 as manual local review | Scheduling/delivery and authorized external sources remain later explicit gates |
-| Learned rule suggestions | Not implemented | R3 Slice 3; approval/dry-run/revert must not widen authority |
+| Learned rule suggestions and navigable graph | Implemented in R3 Slice 3 as local advisory rules | Automatic rule application remains a separately reviewed authority boundary |
 | Unified activity timeline | Partial first-pass activity exists | R3 Slice 4 adds derived/rule/meeting/automation event families without content duplication |
 | Audio-only meeting capture | Not implemented | R3 Slice 5; local explicit-consent defaults require a separate retention/transcription decision record |
 | Schedules and playbooks | Not implemented | R4 fixture engine after R3 provenance; no unattended external action |

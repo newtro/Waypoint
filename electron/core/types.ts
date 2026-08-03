@@ -2,7 +2,7 @@ export type ObjectKind = 'document' | 'chat' | 'message' | 'memory'
 
 export interface SourceRef { objectId: string; objectKind: ObjectKind; revisionId?: string }
 export interface SearchResult extends SourceRef { title: string; excerpt: string; score: number; method: 'text' | 'semantic' }
-export interface GraphNode { id: string; kind: 'document' | 'chat' | 'memory'; title: string }
+export interface GraphNode { id: string; kind: 'document' | 'chat' | 'message' | 'memory'; title: string }
 export interface GraphEdge { id: string; fromId: string; toId: string; type: string }
 export interface WorkspaceSummary { id: string; name: string; localPath: string; createdAt: string }
 export interface AttachmentMetadata { id:string; workspaceId:string; ownerId:string; ownerKind:'document'|'chat'|'message'|'memory'; name:string; mediaType:string; sha256:string; bytes:number; createdAt:string }

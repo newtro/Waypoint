@@ -203,3 +203,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Use the renderer's operating-system IANA timezone as the request default, fail closed on invalid zones, and make the calculated local day visible. Dismissal lasts only for that local day.
 - Cap output at 50 items, prioritize up to 30 open commitments, and disclose overflow, stale state, disconnected sources, and unsupported recurrence rather than implying completeness.
 - Store dismissal metadata without copied content and cascade it with the source object. A later day automatically makes the item eligible again.
+
+## R3 Slice 3 — knowledge graph and learned rules (2026-08-03)
+
+- Learned rules remain advisory, local, and workspace-scoped. Approval cannot alter prompts, providers, tools, security profiles, schedules, sync, or external state in this slice.
+- Require two distinct user-message directives, exact source provenance, and a current dry run before approval. Do not learn from assistant/system text or rejection behavior.
+- Treat suggestions and approved rules as source-owned. If valid provenance falls below two messages, delete the inferred rule rather than retaining a hidden profile.
+- Version rules from `local-directives` extractor `1.0.0`; outcome history records only action, counts, version, and timestamps, never copied source text.
