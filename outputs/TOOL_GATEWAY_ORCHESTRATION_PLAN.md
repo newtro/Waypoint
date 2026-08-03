@@ -46,6 +46,21 @@ In a trusted workspace under the Autonomous Developer profile:
 
 Browser control is an explicit per-invocation/workspace choice: use the user's existing signed-in browser profile for local convenience, or an isolated dedicated Waypoint profile for separation. The active choice is visible before and during execution and recorded in the sanitized receipt. Both modes honor workspace policy, cancellation, global stop, navigation/output bounds, and audit. Waypoint never extracts, displays, logs, exports, or relays passwords, cookies, session tokens, or other browser secrets. Browser and issue-system actions remain unavailable until their own reviewed capability/authority gate.
 
+## P6C — Tool Failure Learning / Prevention
+
+Add a privacy-safe preflight memory that helps an agent avoid repeating a materially equivalent known-failing tool action without pretending failures are permanent. This slice builds on normalized P6B receipts; it does not widen tool authority, execute a remedy automatically, or store raw sensitive arguments.
+
+Acceptance:
+
+- Persist a workspace-scoped failure record containing normalized tool/capability identity and version, a keyed/redacted parameter and environment-context fingerprint, error class, timestamp, bounded context dimensions, observed remediation, and eventual outcome. Raw prompts, commands, sensitive arguments, output, environment values, credentials, and cross-client material are prohibited.
+- Before execution, compare only within the same workspace/client and compatible tool version/context. A material match returns a visible warning plus the previously successful remediation or a requirement to explain what changed; it does not silently forge a success or permanently forbid execution.
+- User or policy-authorized AI override requires a bounded reason and creates a receipt. Tool/version changes, relevant environment/context changes, expiry, explicit deletion, and a later success invalidate or supersede stale failure knowledge deterministically.
+- Retention is bounded by age and per-tool/workspace count. Source receipt deletion cascades; workspace deletion is complete; backup/restore and encrypted sync preserve provenance and isolation without exposing the fingerprint key or raw source content.
+- The activity/chat timeline shows the preflight match, decision, override/remedy, and superseding success with content-minimized receipts. Global stop and normal cancellation remain dominant.
+- Deterministic fixtures cover equivalent/non-equivalent parameters, fingerprint stability without secret recovery, transient expiry, version/context invalidation, override reason, success supersession, concurrent updates, source deletion cascade, backup/restore, sync conflict, cross-workspace/client isolation, tampered rows, and bounded retention.
+
+Gate: this is a separate Build-to-Complete phase after the bounded P6B slice. It may create local schema/policy/UI and fixtures only. It cannot activate a provider, external account, network operation, schedule, or autonomous retry authority.
+
 ## Activation gates
 
 Implementation may begin as local schemas, simulator, policy engine, hostile fixtures, and no-effect UI. Any OpenRouter/API/provider credential, paid model, external account/data, live browser session, network access, cross-device execution, PR, write/send, or deployment requires its documented explicit authority. Trusted-workspace defaults do not override a task instruction, workspace/client boundary, deny rule, global stop, or the separate PR/deployment gate.

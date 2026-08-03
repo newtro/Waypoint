@@ -328,3 +328,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Trusted-workspace policy may allow commit and push by default with clear notification; task instructions can suppress either. PR create/update and deployment always require an explicit request.
 - Browser control visibly chooses per invocation/workspace between an existing signed-in profile and an isolated Waypoint profile. Neither mode exposes passwords, cookies, tokens, or browser secrets.
 - UI and AI share the same trusted domain-command surface for ordinary tasks and non-security settings, with identical validation, receipts, provenance, rollback, workspace boundaries, and truthful status. Security-critical configuration and authority/credential/tenant/permission changes remain explicit user-only operations.
+
+## Tool Failure Learning / Prevention (2026-08-03)
+
+- Add a separate P6C local slice after the bounded Tool Gateway. Preflight may recognize a materially equivalent prior failure and recommend its proven remedy, but must not treat a single failure as permanent or global.
+- Store only workspace/client-scoped normalized tool identity, keyed/redacted context fingerprints, error class, tool/version context, timestamps, remediation and outcome. Never store secrets, raw sensitive arguments, prompts, or unbounded output.
+- Expiry, version/context change, explicit deletion, and later success invalidate or supersede stale knowledge. Overrides require a visible reason and receipt. Retention, deletion cascade, backup/sync, activity visibility, and deterministic isolation tests are mandatory.
+- This planning decision grants no provider, external account, network, schedule, autonomous retry, or tool-authority activation.

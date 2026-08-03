@@ -109,6 +109,8 @@ Authority gates: every new provider/API/model/device/cost budget and unattended 
 
 P6 is implemented in two ordered sub-slices: **P6A policy-bounded paired provider evaluation**, then **P6B model-neutral Tool Gateway / Agent Runtime**. Their implementation-ready acceptance, local-CLI-first developer tooling policy, trusted-workspace terminal/commit policy, and selectable browser-profile boundary are canonical in `outputs/TOOL_GATEWAY_ORCHESTRATION_PLAN.md`. The local slice may build schemas, policy simulation, hostile fixtures, and no-effect UI; it does not activate Kimi K3, DeepSeek V4 Flash, OpenRouter, an API key, an external account, browser session, cross-device execution, PR, or deployment.
 
+After the bounded P6B gateway, **P6C Tool Failure Learning / Prevention** adds workspace-scoped, privacy-safe failure fingerprints and remediation preflight. It uses expiry/version/context invalidation, explicit overrides, success supersession, bounded retention, cascade deletion, backup/sync provenance, and deterministic hostile fixtures. It must never store raw sensitive arguments or convert one failure into a permanent global prohibition. Canonical acceptance is in `outputs/TOOL_GATEWAY_ORCHESTRATION_PLAN.md`.
+
 ## P7 — unified calendar and meeting copilot
 
 Build local canonical calendar/event/attendee/source-account contracts, fixture adapters, timezone/DST recurrence normalization, conflict/free-busy projection, agenda/meeting-prep suggestions, explicit note linking, and post-meeting review prompts. It remains chat-first: ask about the day, prepare a meeting, or open the optional calendar/meeting view. Fixture events cannot masquerade as real account data.
