@@ -13,6 +13,7 @@ import { detectCli } from '../spikes/cli-capabilities.js';
 import { deleteWithExecutionCancellation, startDurableChild, validateOneChildDelegation } from './core/execution-lifecycle.js';
 import { finalizeExecution } from './core/execution-finalization.js';
 import { readBackup, writeAtomicBackup } from './core/backup.js';
+import {inspectBackupFile,runRestoreDrill} from './core/backup-administration.js';
 import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js';
 import { sanitizeSyncStatus } from './core/sync/sync-status.js';
 import { ATTACHMENT_MEDIA_BY_EXTENSION, MAX_ATTACHMENTS_PER_OWNER, readAndValidateAttachment } from './core/chat-attachments.js';
@@ -715,13 +716,12 @@ function registerIpc(): void {
       filters: [{ name: 'Waypoint backup', extensions: ['json'] }],
     });
     if (chosen.canceled || !chosen.filePaths[0]) return { canceled: true };
-    const archive = readBackup(chosen.filePaths[0]);
-    return {
-      canceled: false,
-      version: archive.version,
-      exportedAt: archive.exportedAt,
-      integrity: archive.integrity,
-    };
+    return {canceled:false,...inspectBackupFile(chosen.filePaths[0])};
+  });
+  handle('waypoint:drill-backup',async()=>{
+    const chosen=await dialog.showOpenDialog({title:'Test-restore a Waypoint backup',properties:['openFile'],filters:[{name:'Waypoint backup',extensions:['json']}]});
+    if(chosen.canceled||!chosen.filePaths[0])return{canceled:true};
+    return{canceled:false,...runRestoreDrill(chosen.filePaths[0])};
   });
   handle('waypoint:restore-workspace', async () => {
     const chosen = await dialog.showOpenDialog({

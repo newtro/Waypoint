@@ -184,3 +184,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Initial review returned no-ship with one high, one medium, and one low. Repairs make receipts mandatory, validate and bind the exact budget/profile/lineage contract, fail closed on profile widening, and cover child restore. Follow-up review is in progress.
 - Follow-up retained one duration-binding high. Repairs now bind duration exactly to effective profile plus root/child cap and reject widened/mismatched receipts; final review is in progress.
 - Final independent verdict: ship, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 65 suites / 292 tests, lint, build, zero high vulnerabilities/undeclared licenses, production SBOM, native arm64 package/runtime closure/launch, and diff hygiene.
+
+## Post-MVP health — local backup administration (2026-08-03)
+
+- Recorded the remaining R5 policy/device and R6 mobile/platform authority gates, then selected the next safe local health feature.
+- Froze acceptance in `implementation/HEALTH_BACKUP_ADMIN_PLAN.md` and implemented read-only backup inspection plus an isolated production-path restore drill.
+- Self-review caught a verification side effect from adjacent-file crash recovery; inspection now uses a dedicated read-only path. Artifact digest and timestamp checks were strengthened before independent review.
+- Independent review initially found two highs, two mediums, and one low. Repairs cover all 21 restored families with the expected restore activity delta, independently guarantee removal attempts after close failure, validate timestamp ordering, and clean test fixtures.
+- Final verdict: gate clean, blocker 0 / high 0 / medium 1 / low 1. Accepted medium is temporary UI blocking for explicit large local archives; accepted low is direct meeting-audio/removal-failure branch coverage. Terminal gate: 66 suites / 299 tests, lint, build, dependency/SBOM checks, native arm64 package/runtime closure/launch, and diff hygiene.

@@ -267,3 +267,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Root default: 2,000,000 prompt bytes, 8 MiB output, at most 120 seconds/profile cap, one concurrent run, depth one, one child, and up to 20 selected attachments. Child default: 512 KiB prompt, 2 MiB output, at most 60 seconds/profile cap, no child or attachment.
 - Fix all current receipts to local device, fallback off, external cost off, peer off, one attempt, and the digest of the effective profile. Wider values require a later explicit user policy decision and review.
 - Persist content-minimized receipts with the execution rather than duplicating prompt/output or sensitive profile contents. Receipt restore and deletion follow execution ownership.
+
+## Post-MVP health — local backup administration (2026-08-03)
+
+- Keep backup verification genuinely read-only: it parses the selected file directly and never invokes adjacent-file crash recovery.
+- Use the production restore path only inside a fresh temporary database/artifact root. Never replace, merge into, or otherwise mutate the active workspace during a drill.
+- Return only basename, version/time, aggregate counts, stable failure code, and remediation to the renderer. Absolute paths, workspace identity, content, keys, prompts, and raw exceptions remain in the trusted process.
+- Keep plaintext export an explicit user choice. Encryption, scheduling, retention, destination persistence, remote storage, and restore-over-live require separate product/security authority.
+- Record remaining R5 wider authority and R6 mobile/platform choices as gates, then advance to this safe local health slice without claiming them complete.

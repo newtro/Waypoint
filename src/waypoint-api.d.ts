@@ -310,10 +310,9 @@ declare global {
       exportWorkspace(workspaceId: string): Promise<{ canceled: boolean; bytes?: number; integrity?: string }>;
       verifyBackup(): Promise<{
         canceled: boolean;
-        version?: number;
-        exportedAt?: string;
-        integrity?: string;
+        status?:'passed'|'failed';fileName?:string;version?:number;exportedAt?:string;counts?:Record<string,number>;totalObjects?:number;code?:string;remediation?:string;
       }>;
+      drillBackup():Promise<{canceled:boolean;status?:'passed'|'failed';fileName?:string;version?:number;exportedAt?:string;counts?:Record<string,number>;totalObjects?:number;code?:string;remediation?:string;drill?:{databaseIntegrity:'ok';foreignKeyViolations:0;missingFiles:0;digestMismatches:0;searchDifference:0;countsMatch:true;temporaryDataRemoved:true}}>;
       restoreWorkspace(): Promise<{
         canceled: boolean;
         workspace?: WorkspaceSummary;

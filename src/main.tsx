@@ -669,6 +669,8 @@ export function App() {
       showError(reason);
     }
   }
+  async function verifyBackup(){try{const result=await window.waypoint.verifyBackup();if(result.canceled)return;if(result.status==='passed')setNotice(`${result.fileName} passed integrity and format checks (${result.totalObjects} portable objects).`);else setError(`${result.code}: ${result.remediation}`)}catch(reason){showError(reason)}}
+  async function drillBackup(){try{const result=await window.waypoint.drillBackup();if(result.canceled)return;if(result.status==='passed'&&result.drill)setNotice(`${result.fileName} restored successfully in isolation; temporary drill data was removed.`);else setError(`${result.code}: ${result.remediation}`)}catch(reason){showError(reason)}}
   async function initializeSync() {
     if (!workspace) return;
     try {
@@ -1538,7 +1540,10 @@ export function App() {
                     <button className="secondary" onClick={() => void restoreWorkspace()}>
                       Restore backup
                     </button>
+                    <button className="secondary" onClick={()=>void verifyBackup()}>Verify backup</button>
+                    <button className="secondary" onClick={()=>void drillBackup()}>Run restore drill</button>
                   </div>
+                  <p className="drawer-intro">Verification reads only the selected file. A restore drill uses the real restore path in a temporary local workspace, checks database, files, indexes, and counts, then removes the drill data.</p>
                 </section>
                 <section>
                   <h3>Provider status</h3>

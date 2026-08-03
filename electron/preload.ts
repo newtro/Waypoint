@@ -275,6 +275,7 @@ contextBridge.exposeInMainWorld('waypoint', {
     }),
   exportWorkspace: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-workspace', { workspaceId }),
   verifyBackup: () => ipcRenderer.invoke('waypoint:verify-backup'),
+  drillBackup:()=>ipcRenderer.invoke('waypoint:drill-backup'),
   restoreWorkspace: () => ipcRenderer.invoke('waypoint:restore-workspace'),
   diagnostics: (workspaceId: string) => ipcRenderer.invoke('waypoint:diagnostics', { workspaceId }),
   rebuildSearch: (workspaceId: string) => ipcRenderer.invoke('waypoint:rebuild-search', { workspaceId }),

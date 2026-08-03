@@ -61,6 +61,7 @@ export function readBackup(filePath:string):ExportArchive {
   recoverInterruptedBackup(filePath)
   return readBackupFile(filePath)
 }
+export function readBackupReadonly(filePath:string):ExportArchive{return readBackupFile(filePath)}
 
 export type BackupFaultBoundary = 'temporary-durable'|'previous-durable'|'destination-replaced'
 
