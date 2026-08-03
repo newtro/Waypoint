@@ -29,6 +29,8 @@ After Backup Slice 1, proactive webhooks/calendar remain external-authority gate
 
 Production local PDF/DOCX/TXT/Markdown ingestion and chunked local indexing is complete. The next safe substantive phase is local-only proactive trigger rules plus webhook simulation/configuration (no public ingress or activation), followed by first-class local voice chat (no cloud API or implicit model download). Two-instance sync testing remains after these safely implementable feature gates.
 
+The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: local triggers → live voice → CrisperWhisper meeting lab → opt-in whole-device activity capture → local peer-control policy/simulation → richer local orchestration → calendar/meeting fixture contracts → two-instance validation. Real accounts/connectors/public ingress, model installs, capture sync, peer activation, Windows/release, and mobile distribution remain separately authority/hardware gated.
+
 ## Sequencing decision
 
 R0 and the locally implementable R1 product path are complete. R2's remaining work is intrinsically tied to unavailable Windows hardware, signing identities, notarization, update hosting, or distribution authority. By explicit user direction, those validations remain deferred rather than blocking planned feature implementation. Work therefore advances to R3 in its canonical slice order without claiming R2 release readiness.

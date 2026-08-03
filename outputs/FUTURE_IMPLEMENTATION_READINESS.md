@@ -4,6 +4,8 @@
 
 This is the canonical order for work deferred beyond the current-Mac local build. It converts product intent into phase gates without authorizing implementation, deployment, account connection, credential use, or third-party data ingestion. Existing object ownership, hard deletion, workspace isolation, local-first operation, signed-in CLI integration, opaque-relay direction, and Docker-free native clients remain invariants.
 
+The post-document-ingestion completion sequence and newly reconciled product streams are specified in `outputs/ROADMAP_COMPLETION_ADDENDUM.md`. Where this older R0–R6 decomposition is broader, the addendum controls slice ordering and safe-local versus authority-gated activation.
+
 Every implementation phase must use the build → verify → independent adversarial review → repair → re-verify loop. A phase advances only when its acceptance criteria pass and no blocker/high-severity finding remains. Platform or external-environment evidence must be labeled honestly; a simulation cannot satisfy a real-network, Windows, or provider gate.
 
 ## Non-negotiable boundaries

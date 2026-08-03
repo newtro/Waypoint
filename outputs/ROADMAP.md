@@ -70,6 +70,8 @@ The roadmap is ordered to retire product and trust risks early. Dates are intent
 
 ## Post-MVP sequence
 
+The implementation-ready completion order is now canonical in `outputs/ROADMAP_COMPLETION_ADDENDUM.md`. It places local triggers/webhook simulation first, then local voice, CrisperWhisper evaluation, opt-in whole-device capture, local peer-control policy/simulation, richer orchestration, and local calendar/meeting fixtures. Two-instance sync validation follows all eligible safe local slices and precedes cross-device release claims. External connector/public-ingress activation and mobile distribution retain their separate authority gates.
+
 Order should follow validated demand and privacy risk, but the likely dependency-aware progression is:
 
 1. Schedules and playbooks, using the established execution/security model.
