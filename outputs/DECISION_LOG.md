@@ -196,3 +196,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Advance from hardware/credential-bound R2 to the locally implementable R3 slices while keeping R2's release gate open. R3 derived data may be developed locally because R0/R1 provenance, lifecycle, and sync foundations are established.
 - Commitments and memory extraction starts with deterministic `local-patterns-v1`, explicit markers, threshold 0.72, bounded scans, and no silent auto-save. This avoids new provider, credential, network, cost, or unattended-action authority.
 - Rejection prevents exact re-suggestion for the same extractor/source span but does not create a learned profile. Accepted commitments are source-owned; accepted ordinary memories follow the existing source-linked detach semantics.
+
+## R3 Slice 2 — local daily briefing (2026-08-03)
+
+- Compose briefings only on explicit user request from local workspace commitments, notes, and memories. No external connector, model, schedule, notification, or send authority is implied.
+- Use the renderer's operating-system IANA timezone as the request default, fail closed on invalid zones, and make the calculated local day visible. Dismissal lasts only for that local day.
+- Cap output at 50 items, prioritize up to 30 open commitments, and disclose overflow, stale state, disconnected sources, and unsupported recurrence rather than implying completeness.
+- Store dismissal metadata without copied content and cascade it with the source object. A later day automatically makes the item eligible again.

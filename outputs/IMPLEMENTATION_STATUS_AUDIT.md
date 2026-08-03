@@ -12,7 +12,7 @@ Status as of 2026-08-03. This is the canonical promised-feature trace for select
 | Hosted opaque relay, enrollment/revocation/rotation, canonical sync, resumable attachments | Implemented; live dedicated relay updated | Two-physical-Mac and Mac↔Windows matrices intentionally deferred until planned features finish |
 | Windows delivery, signing, notarization, updates | Not implemented/validated | R2 requires Windows hardware plus Apple/Windows signing and update-channel authority; deferred, not treated as a feature-development blocker |
 | Commitments and memory suggestions | Implemented in R3 Slice 1; local review-first gate passed | Provider-assisted extraction and cross-device canonical commitment sync remain later separately reviewed extensions |
-| Daily briefing | Not implemented | R3 Slice 2 after derived-object provenance/lifecycle is proven |
+| Daily briefing | Implemented in R3 Slice 2 as manual local review | Scheduling/delivery and authorized external sources remain later explicit gates |
 | Learned rule suggestions | Not implemented | R3 Slice 3; approval/dry-run/revert must not widen authority |
 | Unified activity timeline | Partial first-pass activity exists | R3 Slice 4 adds derived/rule/meeting/automation event families without content duplication |
 | Audio-only meeting capture | Not implemented | R3 Slice 5; local explicit-consent defaults require a separate retention/transcription decision record |

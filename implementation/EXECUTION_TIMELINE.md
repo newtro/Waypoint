@@ -115,3 +115,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Added deterministic local suggestions, exact provenance/digest validation, typed source-owned commitments, explicit accept/edit-and-accept/reject controls, completion state, migration 9, backup/restore support, and chat-first Knowledge integration.
 - Independent review initially found two highs: stale/non-exact provenance and excessive main-process scan exposure. Repairs added atomic source validation and conservative lazy scan budgets; additional lifecycle/isolation fixtures and truthful terminal-action labeling were added before re-review.
 - A second review found and drove repair of schema-8 pending-suggestion migration. Final independent verdict: blocker 0 / high 0 / medium 0 / low 1. Terminal gate: 49 suites / 235 tests, lint, build, zero production vulnerabilities, native macOS package, runtime closure, diff hygiene, and isolated-profile native launch.
+
+## R3 Slice 2 — local daily briefing (2026-08-03)
+
+- Added an explicit local briefing over open commitments and recent durable knowledge with source identity, freshness, why-included context, exact coverage, omissions, and per-local-day dismissal.
+- Kept schedule/delivery and all external sources outside the slice. Bounded source excerpts and output, pruned expired dismissal metadata, workspace isolation, and source deletion cleanup preserve privacy and responsiveness.
+- Focused timezone/DST, bounds, lifecycle, migration, isolation, and failure fixtures passed before the full package/review gate.
+- Independent review drove repair of four highs and five mediums spanning timezone-stable dismissal, missing-source truthfulness, visible generation/source identity, replicated deletion cleanup, deterministic limits, validation, idempotency, and migration indexing. Final verdict: blocker 0 / high 0 / medium 1 / low 0; the medium is retained content-free historical day keys. Terminal gate: 51 suites / 245 tests, lint, build, zero production vulnerabilities, native macOS package/runtime closure, diff hygiene, and isolated-profile native launch.

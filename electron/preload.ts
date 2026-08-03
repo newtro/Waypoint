@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('waypoint', {
   resolveMemorySuggestion:(workspaceId:string,suggestionId:string,action:'accept'|'reject',title?:string,body?:string)=>ipcRenderer.invoke('waypoint:resolve-memory-suggestion',{workspaceId,suggestionId,action,title,body}),
   listCommitments:(workspaceId:string)=>ipcRenderer.invoke('waypoint:list-commitments',{workspaceId}),
   setCommitmentCompleted:(workspaceId:string,commitmentId:string,completed:boolean)=>ipcRenderer.invoke('waypoint:set-commitment-completed',{workspaceId,commitmentId,completed}),
+  composeDailyBriefing:(workspaceId:string,timezone:string)=>ipcRenderer.invoke('waypoint:compose-daily-briefing',{workspaceId,timezone}),
+  dismissBriefingItem:(workspaceId:string,sourceId:string,sourceKind:'commitment'|'document'|'memory',localDay:string)=>ipcRenderer.invoke('waypoint:dismiss-briefing-item',{workspaceId,sourceId,sourceKind,localDay}),
   createMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string) => ipcRenderer.invoke('waypoint:create-memory', { workspaceId, title, body, sourceObjectId }),
   captureMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned = false) => ipcRenderer.invoke('waypoint:capture-memory', { workspaceId, title, body, sourceObjectId, sourceOwned }),
   createRelationship: (workspaceId: string, fromId: string, toId: string, type: string) => ipcRenderer.invoke('waypoint:create-relationship', { workspaceId, fromId, toId, type }),

@@ -1,0 +1,9 @@
+import {describe,expect,it} from 'vitest'
+import {composeDailyBriefing,localDayAt,type BriefingSource} from './daily-briefing.js'
+
+const sources:BriefingSource[]=[{id:'c1',kind:'commitment',title:'Ship',detail:'Ship safely',updatedAt:'2026-11-01T05:30:00Z'},{id:'d1',kind:'document',title:'Plan',detail:'Local plan',updatedAt:'2026-10-30T12:00:00Z'},{id:'m1',kind:'memory',title:'Fact',detail:'Private',updatedAt:'2026-09-01T12:00:00Z'}]
+describe('daily briefing composition',()=>{
+  it('handles timezone day boundaries and DST transition instants',()=>{expect(localDayAt('2026-11-01T05:30:00Z','America/New_York')).toBe('2026-11-01');expect(localDayAt('2026-11-01T04:30:00Z','America/Los_Angeles')).toBe('2026-10-31');expect(localDayAt('2026-03-08T07:30:00Z','America/New_York')).toBe('2026-03-08');expect(()=>localDayAt('2026-01-01T00:00:00Z','Not/AZone')).toThrow('timezone')})
+  it('is deterministic, prioritizes commitments, discloses omissions, and marks freshness',()=>{const first=composeDailyBriefing(sources,new Set(),'2026-11-01T12:00:00Z','America/New_York');expect(composeDailyBriefing(sources,new Set(),'2026-11-01T12:00:00Z','America/New_York')).toEqual(first);expect(first.items.map((item)=>[item.kind,item.freshness])).toEqual([['commitment','today'],['document','recent'],['memory','stale']]);expect(first.omissions.join(' ')).toContain('not checked');expect(first.coverage).toMatchObject({openCommitments:1,documents:1,memories:1})})
+  it('applies per-source dismissal and hard output bounds',()=>{const many=Array.from({length:80},(_,index):BriefingSource=>({id:String(index),kind:index<40?'commitment':'document',title:`Item ${index}`,detail:'Detail',updatedAt:'2026-11-01T00:00:00Z'})),brief=composeDailyBriefing(many,new Set(['commitment:0']),'2026-11-01T12:00:00Z','UTC');expect(brief.items).toHaveLength(50);expect(brief.items.some((item)=>item.id==='0')).toBe(false);expect(brief.coverage.omittedByLimit).toBe(29)})
+})
