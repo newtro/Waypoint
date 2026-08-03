@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, copyFi
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { ExportArchive, GraphEdge, GraphNode, ObjectKind, SearchResult, WorkspaceSummary } from './types.js'
+import { WorkspaceSyncJournal } from './sync/workspace-sync-journal.js'
+import type { InboundChange, LocalMutation } from './sync/sync-store.js'
 import { archiveIntegrity, validateArchive } from './backup.js'
 import { assertSupportedSchema, createMigrationSnapshot, CURRENT_SCHEMA_VERSION, runMigrations, schemaVersion } from './migrations.js'
 
@@ -12,6 +14,7 @@ const supportedAttachmentTypes = new Set(['text/plain', 'text/markdown'])
 export class WorkspaceStore {
   private readonly db: DatabaseSync
   private readonly attachmentRoot: string
+  private readonly syncJournal: WorkspaceSyncJournal
 
   constructor(readonly databasePath: string) {
     mkdirSync(path.dirname(databasePath), { recursive: true })
@@ -22,6 +25,8 @@ export class WorkspaceStore {
     const priorVersion = assertSupportedSchema(this.db)
     createMigrationSnapshot(this.db, databasePath, priorVersion)
     this.migrate()
+    this.syncJournal=new WorkspaceSyncJournal(this.db)
+    for(const workspace of this.db.prepare('SELECT id FROM workspaces').all() as Array<{id:string}>)this.syncJournal.ensureWorkspace(workspace.id)
     this.reconcileInterruptedExecutions()
     this.reconcileAttachmentFiles()
   }
@@ -86,11 +91,18 @@ export class WorkspaceStore {
     const workspace = { id: randomUUID(), name: name.trim(), localPath: path.resolve(localPath), createdAt: now() }
     this.transaction(() => {
       this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt)
+      this.syncJournal.ensureWorkspace(workspace.id)
       this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
       this.activity(workspace.id, 'workspace', 'created', workspace.id, 'workspace', { localPath: workspace.localPath })
     })
     return workspace
   }
+
+  syncStatus(workspaceId:string):Record<string,unknown>{return this.syncJournal.status(workspaceId)}
+  configureSyncDevice(workspaceId:string,deviceId:string):void{this.syncJournal.configureDevice(workspaceId,deviceId)}
+  pendingSyncChanges(workspaceId:string):LocalMutation[]{return this.syncJournal.pending(workspaceId)}
+  syncHead(workspaceId:string,objectId:string):Record<string,unknown>|undefined{return this.syncJournal.head(workspaceId,objectId)}
+  recordInboundSyncChange(change:InboundChange):'applied'|'conflict'|'ignored'|'replay'{this.syncJournal.status(change.workspaceId);return this.transaction(()=>this.syncJournal.recordInbound(change))}
 
   private createDefaultSecurityProfile(workspaceId: string, workspaceRoot: string): string {
     const id = randomUUID(), executionRoot=path.join(path.resolve(workspaceRoot),'waypoint-workspaces',workspaceId)
@@ -148,6 +160,7 @@ export class WorkspaceStore {
         if(!chat)throw new Error('Execution chat was deleted')
         const messageId=randomUUID(),timestamp=now(),body=assistantBody.trim()
         this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId,execution.chatId,'assistant',body,timestamp)
+        this.syncJournal.enqueue(workspaceId,messageId,'message','upsert',{id:messageId,chatId:execution.chatId,role:'assistant',body,createdAt:timestamp,executionId:id})
         this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp,execution.chatId)
         this.indexText(workspaceId,messageId,'message',undefined,chat.title,body)
         this.activity(workspaceId,'content','message.created',messageId,'message',{role:'assistant',executionId:id})
@@ -200,6 +213,7 @@ export class WorkspaceStore {
     return this.transaction(() => {
       this.db.prepare('INSERT INTO documents VALUES (?,?,?,?,?,?)').run(id, workspaceId, title.trim() || 'Untitled', revisionId, timestamp, timestamp)
       this.db.prepare('INSERT INTO revisions VALUES (?,?,?,?)').run(revisionId, id, body, timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'document','upsert',{id,title:title.trim()||'Untitled',revisionId,body,createdAt:timestamp,updatedAt:timestamp})
       this.indexText(workspaceId, id, 'document', revisionId, title, body)
       this.activity(workspaceId, 'content', 'document.created', id, 'document', {})
       return { id, revisionId }
@@ -217,6 +231,7 @@ export class WorkspaceStore {
       this.db.prepare("DELETE FROM search_fts WHERE object_id=? AND object_kind='document'").run(documentId)
       this.indexText(document.workspace_id, documentId, 'document', revisionId, title, body)
       this.db.prepare('DELETE FROM embeddings WHERE object_id=?').run(documentId)
+      this.syncJournal.enqueue(workspaceId,documentId,'document','upsert',{id:documentId,title:title.trim()||'Untitled',revisionId,body,updatedAt:timestamp})
       this.activity(document.workspace_id, 'content', 'document.updated', documentId, 'document', { revisionId })
       return revisionId
     })
@@ -226,6 +241,7 @@ export class WorkspaceStore {
     const id = randomUUID(), timestamp = now()
     this.transaction(() => {
       this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, title.trim() || 'New chat', timestamp, timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'chat','upsert',{id,title:title.trim()||'New chat',createdAt:timestamp,updatedAt:timestamp})
       this.activity(workspaceId, 'content', 'chat.created', id, 'chat', {})
     })
     return id
@@ -236,6 +252,8 @@ export class WorkspaceStore {
     this.transaction(() => {
       this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, normalizedTitle, timestamp, timestamp)
       this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, id, 'user', body, timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'chat','upsert',{id,title:normalizedTitle,createdAt:timestamp,updatedAt:timestamp})
+      this.syncJournal.enqueue(workspaceId,messageId,'message','upsert',{id:messageId,chatId:id,role:'user',body,createdAt:timestamp})
       this.indexText(workspaceId, messageId, 'message', undefined, normalizedTitle, body)
       this.activity(workspaceId, 'content', 'chat.created', id, 'chat', {})
       this.activity(workspaceId, 'content', 'message.created', messageId, 'message', { role: 'user' })
@@ -251,6 +269,7 @@ export class WorkspaceStore {
     this.transaction(() => {
       this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(id, chatId, role, body, timestamp)
       this.db.prepare('UPDATE chats SET updated_at=? WHERE id=?').run(timestamp, chatId)
+      this.syncJournal.enqueue(workspaceId,id,'message','upsert',{id,chatId,role,body,createdAt:timestamp})
       this.indexText(chat.workspace_id, id, 'message', undefined, chat.title, body)
       this.activity(chat.workspace_id, 'content', 'message.created', id, 'message', { role })
     })
@@ -263,6 +282,7 @@ export class WorkspaceStore {
     const id = randomUUID(), timestamp = now()
     this.transaction(() => {
       this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, title.trim() || 'Memory', body, sourceObjectId ?? null, ownership, timestamp, timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'memory','upsert',{id,title:title.trim()||'Memory',body,sourceObjectId:sourceObjectId??null,ownership,createdAt:timestamp,updatedAt:timestamp})
       this.indexText(workspaceId, id, 'memory', undefined, title, body)
       this.activity(workspaceId, 'content', 'memory.created', id, 'memory', { sourceObjectId: sourceObjectId ?? null })
     })
@@ -275,11 +295,13 @@ export class WorkspaceStore {
     const id = randomUUID(), timestamp = now(), normalizedTitle = title.trim() || 'Memory'
     this.transaction(() => {
       this.db.prepare('INSERT INTO memories(id,workspace_id,title,body,source_object_id,ownership,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, normalizedTitle, body, sourceObjectId ?? null, ownership, timestamp, timestamp)
+      this.syncJournal.enqueue(workspaceId,id,'memory','upsert',{id,title:normalizedTitle,body,sourceObjectId:sourceObjectId??null,ownership,createdAt:timestamp,updatedAt:timestamp})
       this.indexText(workspaceId, id, 'memory', undefined, normalizedTitle, body)
       this.activity(workspaceId, 'content', 'memory.created', id, 'memory', { sourceObjectId: sourceObjectId ?? null })
       if (sourceObjectId) {
         const relationshipId = randomUUID()
         this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(relationshipId, workspaceId, sourceObjectId, id, 'supports', timestamp)
+        this.syncJournal.enqueue(workspaceId,relationshipId,'relationship','upsert',{id:relationshipId,fromId:sourceObjectId,toId:id,type:'supports',createdAt:timestamp})
         this.activity(workspaceId, 'graph', 'relationship.created', relationshipId, 'relationship', { fromId: sourceObjectId, toId: id, type: 'supports' })
       }
     })
@@ -292,6 +314,7 @@ export class WorkspaceStore {
     const id = randomUUID()
     this.transaction(() => {
       this.db.prepare('INSERT INTO relationships VALUES (?,?,?,?,?,?)').run(id, workspaceId, fromId, toId, type, now())
+      this.syncJournal.enqueue(workspaceId,id,'relationship','upsert',{id,fromId,toId,type})
       this.activity(workspaceId, 'graph', 'relationship.created', id, 'relationship', { fromId, toId, type })
     })
     return id
@@ -302,10 +325,13 @@ export class WorkspaceStore {
     this.assertObjectInWorkspace(workspaceId, ownerId)
     const bytes = readFileSync(sourcePath)
     const sha256 = createHash('sha256').update(bytes).digest('hex')
-    const id = randomUUID(), relativePath = `${id}-${path.basename(name)}`
+    const id = randomUUID(), relativePath = `${id}-${path.basename(name)}`,createdAt=now()
     copyFileSync(sourcePath, path.join(this.attachmentRoot, relativePath))
     try {
-      this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, ownerId, path.basename(name), mediaType, sha256, relativePath, now())
+      this.transaction(()=>{
+        this.db.prepare('INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)').run(id, workspaceId, ownerId, path.basename(name), mediaType, sha256, relativePath, createdAt)
+        this.syncJournal.enqueue(workspaceId,id,'attachment','upsert',{id,ownerId,name:path.basename(name),mediaType,sha256,relativePath,createdAt})
+      })
     } catch (error) { rmSync(path.join(this.attachmentRoot, relativePath), { force: true }); throw error }
     return id
   }
@@ -359,7 +385,8 @@ export class WorkspaceStore {
         ownedIds.push(...additions)
       }
       const placeholders = ownedIds.map(() => '?').join(',')
-      const attachmentRows = this.db.prepare(`SELECT relative_path FROM attachments WHERE owner_id IN (${placeholders})`).all(...ownedIds) as Array<{ relative_path: string }>
+      const attachmentRows = this.db.prepare(`SELECT id,relative_path FROM attachments WHERE owner_id IN (${placeholders})`).all(...ownedIds) as Array<{ id:string;relative_path: string }>
+      const relationshipIds=(this.db.prepare(`SELECT id FROM relationships WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).all(...ownedIds,...ownedIds) as Array<{id:string}>).map((row)=>row.id)
       for (const attachment of attachmentRows) {
         const source = path.join(this.attachmentRoot, attachment.relative_path), staged = `${source}.deleting-${randomUUID()}`
         renameSync(source, staged); stagedFiles.push({ source, staged })
@@ -370,11 +397,14 @@ export class WorkspaceStore {
       this.db.prepare(`DELETE FROM search_fts WHERE object_id IN (${placeholders})`).run(...ownedIds)
       this.db.prepare(`DELETE FROM attachments WHERE owner_id IN (${placeholders})`).run(...ownedIds)
       const dependentMemoryIds = ownedIds.filter((id) => id !== objectId && this.objectWorkspace(id, 'memory') === workspaceId)
+      const detachedMemories=this.db.prepare(`SELECT id,title,body,ownership,created_at createdAt,updated_at updatedAt FROM memories WHERE workspace_id=? AND ownership='workspace-owned' AND source_object_id IN (${placeholders})`).all(workspaceId,...ownedIds) as Array<{id:string;title:string;body:string;ownership:string;createdAt:string;updatedAt:string}>
       this.db.prepare(`UPDATE memories SET source_object_id=NULL WHERE ownership='workspace-owned' AND source_object_id IN (${placeholders})`).run(...ownedIds)
+      for(const memory of detachedMemories)this.syncJournal.enqueue(workspaceId,memory.id,'memory','upsert',{...memory,sourceObjectId:null})
       if (dependentMemoryIds.length) this.db.prepare(`DELETE FROM memories WHERE id IN (${dependentMemoryIds.map(() => '?').join(',')})`).run(...dependentMemoryIds)
       this.db.prepare(`DELETE FROM ${objectKind === 'document' ? 'documents' : objectKind === 'chat' ? 'chats' : 'memories'} WHERE id=?`).run(objectId)
-      for (const dependentId of dependentMemoryIds) { this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId, workspaceId, 'memory', now()); this.activity(workspaceId, 'lifecycle', 'deleted', dependentId, 'memory', {}) }
+      for (const dependentId of dependentMemoryIds) { this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(dependentId, workspaceId, 'memory', now());this.syncJournal.enqueue(workspaceId,dependentId,'memory','delete',{id:dependentId},[dependentId]); this.activity(workspaceId, 'lifecycle', 'deleted', dependentId, 'memory', {}) }
       this.db.prepare('INSERT INTO tombstones VALUES (?,?,?,?)').run(objectId, workspaceId, objectKind, now())
+      this.syncJournal.enqueue(workspaceId,objectId,objectKind,'delete',{id:objectId,cascade:true},[...ownedIds,...relationshipIds,...attachmentRows.map((row)=>row.id)])
       this.activity(workspaceId, 'lifecycle', 'deleted', objectId, objectKind, {})
     }) } catch (error) {
       for (const file of stagedFiles.reverse()) renameSync(file.staged, file.source)
@@ -408,6 +438,7 @@ export class WorkspaceStore {
     const writtenFiles: string[] = []
     try { this.transaction(() => {
       this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt)
+      this.syncJournal.ensureWorkspace(workspace.id,'snapshot_required')
       this.createDefaultSecurityProfile(workspace.id, workspace.localPath)
       const idMap = new Map<string, string>()
       for (const table of ['documents','chats','memories'] as const) {

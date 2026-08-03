@@ -55,6 +55,9 @@ export function parseEvent(cli: CliName, line: string): ExecutionEvent {
     if (item?.type === 'agent_message' && typeof item.text === 'string') return { type: 'text', text: item.text, rawType: String(value.type ?? '') }
     if (item?.type === 'command_execution') return { type: 'tool', name: 'command', rawType: String(value.type ?? '') }
   } else {
+    const streamEvent=value.event as Record<string,unknown>|undefined,delta=streamEvent?.delta as Record<string,unknown>|undefined
+    if(streamEvent?.type==='content_block_delta'&&delta?.type==='text_delta'&&typeof delta.text==='string')return{type:'text',text:delta.text,rawType:'stream_event.content_block_delta'}
+    if(value.type==='system'&&value.subtype==='init'&&typeof value.model==='string')return{type:'diagnostic',name:`model: ${value.model}`,rawType:'system.init'}
     const message = value.message as Record<string, unknown>|undefined
     const content = message?.content
     if (Array.isArray(content)) {

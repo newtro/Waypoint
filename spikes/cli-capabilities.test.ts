@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { detectCli, resolveExecutable } from './cli-capabilities.js'
+import { cliCompatibility, detectCli, parseCliVersion, resolveExecutable } from './cli-capabilities.js'
 
 describe('cross-platform CLI capability detection', () => {
   it('uses PATHEXT for native Windows resolution', async () => {
@@ -35,5 +35,13 @@ describe('cross-platform CLI capability detection', () => {
       run: async () => { throw new Error('timed out') },
     })
     expect(result).toMatchObject({ available: false, error: 'timed out' })
+  })
+  it('parses decorated versions and returns actionable compatibility policy',()=>{
+    expect(parseCliVersion('codex-cli 0.146.0-alpha.9.2')).toEqual([0,146,0])
+    expect(cliCompatibility('codex','codex-cli 0.146.0-alpha.9.2')).toEqual({compatible:true})
+    expect(cliCompatibility('claude','2.1.220 (Claude Code)')).toEqual({compatible:true})
+    expect(cliCompatibility('claude','2.1.219')).toMatchObject({compatible:false,error:expect.stringContaining('2.1.220 or newer')})
+    expect(cliCompatibility('codex','1.0.0')).toMatchObject({compatible:false,error:expect.stringContaining("newer than Waypoint's validated range")})
+    expect(cliCompatibility('codex','development build')).toMatchObject({compatible:false,error:expect.stringContaining('Could not parse')})
   })
 })

@@ -9,9 +9,10 @@ import { WorkspaceStore } from './core/store.js'
 import { LocalOllamaEmbeddings } from './core/ollama.js'
 import { CliWorkbench } from './core/ai-workbench.js'
 import { detectCli } from '../spikes/cli-capabilities.js'
-import { deleteWithExecutionCancellation, startDurableChild } from './core/execution-lifecycle.js'
+import { deleteWithExecutionCancellation, startDurableChild, validateOneChildDelegation } from './core/execution-lifecycle.js'
 import { readBackup, writeAtomicBackup } from './core/backup.js'
 import { exportDiagnosticsReport, runDiagnostics } from './core/diagnostics.js'
+import { sanitizeSyncStatus } from './core/sync/sync-status.js'
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 let store: WorkspaceStore
@@ -60,6 +61,7 @@ function registerIpc(): void {
     return store.updateDocument(text(value.workspaceId, 'workspace ID', 64), text(value.objectId, 'document ID', 64), text(value.title, 'title', 300), text(value.body, 'body', 2_000_000))
   })
   handle('waypoint:list-documents', (_event, input: unknown) => store.listDocuments(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)))
+  handle('waypoint:sync-status',(_event,input:unknown)=>sanitizeSyncStatus(store.syncStatus(text((input as Record<string,unknown>).workspaceId,'workspace ID',64))))
   handle('waypoint:search-text', (_event, input: unknown) => {
     const value = input as Record<string, unknown>
     const workspaceId = text(value.workspaceId, 'workspace ID', 64)
@@ -108,12 +110,13 @@ function registerIpc(): void {
   handle('waypoint:run-chat', async (_event,input:unknown)=>{
     const value=input as Record<string,unknown>, workspaceId=text(value.workspaceId,'workspace ID',64), chatId=text(value.chatId,'chat ID',64)
     const cli=text(value.cli,'CLI',20); if(!['codex','claude'].includes(cli))throw new Error('Unsupported CLI')
-    const prompt=text(value.prompt,'prompt',2_000_000), profileId=text(value.securityProfileId,'security profile ID',64)
+    const prompt=text(value.prompt,'prompt',2_000_000), profileId=text(value.securityProfileId,'security profile ID',64),parentExecutionId=value.parentExecutionId?text(value.parentExecutionId,'parent execution ID',64):undefined
     const workspace=store.listWorkspaces().find((candidate)=>candidate.id===workspaceId); if(!workspace)throw new Error('Workspace not found')
     const profile=store.listSecurityProfiles(workspaceId).find((candidate)=>candidate.id===profileId);if(!profile)throw new Error('Security profile not found')
-    const runId=store.createExecution({workspaceId,chatId,cli:cli as 'codex'|'claude',model:value.model?text(value.model,'model',120):undefined,securityProfileId:profileId,prompt})
+    if(parentExecutionId)validateOneChildDelegation(store.listExecutions(workspaceId,chatId),parentExecutionId,profileId)
+    const runId=store.createExecution({workspaceId,chatId,cli:cli as 'codex'|'claude',model:value.model?text(value.model,'model',120):undefined,securityProfileId:profileId,prompt,parentExecutionId,depth:parentExecutionId?1:0})
     try {
-      const running=await startDurableChild({workspaceId,runId,detect:()=>detectCli(cli as 'codex'|'claude'),executionExists:(owner,id)=>store.executionExists(owner,id),spawn:(capability)=>workbench.start(runId,{cli:cli as 'codex'|'claude',prompt,workspaceRoot:profile.roots[0],profile,model:value.model?text(value.model,'model',120):undefined,executable:capability.executable,version:capability.version},(event)=>{try{store.appendExecutionEvent(runId,workspaceId,event)}catch{/* A deleted chat cancels persistence authority. */}}),markRunning:(child)=>store.startExecution(runId,workspaceId,child.executable,child.version)})
+      const running=await startDurableChild({workspaceId,runId,detect:async()=>{const capability=await detectCli(cli as 'codex'|'claude');if(capability.available&&capability.compatible===false)throw new Error(capability.compatibilityError);return capability},executionExists:(owner,id)=>store.executionExists(owner,id),spawn:(capability)=>workbench.start(runId,{cli:cli as 'codex'|'claude',prompt,workspaceRoot:profile.roots[0],profile,model:value.model?text(value.model,'model',120):undefined,executable:capability.executable,version:capability.version,parentRunId:parentExecutionId,depth:parentExecutionId?1:0},(event)=>{try{store.appendExecutionEvent(runId,workspaceId,event)}catch{/* A deleted chat cancels persistence authority. */}}),markRunning:(child)=>store.startExecution(runId,workspaceId,child.executable,child.version)})
       void running.completion.then((result)=>{
         try {
           const events=store.listExecutions(workspaceId,chatId).find((run)=>run.id===runId)?.events as Array<Record<string,unknown>>|undefined

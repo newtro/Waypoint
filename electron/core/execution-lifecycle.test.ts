@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from 'vitest'
-import {cancelExecutionsBeforeShutdown,deleteWithExecutionCancellation,startDurableChild} from './execution-lifecycle.js'
+import {cancelExecutionsBeforeShutdown,deleteWithExecutionCancellation,startDurableChild,validateOneChildDelegation} from './execution-lifecycle.js'
 
 describe('execution owner lifecycle',()=>{
   it('cancels every active child before deleting its owning chat',()=>{
@@ -19,5 +19,12 @@ describe('execution owner lifecycle',()=>{
     const running={executable:'/trusted/codex',cancel:vi.fn()}
     await expect(startDurableChild({workspaceId:'w',runId:'r',detect:async()=>({available:true,executable:'/trusted/codex'}),executionExists:()=>true,spawn:async()=>running,markRunning:()=>{throw new Error('row deleted')}})).rejects.toThrow('row deleted')
     expect(running.cancel).toHaveBeenCalledOnce()
+  })
+  it('allows one child without changing permissions and rejects recursion or a second child',()=>{
+    const root={id:'root',depth:0,securityProfileId:'safe'}
+    expect(()=>validateOneChildDelegation([root],'root','safe')).not.toThrow()
+    expect(()=>validateOneChildDelegation([root],'root','broader')).toThrow(/cannot expand/)
+    expect(()=>validateOneChildDelegation([root,{id:'child',depth:1,parentExecutionId:'root'}],'root','safe')).toThrow(/already used/)
+    expect(()=>validateOneChildDelegation([{id:'child',depth:1,securityProfileId:'safe'}],'child','safe')).toThrow(/root run/)
   })
 })

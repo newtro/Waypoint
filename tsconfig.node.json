@@ -10,5 +10,5 @@
     "outDir": "dist-electron",
     "rootDir": "."
   },
-  "include": ["electron", "node", "spikes", "src/chat-selection.ts", "vite.config.ts", "vitest.config.ts"]
+  "include": ["electron", "node", "spikes", "src/**/*.ts", "vite.config.ts", "vitest.config.ts"]
 }

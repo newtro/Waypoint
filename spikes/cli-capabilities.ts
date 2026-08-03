@@ -12,6 +12,24 @@ export interface CliCapability {
   executable?: string
   version?: string
   error?: string
+  compatible?: boolean
+  compatibilityError?: string
+}
+
+const minimumVersions:Record<CliName,readonly [number,number,number]>={codex:[0,146,0],claude:[2,1,220]}
+const maximumMajorExclusive:Record<CliName,number>={codex:1,claude:3}
+
+export function parseCliVersion(value:string):[number,number,number]|undefined{
+  const match=value.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?:\D|$)/)
+  return match?[Number(match[1]),Number(match[2]),Number(match[3])]:undefined
+}
+
+export function cliCompatibility(name:CliName,version:string):{compatible:boolean;error?:string}{
+  const parsed=parseCliVersion(version),minimum=minimumVersions[name],minimumLabel=minimum.join('.')
+  if(!parsed)return{compatible:false,error:`Could not parse ${name} version “${version}”. Update the CLI and run the local health check.`}
+  if(parsed[0]>=maximumMajorExclusive[name])return{compatible:false,error:`${name} ${parsed.join('.')} is newer than Waypoint's validated range. Update Waypoint before running this CLI.`}
+  const comparison=parsed[0]-minimum[0]||parsed[1]-minimum[1]||parsed[2]-minimum[2]
+  return comparison>=0?{compatible:true}:{compatible:false,error:`${name} ${parsed.join('.')} is unsupported. Update to ${minimumLabel} or newer, then retry.`}
 }
 
 export interface DetectionOptions {
@@ -60,7 +78,8 @@ export async function detectCli(name: CliName, options: DetectionOptions = {}): 
     const { stdout, stderr } = await run(executable, ['--version'])
     const version = `${stdout}${stderr}`.trim()
     if (!version) return { name, available: false, executable, error: 'CLI returned an empty version' }
-    return { name, available: true, executable, version }
+    const compatibility=cliCompatibility(name,version)
+    return { name, available: true, executable, version, compatible:compatibility.compatible,compatibilityError:compatibility.error }
   } catch (error) {
     return { name, available: false, executable, error: error instanceof Error ? error.message : 'Unknown detection error' }
   }

@@ -37,9 +37,22 @@
 
 The Mac-local Phase 3 foundation is clean under the scoped gate: verification passes and the independent reviewer reports no unresolved blocker/high. The full roadmap private-beta gate remains open for the deferred real Ubuntu/AWS, Windows, TLS/public-network, key-rotation/recovery orchestration, signing/update, and professional protocol-review evidence below.
 
+## Whole-product backend integration repair
+
+`WorkspaceSyncJournal` now shares the exact `DatabaseSync` connection and surrounding transaction used by `WorkspaceStore`. Ordinary document create/update, chat/message capture, memory and relationship creation, supported attachment metadata, completed assistant messages, and cascade deletion enqueue durable causal mutations atomically with canonical content. Local deletion removes pending/outbox upserts for owned messages, memories, relationships, and attachments, writes a fixed-retention sync tombstone/head, and rejects stale inbound resurrection. Restores receive `snapshot_required` status while sync queues, device identifiers, heads, conflicts, and tombstones remain excluded from portable archives.
+
+Backend-only hooks now available for the later main-process/UI integration:
+
+- `syncStatus(workspaceId)` — setup state, pending mutations/envelopes, conflicts, and tombstones;
+- `configureSyncDevice(workspaceId, deviceId)` — records the selected local device and reports `device_pending_keys`; it does not claim protected identity/key setup is complete;
+- `pendingSyncChanges(workspaceId)` — trusted-process worker input, not intended for renderer exposure because it contains pending plaintext awaiting encryption;
+- `recordInboundSyncChange(change)` — replay-safe durable convergence/conflict staging. Clean inbound content still needs a reviewed materialization controller before it may update canonical objects.
+
+Focused integration verification covers create/update/delete enqueue, process restart, a forced journal-trigger failure proving canonical rollback, all supported local object classes, owned-head purge and workspace-owned-memory detachment, local-delete/stale-inbound anti-resurrection, reverse-order deterministic conflicts, causal conflict resolution, immutable envelope/change collision rejection, setup status, and export exclusion. At the final repair checkpoint, the whole repository passed 26 test files / 128 tests, ESLint, composite TypeScript/Vite build, dependency audit, and diff check. Independent review found arrival-order and immutable-ID collision highs; both were repaired. Final focused re-review passed 7/7 integration tests and reported no unresolved blocker/high.
+
 ## Required deferred evidence
 
-- The foundation modules are not yet wired into ordinary `WorkspaceStore` mutations or a renderer device/conflict UI. That product integration requires the real-node transport boundary and must preserve same-transaction mutation enqueueing; this phase does not claim end-to-end user-visible sync.
+- Ordinary `WorkspaceStore` mutations are now wired transactionally, but the renderer device/conflict UI, encryption worker, relay transport, acknowledgement loop, and reviewed inbound canonical materialization controller remain unimplemented. This phase does not claim end-to-end user-visible sync.
 - Production protected private-key persistence, workspace-key rotation/re-wrapping, recovery-artifact UX, encrypted snapshots, and fork/checkpoint detection remain unimplemented. No private key is persisted by the current foundation.
 - Real user-hosted Ubuntu/AWS host provisioning and public TLS/network failure testing.
 - Native Windows client, protected-key-store, filesystem/process, package, launch, and update matrix.

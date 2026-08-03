@@ -103,6 +103,13 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Phase 2 child lineage is limited to one child depth. Recursive autonomous delegation and peer execution remain outside this phase.
 - The renderer starts a run and receives its ID immediately; terminal persistence continues in the main process so cancellation and status polling remain available.
 
+## Whole-product integration decisions (2026-08-03)
+
+- Sync journaling is part of the canonical SQLite transaction so a content write cannot commit without its local propagation intent. Renderer status is aggregate-only; plaintext mutations, clocks, keys, device IDs, and encrypted envelopes never cross IPC.
+- The current build does not create keys, enroll devices, or contact a node. Readiness and Settings expose the exact local-only boundary and Docker-free setup handoff until the user separately authorizes external configuration.
+- Supported local CLI windows are explicit: Codex `>=0.146.0 <1.0.0` and Claude Code `>=2.1.220 <3.0.0`. Unsupported versions remain visible with update guidance and cannot start silently.
+- Existing documents autosave after 900 ms through serialized durable revisions. Pending drafts must flush before navigation or deletion of their own document; a failed flush blocks the transition and remains retryable.
+
 ## Phase 3 local-foundation decisions (2026-08-03)
 
 - `libsodium-wrappers-sumo` is pinned at `0.8.4` behind a small main-process-only facade. The official portable JS/WASM build avoids native-addon and Docker requirements. Only Ed25519 signatures, X25519 sealed key wrapping, XChaCha20-Poly1305 authenticated encryption, Argon2id recovery derivation, secure randomness, and constant-time comparison are allowed. This choice inherits reviewed primitives but is not a claim that the Waypoint protocol itself has received a professional audit.
