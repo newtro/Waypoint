@@ -1,0 +1,26 @@
+.chat-header-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.chat-header-actions .knowledge-button {
+  margin-left: 0;
+}
+
+@media (max-width: 800px) {
+  .chat-header-actions {
+    gap: 5px;
+  }
+
+  .chat-header-actions .knowledge-button {
+    font-size: 10px;
+    padding-inline: 8px;
+  }
+
+  .chat-header-actions .knowledge-button::before {
+    content: none;
+  }
+}

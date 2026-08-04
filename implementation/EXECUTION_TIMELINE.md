@@ -267,3 +267,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Initial independent review returned 0 blocker / 5 high / 1 medium; repaired authority, cancellation, idempotency, target profile binding, encrypted peer coverage, and UI truthfulness gaps.
 - Full repaired local gate passed 88 suites / 405 tests, dependency audit, macOS arm64 packaging, and packaged runtime closure. Final Phase B review: SHIP, 0 blocker / 0 high / 2 medium / 0 low. Two physical Macs and Windows remain explicit release gates.
 - Final P4+P5 whole-program review: SHIP, 0 blocker / 0 high / 2 medium / 0 low; no cross-feature privacy/lifecycle/global-stop defect remained.
+
+## 2026-08-04 — OpenRouter picker and focused chat UI repair
+
+- Froze the focused gate in `implementation/P6D_OPENROUTER_MODEL_PICKER_PLAN.md`; no live provider call, key access, provider activation, or execution-semantics change was authorized.
+- Added the corrected four-model curated selector with Qwen 3.8 Max and legacy/custom saved-value preservation.
+- Repaired source-turn execution ordering/deduplication, terminal response-state cleanup, selector sizing, and compact accessible Delegate/Knowledge header grouping.
+- Focused gate passed 5 suites / 25 tests; full gate passed 90 suites / 418 tests, lint/build, dependency audit, macOS arm64 package, runtime closure, and diff hygiene. Initial expanded review findings (1 medium / 1 low) were repaired; final re-review was SHIP with 0 blocker / 0 high / 0 medium / 0 low.

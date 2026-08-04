@@ -1,4 +1,4 @@
-import { FormEvent, StrictMode, useEffect, useRef, useState } from 'react';
+import { FormEvent, Fragment, StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ActivityFamily, ActivityTimelineItem, AttachmentMetadata, FixturePlaybookView, SanitizedSyncStatus, WorkspaceSummary } from '../electron/core/types';
 import type { DiagnosticsReport } from '../electron/core/diagnostics';
@@ -8,9 +8,12 @@ import { groupChatHistory, type HistorySort } from './chat-history';
 import waypointMark from './assets/waypoint-mark.svg';
 import './styles.css';
 import './provider-settings.css';
+import './chat-header-actions.css';
 import'./voice-mode.css';
 import{BrowserPcmCapture}from'./voice-capture';
 import{cancelLateVoiceRun}from'./voice-run-cancellation';
+import{openRouterModelChoices}from'./openrouter-model-catalog';
+import{responseNoticeAfterRuns,runsForSourceMessage,uniqueChatRuns,uniqueExecutionEvents}from'./chat-run-presentation';
 type VoiceMode='push_to_talk'|'hands_free';type VoiceState='off'|'listening'|'transcribing'|'thinking'|'speaking'|'error';
 
 type Chat = Awaited<ReturnType<Window['waypoint']['listChats']>>[number];
@@ -326,6 +329,7 @@ export function App() {
     setProfiles(nextProfiles);
     setSelectedProfileId((current)=>nextProfiles.some((item)=>item.id===current)?current:(nextProfiles[0]?.id??''));
     setRuns(nextRuns);
+    setNotice((current)=>responseNoticeAfterRuns(current,uniqueChatRuns(nextRuns.filter((run)=>run.chatId===selectedChatId) as ExecutionRunView[])));
     setSyncStatus(nextSync);
     setDesktopSync(nextDesktop);
     if (nextDesktop.configured) {
@@ -552,6 +556,7 @@ export function App() {
       showError(reason);
     }
   }
+  function executionHistory(run:ExecutionRunView){const events=uniqueExecutionEvents(run),toolEvents=events.filter((event)=>['tool','agent','diagnostic','provider','progress','terminal','policy'].includes(String(event.type))),text=events.filter((event)=>event.type==='text').map((event)=>String(event.text??'')).join('');return <Fragment key={`execution-${String(run.id)}`}><details className="execution-timeline" open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):String(event.type??'Provider status')}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This provider did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>{run.status!=='completed'&&<article className={`run-strip ${String(run.status)}`}><div><span className="status-dot"/><strong>{run.status==='running'?`${run.cli} is responding`:String(run.status).replace('_',' ')}</strong>{text&&<p>{text}</p>}{failureAdvice(run)&&<small>{failureAdvice(run)}</small>}</div><div>{run.status==='running'&&<button onClick={()=>void cancelRun(String(run.id))}>Stop</button>}{['failed','timed_out','canceled'].includes(String(run.status))&&<button onClick={()=>void retryRun(run)}>Retry</button>}</div></article>}</Fragment>}
   async function delegateTask(){if(!workspace||!selectedChat)return;const parent=runs.find((item)=>item.chatId===selectedChat.id&&Number(item.depth)===0&&item.cli==='claude'&&item.status==='completed'&&Array.isArray(item.events)&&item.events.some((event)=>event&&typeof event==='object'&&(event as Record<string,unknown>).type==='text'&&String((event as Record<string,unknown>).text??'').trim())&&!runs.some((child)=>child.parentExecutionId===item.id));if(!parent){setError('No completed Claude result has an unused child-task budget. Codex child tasks remain unavailable until a reviewed no-tool mode exists.');return}const type=window.prompt('Task type: analyze, summarize, or critique','critique')?.trim() as 'analyze'|'summarize'|'critique'|undefined;if(!type)return;const instruction=window.prompt('Bounded child instruction','Critique the prior answer for correctness and missing risks.')?.trim();if(!instruction)return;const source=selectedChat.messages.find((item)=>item.id===String(parent.sourceMessageId));if(!source){setError('The parent source message is unavailable.');return}try{await window.waypoint.runChat(workspace.id,selectedChat.id,source.id,'claude',String(parent.securityProfileId),instruction,parent.model?String(parent.model):undefined,String(parent.id),[],type);setNotice(`${type} child task started with the parent profile and a 60-second cap.`);await refresh()}catch(reason){showError(reason);await refresh().catch(showError)}}
   async function remove(kind: 'document' | 'chat' | 'memory', id: string) {
     if (!workspace || !window.confirm(`Delete this ${kind} and its owned local data? This cannot be undone.`)) return;
@@ -836,7 +841,7 @@ export function App() {
     );
 
   const selectedChat = chats.find((chat) => chat.id === selectedChatId),
-    chatRuns = runs.filter((run) => run.chatId === selectedChatId),
+    chatRuns = uniqueChatRuns(runs.filter((run) => run.chatId === selectedChatId) as ExecutionRunView[]),
     queued = attachments.filter((item) => item.ownerId === selectedChatId),
     historyGroups = groupChatHistory(chats, historyQuery, historySort);
   return (
@@ -983,10 +988,12 @@ export function App() {
             </div>
           )}
           {activityCapture?.policy.enabled&&<div className={`capture-global ${activityCapture.policy.paused||!activityCapture.readiness.available?'paused':'active'}`} role="status"><button aria-label="Open whole-device activity capture controls" onClick={()=>setDrawer('activity')}>{activityCapture.readiness.available&&!activityCapture.policy.paused?'● Capturing':'Ⅱ Activity paused'}</button><button aria-label="Pause whole-device activity capture" disabled={activityCapture.policy.paused} onClick={()=>void updateActivityCapture({paused:true}).catch(showError)}>Pause</button></div>}
-          {selectedChat&&<button className="knowledge-button" onClick={()=>void delegateTask()}>Delegate task</button>}
-          <button className="knowledge-button" onClick={() => setDrawer('knowledge')}>
-            Knowledge <span>⌘K</span>
-          </button>
+          <div className="chat-header-actions" role="group" aria-label="Chat actions">
+            {selectedChat&&<button className="knowledge-button" aria-label="Delegate task" onClick={()=>void delegateTask()}>Delegate task</button>}
+            <button className="knowledge-button" aria-label="Open knowledge" onClick={() => setDrawer('knowledge')}>
+              Knowledge <span>⌘K</span>
+            </button>
+          </div>
         </header>
         {(error || notice) && (
           <div className={`toast ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>
@@ -1012,8 +1019,10 @@ export function App() {
                   <p>Ask Waypoint to think, write, research your local knowledge, or organize what matters.</p>
                 </div>
               )}
+              {chatRuns.filter((run)=>!selectedChat.messages.some((message)=>message.id===String(run.sourceMessageId??''))).map(executionHistory)}
               {selectedChat.messages.map((message) => (
-                <article key={message.id} className={`chat-message ${message.role}`}>
+                <Fragment key={message.id}>
+                <article className={`chat-message ${message.role}`}>
                   <div className="message-role">{message.role === 'assistant' ? <img className="assistant-mark" src={waypointMark} alt="Waypoint" /> : <span>You</span>}</div>
                   <div className="message-content">
                     <p>{message.body}</p>
@@ -1036,32 +1045,9 @@ export function App() {
                     )}
                   </div>
                 </article>
+                {message.role==='user'&&runsForSourceMessage(chatRuns,message.id).map(executionHistory)}
+                </Fragment>
               ))}
-              {chatRuns.map((value)=>{const run=value as ExecutionRunView,toolEvents=(run.events??[]).filter((event)=>['tool','agent','diagnostic','provider','progress','terminal','policy'].includes(String(event.type)));return <details className="execution-timeline" key={`timeline-${String(run.id)}`} open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):String(event.type??'Provider status')}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This provider did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>})}
-              {chatRuns
-                .filter((run) => run.status !== 'completed')
-                .map((value) => {
-                  const run = value as ExecutionRunView,
-                    events = run.events ?? [],
-                    text = events
-                      .filter((event) => event.type === 'text')
-                      .map((event) => String(event.text ?? ''))
-                      .join('');
-                  return (
-                    <article className={`run-strip ${String(run.status)}`} key={String(run.id)}>
-                      <div>
-                        <span className="status-dot" />
-                        <strong>{run.status === 'running' ? `${run.cli} is responding` : String(run.status).replace('_', ' ')}</strong>
-                        {text && <p>{text}</p>}
-                        {failureAdvice(run) && <small>{failureAdvice(run)}</small>}
-                      </div>
-                      <div>
-                        {run.status === 'running' && <button onClick={() => void cancelRun(String(run.id))}>Stop</button>}
-                        {['failed', 'timed_out', 'canceled'].includes(String(run.status)) && <button onClick={() => void retryRun(run)}>Retry</button>}
-                      </div>
-                    </article>
-                  );
-                })}
             </section>
             <div className="composer-dock">
               <form className="composer" onSubmit={(event) => void runChat(event, selectedChat.id)}>
@@ -1555,7 +1541,7 @@ export function App() {
                   <label className="meeting-consent">API key <input type="password" autoComplete="off" placeholder={openRouter.keyConfigured?'Protected key stored':'Enter key to protected storage'} value={openRouterKey} onChange={(event)=>setOpenRouterKeyDraft(event.target.value)}/></label><div className="drawer-actions"><button disabled={!openRouterKey} onClick={()=>void storeOpenRouterKey().catch(showError)}>Store protected key</button>{openRouter.keyConfigured&&<button className="secondary" onClick={()=>void window.waypoint.removeOpenRouterKey().then(refreshOpenRouter).catch(showError)}>Remove key</button>}</div>
                   <label className="meeting-consent"><input type="checkbox" checked={openRouter.settings.enabled} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,enabled:event.target.checked,liveRequestsEnabled:event.target.checked?openRouter.settings.liveRequestsEnabled:false}})}/>Enable OpenRouter globally</label>
                   <label className="meeting-consent"><input type="checkbox" checked={openRouter.settings.liveRequestsEnabled} disabled={!openRouter.settings.enabled||!openRouter.keyConfigured} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,liveRequestsEnabled:event.target.checked}})}/>Allow explicitly selected hosted requests (may incur cost)</label>
-                  <label className="settings-field">Strategic model ID <input placeholder="provider/model for Kimi K3" value={openRouter.settings.strategicModel} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,strategicModel:event.target.value}})}/></label><label className="settings-field">Everyday model ID <input placeholder="provider/model for DeepSeek V4 Flash" value={openRouter.settings.everydayModel} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,everydayModel:event.target.value}})}/></label>
+                  <label className="settings-field">Strategic model <select aria-label="OpenRouter strategic model" value={openRouter.settings.strategicModel} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,strategicModel:event.target.value}})}><option value="">Choose a model…</option>{openRouterModelChoices(openRouter.settings.strategicModel).map((model)=><option value={model.id} key={model.id}>{model.name} — {model.id}{'pricing'in model&&model.pricing?` · ${model.pricing}`:''}{model.legacy?' (saved legacy/custom)':''}</option>)}</select></label><label className="settings-field">Everyday model <select aria-label="OpenRouter everyday model" value={openRouter.settings.everydayModel} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,everydayModel:event.target.value}})}><option value="">Choose a model…</option>{openRouterModelChoices(openRouter.settings.everydayModel).map((model)=><option value={model.id} key={model.id}>{model.name} — {model.id}{'pricing'in model&&model.pricing?` · ${model.pricing}`:''}{model.legacy?' (saved legacy/custom)':''}</option>)}</select></label>
                   <div className="settings-grid"><label>Monthly cap (USD)<input type="number" min="0" step="1" value={openRouter.settings.monthlyCapMicros/1_000_000} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,monthlyCapMicros:Math.round(Number(event.target.value)*1_000_000)}})}/></label><label>YTD cap (USD)<input type="number" min="0" step="1" value={openRouter.settings.ytdCapMicros/1_000_000} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,ytdCapMicros:Math.round(Number(event.target.value)*1_000_000)}})}/></label><label>Warn at %<input type="number" min="1" max="100" value={openRouter.settings.warningPercent} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,warningPercent:Number(event.target.value)}})}/></label><label>Cap fallback<select value={openRouter.settings.fallbackProvider??'codex'} onChange={(event)=>setOpenRouter({...openRouter,settings:{...openRouter.settings,fallbackProvider:event.target.value as 'codex'|'claude'}})}><option value="codex">Codex subscription</option><option value="claude">Claude subscription</option></select></label></div>
                   <div className="drawer-actions"><button onClick={()=>void saveOpenRouterSettings().catch(showError)}>Save provider settings</button></div>
                   <h4>Cost breakdown</h4><div className="activity-list">{openRouter.usage.summary.byModel.length?openRouter.usage.summary.byModel.map((item)=><article className="provider-row" key={item.model}><strong>{item.model}</strong><span>${(item.costMicros/1_000_000).toFixed(4)}</span></article>):<p className="empty-copy">No hosted usage receipts. Setup and status checks make no provider call.</p>}</div></>}
