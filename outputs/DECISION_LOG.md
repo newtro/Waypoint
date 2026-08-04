@@ -374,3 +374,11 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Make voice a single composer action, not a conversation configuration surface. Persist ordinary voice preferences per workspace on the local device and place all configuration/readiness/privacy/diagnostics in Settings.
 - Define hands-free as an explicit session toggle with local speech/silence turn boundaries and automatic listening resume after local TTS. It remains turn-based, not full-duplex; no cloud VAD/STT or raw-audio persistence is introduced.
 - Define push-to-talk as pointer/keyboard hold-and-release. A release that races microphone permission/start is remembered and closes the capture immediately once started; cancel/Stop invalidates the attempt.
+
+# 2026-08-04 — P2 selectable zero-friction local voice engines
+
+- Preserve one engine-neutral waveform composer control and move the only engine selector/readiness/metrics into Settings. No engine-specific chat panels or changed hands-free/push-to-talk gestures.
+- Fast Local is the production/default target: a fully bundled, pinned, integrity-checked sherpa-onnx/Pocket TTS stack for each supported signed Mac/Windows package. The user never installs Python, a CLI, a model, or a path. Existing bundled Whisper STT remains the initial STT component until a common sherpa STT passes the same quality gate.
+- MiniCPM-o 4.5 through llama.cpp-omni is an Experimental Full-Duplex engine using the same outer session contract. It owns its conversation model and must not claim Codex/Claude/OpenRouter reasoning/tool continuity. It is selectable only after a managed pack probe passes.
+- Large experimental assets are installed only through one explicit in-app action or a dedicated full package, with exact size/resource disclosure, pinned hashes, staging/resume/cancel, atomic activation, rollback/removal, and no external shell steps. Fixture manifests prove mechanics before any multi-GB download.
+- Shared measured fields are first-audio, interruption-to-silence, turn-end delay, and readiness/error. Upstream latency claims are evidence for candidate selection, never Waypoint performance claims.
