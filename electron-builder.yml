@@ -9,8 +9,11 @@ files:
 extraResources:
   - from: vendor/voice/fast-local-staging
     to: fast-local
+  - from: build/icons/waypoint.png
+    to: waypoint.png
 mac:
   target: dir
+  icon: build/icons/waypoint.png
   minimumSystemVersion: '13.3.0'
   category: public.app-category.productivity
   extraResources:
@@ -20,3 +23,4 @@ mac:
     NSMicrophoneUsageDescription: Waypoint uses microphone audio only after you explicitly start Voice Chat or a local meeting recording.
 win:
   target: dir
+  icon: build/icons/waypoint.png

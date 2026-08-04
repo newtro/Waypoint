@@ -944,6 +944,7 @@ function createWindow(): void {
   const restored = restoreWindowState(saved, displays, fallback);
   const window = new BrowserWindow({
     ...restored.bounds,
+    icon: app.isPackaged ? path.join(process.resourcesPath, 'waypoint.png') : path.join(currentDirectory, '../../build/icons/waypoint.png'),
     minWidth: 840,
     minHeight: 620,
     backgroundColor: '#111b19',
