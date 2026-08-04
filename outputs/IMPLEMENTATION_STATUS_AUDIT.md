@@ -42,3 +42,6 @@ Conservative R3 defaults are local-only, suggestion-first, no silent memory, no 
 - **Complete (fixture/contract gate):** protected OpenRouter configuration, explicit activation, model routing preferences, cost dashboard/caps, subscription fallback, hosted chat execution/cancel, durable receipts/timeline, backup/restore, incremental/replacement sync, and provider-domain settings seam.
 - **Not claimed:** live OpenRouter health/model availability or paid execution. Those require the user to enter a key and explicitly activate hosted requests.
 - **Non-gating follow-up:** transactional hosted completion and finer-grained durable provider progress events.
+# 2026-08-04 — Controlled Web Search and Fetch complete
+
+The model-neutral Tool Gateway now includes opt-in `web.search` and `web.fetch`, visible receipts/timeline provenance, protected Brave Search key setup, bounded sanitized output, explicit URLs, cancellation/global stop, failure-learning compatibility, backup/restore, workspace isolation, and SSRF-resistant public-HTTPS transport with DNS-to-socket pinning. Full verification and independent review closed at 0 blocker/high. Per-workspace concurrency accounting and interruptible DNS resolution remain tracked medium hardening items.
