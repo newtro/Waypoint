@@ -56,6 +56,8 @@ Install gate: exact whisper.cpp/Kokoro model and binary licenses, hashes, size, 
 
 Experimental lab: Kyutai Moshi is evaluated separately for full-duplex overlap/backchannels. It never replaces Codex/Claude reasoning or inherits tool authority and cannot ship without Mac/Windows performance, package, license, privacy, barge-in, and resource gates.
 
+Current deferral: commercial realtime voice providers (OpenAI Realtime, Gemini Live, Grok, ElevenLabs, and Mistral) and any experimental MiniCPM replacement are intentionally parked at the bottom of the roadmap. Fast Local remains the supported production voice path. No commercial/experimental engine implementation or activation is part of the active autonomous program.
+
 ## P3 — CrisperWhisper meeting-transcription lab
 
 CrisperWhisper is only an opt-in high-fidelity post-meeting transcription candidate, never the low-latency live voice path. Inspect the exact repository/model license and access conditions before execution. Compare it through a versioned, consented local fixture suite against already-local alternatives for word accuracy, timestamps, latency, RAM/CPU/GPU, package behavior, failure recovery, and model size/provenance.

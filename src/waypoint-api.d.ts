@@ -387,7 +387,7 @@ declare global {
       updateOpenRouterSettings(value:{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}):Promise<{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}>;
       runOpenRouterChat(value:{workspaceId:string;chatId:string;sourceMessageId:string;prompt:string;role:'strategic'|'everyday';attachmentIds:string[]}):Promise<{runId?:string;status?:'running';model?:string;fallbackProvider?:'codex'|'claude';reason?:string}>;
       cancelOpenRouterRun(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
-      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'terminal.run'|'local_cli.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
+      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'workspace.search'|'workspace.write_file'|'terminal.run'|'local_cli.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
       cancelTool(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
       onToolProgress(listener:(event:unknown)=>void):()=>void;
     };
