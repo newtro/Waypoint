@@ -22,6 +22,7 @@ describe('ordered schema migration', () => {
     runMigrations(db,schemaVersion(db),[{version:24,apply:(database)=>database.exec('CREATE TABLE chat_model_preferences(id TEXT PRIMARY KEY)')}])
     runMigrations(db,schemaVersion(db),[{version:25,apply:(database)=>database.exec('CREATE TABLE voice_preferences(id TEXT PRIMARY KEY)')}])
     runMigrations(db,schemaVersion(db),[{version:26,apply:(database)=>database.exec('CREATE TABLE voice_engine_metrics(id TEXT PRIMARY KEY)')}])
+    runMigrations(db,schemaVersion(db),[{version:27,apply:(database)=>database.exec('CREATE TABLE reflection_runs(id TEXT PRIMARY KEY)')}])
     expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION)
     expect((db.prepare('SELECT value FROM content').get() as {value:string}).value).toBe('preserved')
     expect(readdirSync(path.join(root,'migration-snapshots')).filter((name)=>name.endsWith('.sqlite'))).toHaveLength(1)

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 
-export const CURRENT_SCHEMA_VERSION = 26
+export const CURRENT_SCHEMA_VERSION = 27
 export type Migration = { version: number; apply(database: DatabaseSync): void }
 
 export function schemaVersion(database: DatabaseSync): number {

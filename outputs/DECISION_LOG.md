@@ -313,6 +313,7 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 
 - Borrow the review-oriented pattern from Anthropic Managed Agents “Dreaming,” but do not integrate or imply use of Anthropic's preview, API-based managed feature. Waypoint remains signed-in-CLI-only and subscription-first for this slice.
 - Place local Memory Consolidation / Reflection at P8, after the earlier safe-local product slices and before V1 sync validation. It is explicit-run, workspace-scoped, source-bounded, budgeted, auditable, and killable.
+- P8 uses a strict marker/JSON contract around the already signed-in Codex or Claude Code CLI. The main process supplies only the explicitly selected source envelope under a read-only, no-tools, bounded profile and rejects unknown source IDs or malformed output. Deterministic checks establish durable provenance but do not masquerade as successful CLI analysis.
 - Preserve canonical sources unchanged. CLI output becomes a separate proposed revision with exact provenance and diff/accept/edit/reject review; stale, duplicate, and contradictory claims remain explicit rather than silently merged.
 - Accepted changes retain rollback lineage and source-deletion cascade. Cross-workspace/client inputs fail closed, and backup/restore/deletion/sync must cover both proposals and accepted derivatives.
 - Scheduling and any low-risk auto-apply remain later, separately authorized policy stages with their own safety gate.

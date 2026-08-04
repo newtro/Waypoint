@@ -7,6 +7,11 @@ declare global {
       openExternal(url:string):Promise<{opened:true}>;
       bootstrap(): Promise<{ workspaces: WorkspaceSummary[] }>;
       activityCaptureStatus(workspaceId:string):Promise<{policy:{version:1;enabled:boolean;paused:boolean;retentionDays:90|183|365;syncRaw:boolean;exclusions:string[]};readiness:{available:false;state:string;reason:string;permissionRequired:boolean};storage:{count:number;bytes:number}}>;
+      reflectionRuns(workspaceId:string):Promise<Array<{id:string;status:string;provider:string;providerVersion:string;policyVersion:string;budgetJson:string;omissionsJson:string;createdAt:string;updatedAt:string}>>;
+      reflectionProposals(workspaceId:string,runId:string):Promise<Array<{id:string;kind:string;title:string;beforeBody:string;proposedBody:string;rationale:string;status:string;acceptedObjectId?:string;sourceIds:string;sourceDigests:string;createdAt:string;resolvedAt?:string}>>;
+      startReflection(workspaceId:string,sourceIds:string[],provider:'codex'|'claude'):Promise<{runId:string;proposalCount:number}>;
+      cancelReflection(workspaceId:string):Promise<{canceled:boolean}>;
+      resolveReflection(workspaceId:string,proposalId:string,action:'accept'|'edit'|'reject'|'rollback',editedBody?:string):Promise<{memoryId?:string}|undefined>;
       updateActivityCapture(workspaceId:string,policy:{version:1;enabled:boolean;paused:boolean;retentionDays:90|183|365;syncRaw:boolean;exclusions:string[]}):ReturnType<Window['waypoint']['activityCaptureStatus']>;
       listActivitySnapshots(workspaceId:string,query?:string):Promise<ActivitySnapshotView[]>;
       readActivitySnapshot(workspaceId:string,snapshotId:string):Promise<{mediaType:'image/png';dataBase64:string}>;
