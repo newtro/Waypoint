@@ -362,13 +362,14 @@ declare global {
       chatModelPreferences(workspaceId:string):Promise<Record<'codex'|'claude',string>>;
       setChatModelPreference(workspaceId:string,provider:'codex'|'claude',model:string):Promise<Record<'codex'|'claude',string>>;
       voiceCapability():Promise<{stt:{available:boolean;provider:'whisper.cpp';reason:string;source?:'bundled'|'legacy-custom';model?:string;binaryPath?:string;modelPath?:string};tts:{available:boolean;provider:'macos-say'|'unavailable';reason:string};rawAudioPersistence:false;cloudSpeech:false}>;
+      voiceEngineStatus(workspaceId:string):Promise<{selected:'fast_local'|'full_duplex_experimental';engines:Array<{id:'fast_local'|'full_duplex_experimental';label:string;ready:boolean;reason:string;version?:string;packageBytes:number;minimumRamBytes:number;conversationOwner:'waypoint-providers'|'minicpm-o-4.5';metrics:{firstAudioMs?:number;interruptionMs?:number;turnEndMs?:number;measuredAt?:string;fixture:boolean};install:'bundled'|'managed-pack'}>}>;
       configureVoiceRuntime():Promise<{canceled:boolean;capability:Awaited<ReturnType<Window['waypoint']['voiceCapability']>>}>;
       removeVoiceRuntime():Promise<{capability:Awaited<ReturnType<Window['waypoint']['voiceCapability']>>}>;
       transcribeVoice(workspaceId:string,chatId:string,mode:'push_to_talk'|'hands_free',audio:Uint8Array):Promise<{text:string;provider:'whisper.cpp'}>;
       speakVoice(workspaceId:string,chatId:string,turnId:number,text:string):Promise<{speaking:true}>;
       stopVoice(workspaceId:string,chatId:string):Promise<{stopped:true}>;
-      voicePreferences(workspaceId:string):Promise<{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'}>;
-      updateVoicePreferences(workspaceId:string,value:{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'}):Promise<{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'}>;
+      voicePreferences(workspaceId:string):Promise<{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system';engine:'fast_local'|'full_duplex_experimental'}>;
+      updateVoicePreferences(workspaceId:string,value:{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system';engine:'fast_local'|'full_duplex_experimental'}):Promise<{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system';engine:'fast_local'|'full_duplex_experimental'}>;
       onVoiceSpeechState(listener:(event:{workspaceId:string;chatId:string;turnId:number;result:'completed'|'canceled'|'failed'})=>void):()=>void;
       setOpenRouterKey(apiKey:string):Promise<{keyConfigured:true}>;
       removeOpenRouterKey():Promise<{keyConfigured:false}>;
