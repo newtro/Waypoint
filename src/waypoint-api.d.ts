@@ -357,9 +357,9 @@ declare global {
       diagnostics(workspaceId: string): Promise<DiagnosticsReport>;
       rebuildSearch(workspaceId: string): Promise<{ ok: true }>;
       exportDiagnostics(workspaceId: string): Promise<{ canceled: boolean }>;
-      toolGatewayCapabilities():Promise<{version:1;tools:Array<{name:string;version:string;effect:string}>;localClis:Array<{name:string;available:boolean;executable?:string;authentication:'existing-local-identity'}>;browser:{available:false;profiles:string[];reason:string};remoteProviders:{available:false;reason:string};crossDevice:{available:false;reason:string}}>;
-      toolGatewaySettings(workspaceId:string):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}>;
-      updateToolGatewaySettings(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean}):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;updatedAt:string}>;
+      toolGatewayCapabilities():Promise<{version:1;tools:Array<{name:string;version:string;effect:string}>;localClis:Array<{name:string;available:boolean;executable?:string;authentication:'existing-local-identity'}>;browser:{available:boolean;backend:string;version:string;profiles:string[];reason:string};remoteProviders:{available:boolean;reason:string};crossDevice:{available:boolean;reason:string}}>;
+      toolGatewaySettings(workspaceId:string):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string;updatedAt:string}>;
+      updateToolGatewaySettings(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string}):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string;updatedAt:string}>;
       toolGatewayReceipts(workspaceId:string,limit?:number):Promise<Array<{id:string;workspaceId:string;origin:'ui'|'ai';tool:string;status:string;summary:string;code?:string;notification?:string;outputBytes:number;truncated:boolean;startedAt:string;finishedAt:string;durationMs:number}>>;
       toolFailures(workspaceId:string,limit?:number):Promise<Array<{id:string;tool:string;capabilityVersion:string;errorClass:string;remediation?:string;outcome:'active'|'superseded';expiresAt:string;createdAt:string;updatedAt:string;hadOverride:number}>>;
       deleteToolFailure(workspaceId:string,id:string):Promise<{deleted:boolean}>;
@@ -387,7 +387,7 @@ declare global {
       updateOpenRouterSettings(value:{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}):Promise<{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}>;
       runOpenRouterChat(value:{workspaceId:string;chatId:string;sourceMessageId:string;prompt:string;role:'strategic'|'everyday';attachmentIds:string[]}):Promise<{runId?:string;status?:'running';model?:string;fallbackProvider?:'codex'|'claude';reason?:string}>;
       cancelOpenRouterRun(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
-      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'workspace.search'|'workspace.write_file'|'terminal.run'|'local_cli.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
+      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'workspace.search'|'workspace.write_file'|'terminal.run'|'local_cli.run'|'agent_browser.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
       cancelTool(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
       onToolProgress(listener:(event:unknown)=>void):()=>void;
     };

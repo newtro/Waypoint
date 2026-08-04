@@ -319,7 +319,7 @@ contextBridge.exposeInMainWorld('waypoint', {
   exportDiagnostics: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-diagnostics', { workspaceId }),
   toolGatewayCapabilities:()=>ipcRenderer.invoke('waypoint:tool-gateway-capabilities'),
   toolGatewaySettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-settings',{workspaceId}),
-  updateToolGatewaySettings:(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean})=>ipcRenderer.invoke('waypoint:tool-gateway-update-settings',{workspaceId,...value}),
+  updateToolGatewaySettings:(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string})=>ipcRenderer.invoke('waypoint:tool-gateway-update-settings',{workspaceId,...value}),
   toolGatewayReceipts:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-gateway-receipts',{workspaceId,limit}),
   toolFailures:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-failures',{workspaceId,limit}),
   deleteToolFailure:(workspaceId:string,id:string)=>ipcRenderer.invoke('waypoint:delete-tool-failure',{workspaceId,id}),

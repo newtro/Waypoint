@@ -58,6 +58,8 @@ Experimental lab: Kyutai Moshi is evaluated separately for full-duplex overlap/b
 
 Current deferral: commercial realtime voice providers (OpenAI Realtime, Gemini Live, Grok, ElevenLabs, and Mistral) and any experimental MiniCPM replacement are intentionally parked at the bottom of the roadmap. Fast Local remains the supported production voice path. No commercial/experimental engine implementation or activation is part of the active autonomous program.
 
+Agent-browser follow-on: Vercel Labs `agent-browser` is the chosen interactive backend; Playwright CLI remains test/trace infrastructure. Runtime packaging, existing-versus-isolated profile persistence, local-only action/content policy, secret-safe receipts, cancellation, and hostile-page review are required before availability. Current package closure is unresolved and the UI must remain unavailable meanwhile.
+
 ## P3 — CrisperWhisper meeting-transcription lab
 
 CrisperWhisper is only an opt-in high-fidelity post-meeting transcription candidate, never the low-latency live voice path. Inspect the exact repository/model license and access conditions before execution. Compare it through a versioned, consented local fixture suite against already-local alternatives for word accuracy, timestamps, latency, RAM/CPU/GPU, package behavior, failure recovery, and model size/provenance.
