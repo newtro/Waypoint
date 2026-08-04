@@ -1,10 +1,17 @@
-import type { ActivityFamily, ActivityTimelineItem, AttachmentMetadata, FixturePlaybookView, GraphEdge, GraphNode, MeetingView, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types';
+import type { ActivityFamily, ActivitySnapshotView, ActivityTimelineItem, AttachmentMetadata, FixturePlaybookView, GraphEdge, GraphNode, MeetingView, SanitizedSyncStatus, SearchResult, WorkspaceSummary } from '../electron/core/types';
 import type { DiagnosticsReport } from '../electron/core/diagnostics';
 
 declare global {
   interface Window {
     waypoint: {
       bootstrap(): Promise<{ workspaces: WorkspaceSummary[] }>;
+      activityCaptureStatus(workspaceId:string):Promise<{policy:{version:1;enabled:boolean;paused:boolean;retentionDays:90|183|365;syncRaw:boolean;exclusions:string[]};readiness:{available:false;state:string;reason:string;permissionRequired:boolean};storage:{count:number;bytes:number}}>;
+      updateActivityCapture(workspaceId:string,policy:{version:1;enabled:boolean;paused:boolean;retentionDays:90|183|365;syncRaw:boolean;exclusions:string[]}):ReturnType<Window['waypoint']['activityCaptureStatus']>;
+      listActivitySnapshots(workspaceId:string,query?:string):Promise<ActivitySnapshotView[]>;
+      readActivitySnapshot(workspaceId:string,snapshotId:string):Promise<{mediaType:'image/png';dataBase64:string}>;
+      deleteActivitySnapshot(workspaceId:string,snapshotId:string):Promise<{deleted:true}>;
+      deleteAllActivitySnapshots(workspaceId:string):Promise<{deleted:number}>;
+      purgeExpiredActivitySnapshots(workspaceId:string):Promise<{purged:number}>;
       createWorkspace(name: string): Promise<WorkspaceSummary>;
       createDocument(workspaceId: string, title: string, body: string): Promise<{ id: string; revisionId: string }>;
       captureMessageAsDocument(workspaceId: string, messageId: string): Promise<{ id: string; revisionId: string }>;

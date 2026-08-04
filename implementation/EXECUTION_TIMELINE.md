@@ -253,3 +253,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Implemented the in-chat state/readiness UI, capture/runtime/TTS adapters, exact execution/message correlation, global stop, durable minimized voice receipts, and normal chat lifecycle behavior.
 - Independent review began at 0 blocker / 5 high / 4 medium. Repairs covered abort propagation, crash cleanup, error minimization, runtime/path/device truthfulness, exact response/run ownership, and stale speech. A final race repair dispatches just-returned hosted cancellation through the hosted API while retaining local fallback cancellation.
 - Final verdict: SHIP, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 84 suites / 382 tests, lint/build, zero dependency vulnerabilities/undeclared licenses, macOS arm64 package/runtime closure, and diff hygiene. Evidence: `implementation/P2_VOICE_CHAT_EVIDENCE.md`.
+
+## P4 — Recall-style Activity Timeline (2026-08-03)
+
+- Froze the separate Phase A gate in `implementation/P4_ACTIVITY_CAPTURE_PLAN.md`; executor was the primary task and reviewer a fresh independent privacy/sync context. Real screen capture remained prohibited during the gate.
+- Built default-off policy/readiness, retention/exclusions/pause/stop, fixture snapshot provenance, private search/view/delete UI, opt-in backup/sync, resumable encrypted attachment materialization, and anti-resurrection deletion.
+- Initial review returned 0 blocker / 4 high / 3 medium / 2 low. Repairs covered sync-off deletion, commit-time policy races, recipient opt-out, private viewing, attachment/digest/MIME binding, durable sync status, transfer tests, and preview-memory clearing.
+- Final verdict: SHIP, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 86 suites / 396 tests, lint/build, dependency checks, native macOS arm64 package/runtime closure and isolated launch, diff hygiene. Evidence: `implementation/P4_ACTIVITY_CAPTURE_EVIDENCE.md`.

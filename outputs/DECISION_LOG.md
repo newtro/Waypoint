@@ -352,3 +352,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Keep STT unavailable until the user explicitly chooses an installed, probed whisper.cpp-compatible executable and local model. Waypoint does not download models or use cloud speech. Use local macOS system speech for the first reviewed TTS adapter.
 - Stop is identity-aware and dominates capture, transcription, hosted/subscription generation, and playback. Speech is sourced only from the exact durable assistant message linked to the active run; missing CLI events are never invented.
 - Defer streaming partial STT/VAD, Kokoro, Moshi/full duplex, CrisperWhisper meeting transcription, Windows speech/package evidence, and real microphone/model performance to their separately gated phases.
+
+# 2026-08-03 — P4 activity-capture privacy baseline
+
+- Ship native capture as unavailable until a later explicit user-consented macOS runtime test; the current phase verifies a packaged readiness seam and synthetic fixture persistence without requesting Screen Recording permission or capturing the user's screen.
+- Default every workspace to off/paused, whole-device intent, 90-day raw retention, local-only raw data, and conservative sensitive-app exclusion. Resume requires an explicit visible action; global Stop forces pause.
+- Raw sync/backup is an explicit per-workspace opt-in. Recipient opt-in is independently required. Snapshot bytes use the existing encrypted bounded/resumable attachment transport; deletion and expiry always emit content-minimized tombstones even after sync is turned off.
+- Keep raw snapshots independent from long-lived memories/summaries. Raw expiry hard-deletes its attachment and metadata; normal activity receipts never contain titles, OCR/body, paths, or hashes.

@@ -32,7 +32,7 @@ export interface AttachmentMetadata {
   id: string;
   workspaceId: string;
   ownerId: string;
-  ownerKind: 'document' | 'chat' | 'message' | 'memory';
+  ownerKind: 'document' | 'chat' | 'message' | 'memory' | 'activity_snapshot';
   name: string;
   mediaType: string;
   sha256: string;
@@ -69,6 +69,18 @@ export interface ActivityTimelineItem {
   targetKind?: 'chat' | 'document' | 'memory' | 'commitment' | 'rule';
   details: Record<string, string | number | boolean | null>;
   createdAt: string;
+}
+export interface ActivitySnapshotView {
+  id: string;
+  capturedAt: string;
+  deviceId: string;
+  displayId: string;
+  appBundleId: string;
+  appProcess: string;
+  appTitle?: string;
+  expiresAt: string;
+  bytes: number;
+  synced: boolean;
 }
 export interface MeetingView {
   id: string;

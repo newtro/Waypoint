@@ -31,6 +31,7 @@ type ToolSettings=Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>
 type ToolFailure=Awaited<ReturnType<Window['waypoint']['toolFailures']>>[number];
 type OpenRouterStatus=Awaited<ReturnType<Window['waypoint']['openRouterStatus']>>;
 type VoiceCapability=Awaited<ReturnType<Window['waypoint']['voiceCapability']>>;
+type ActivityCaptureStatus=Awaited<ReturnType<Window['waypoint']['activityCaptureStatus']>>;type ActivitySnapshot=Awaited<ReturnType<Window['waypoint']['listActivitySnapshots']>>[number];
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -75,6 +76,7 @@ export function App() {
   const [activityQuery, setActivityQuery] = useState(''),
     [activityFamilyFilter, setActivityFamilyFilter] = useState<ActivityFamily | 'all'>('all'),
     [activityKnowledgeTarget, setActivityKnowledgeTarget] = useState<string>();
+  const[activityCapture,setActivityCapture]=useState<ActivityCaptureStatus>(),[activitySnapshots,setActivitySnapshots]=useState<ActivitySnapshot[]>([]),[activitySnapshotQuery,setActivitySnapshotQuery]=useState(''),[activityExclusions,setActivityExclusions]=useState(''),[activityPreview,setActivityPreview]=useState<{id:string;url:string}>();
   const [meetings, setMeetings] = useState<Meeting[]>([]),
     [meetingConsent, setMeetingConsent] = useState(false),
     [recordingMeetingId, setRecordingMeetingId] = useState<string>(),
@@ -340,7 +342,7 @@ export function App() {
     setWorkspace(next);
     setSelectedChatId(undefined);
     setDrawer(undefined);
-    await refresh(next);
+    await refresh(next);const status=await window.waypoint.activityCaptureStatus(next.id);setActivityCapture(status);setActivityExclusions(status.policy.exclusions.join('\n'));
   }
   useEffect(() => {
     void Promise.all([window.waypoint.bootstrap(), window.waypoint.cliCapabilities()])
@@ -391,6 +393,7 @@ export function App() {
         event.preventDefault();
         setDrawer('knowledge');
       }
+      if(event.metaKey&&event.shiftKey&&event.key.toLowerCase()==='p'&&activityCapture?.policy.enabled&&!activityCapture.policy.paused){event.preventDefault();void updateActivityCapture({paused:true}).catch(showError)}
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -402,6 +405,8 @@ export function App() {
   }, [drawer, activityKnowledgeTarget]);
   useEffect(()=>{if(drawer!=='settings'||!workspace)return;let current=true;void Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities(),window.waypoint.openRouterStatus()]).then(([settings,receipts,failures,caps,provider])=>{if(!current)return;setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps);setOpenRouter(provider)}).catch(showError);return()=>{current=false}},[drawer,workspace]);
   useEffect(()=>{if(drawer!=='knowledge'||!workspace)return;let current=true;void Promise.all(documents.map(async(item)=>[item.id,await window.waypoint.documentIndexStatus(workspace.id,item.id)] as const)).then((entries)=>{if(current)setDocumentIndexes(Object.fromEntries(entries))}).catch(showError);return()=>{current=false}},[drawer,workspace,documents]);
+  useEffect(()=>{if(drawer!=='activity'||!workspace)return;let current=true;void Promise.all([window.waypoint.activityCaptureStatus(workspace.id),window.waypoint.listActivitySnapshots(workspace.id,activitySnapshotQuery)]).then(([status,snapshots])=>{if(!current)return;setActivityCapture(status);setActivitySnapshots(snapshots);setActivityExclusions(status.policy.exclusions.join('\n'))}).catch(showError);return()=>{current=false}},[drawer,workspace,activitySnapshotQuery]);
+  useEffect(()=>{if(drawer==='activity')return;const timer=window.setTimeout(()=>setActivityPreview(undefined),0);return()=>window.clearTimeout(timer)},[drawer]);
   useEffect(() => {
     if (!drawer && !sidebarOpen) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -479,6 +484,10 @@ export function App() {
       setAttachmentBusy(false);
     }
   }
+  async function updateActivityCapture(patch:Partial<ActivityCaptureStatus['policy']>){if(!workspace||!activityCapture)return;const exclusions=(patch.exclusions??activityExclusions.split('\n').map((item)=>item.trim()).filter(Boolean));const status=await window.waypoint.updateActivityCapture(workspace.id,{...activityCapture.policy,...patch,exclusions});setActivityCapture(status);setActivityExclusions(status.policy.exclusions.join('\n'));setActivitySnapshots(await window.waypoint.listActivitySnapshots(workspace.id,activitySnapshotQuery))}
+  async function removeActivitySnapshot(id:string){if(!workspace)return;await window.waypoint.deleteActivitySnapshot(workspace.id,id);setActivitySnapshots(await window.waypoint.listActivitySnapshots(workspace.id,activitySnapshotQuery));setActivityCapture(await window.waypoint.activityCaptureStatus(workspace.id))}
+  async function previewActivitySnapshot(id:string){if(!workspace)return;const value=await window.waypoint.readActivitySnapshot(workspace.id,id);setActivityPreview({id,url:`data:${value.mediaType};base64,${value.dataBase64}`})}
+  async function removeAllActivitySnapshots(){if(!workspace)return;const result=await window.waypoint.deleteAllActivitySnapshots(workspace.id);setNotice(`${result.deleted} raw activity snapshot${result.deleted===1?'':'s'} permanently deleted.`);setActivitySnapshots([]);setActivityCapture(await window.waypoint.activityCaptureStatus(workspace.id))}
   async function loadVoiceCapability(){const capability=await window.waypoint.voiceCapability();setVoiceCapability(capability);if(navigator.mediaDevices?.enumerateDevices){const devices=(await navigator.mediaDevices.enumerateDevices()).filter((item)=>item.kind==='audioinput');setVoiceDevices(devices);if(!voiceDevice&&devices[0])setVoiceDevice(devices[0].deviceId)}return capability}
   async function failVoiceCapture(reason:'device_lost'|'capture_limit'){await stopVoiceMode();setVoiceState('error');setError(reason==='device_lost'?'The selected microphone disconnected.':'The two-minute voice capture limit was reached.')}
   async function startVoiceCapture(){if(!workspace||!selectedChat)return;setError('');try{const capability=voiceCapability??await loadVoiceCapability();if(!capability.stt.available){setVoiceOpen(true);setError(capability.stt.reason);return}if(voiceState==='thinking'||voiceState==='speaking'){const exact=voiceRunRef.current;if(exact?.runId)await cancelRun(exact.runId);await window.waypoint.stopVoice(workspace.id,selectedChat.id);voiceTurnRef.current++}await voiceCaptureRef.current.start(voiceDevice||undefined,(reason)=>void failVoiceCapture(reason));voiceTurnRef.current++;voiceRunRef.current=undefined;setVoicePartial('Listening locally… partial text is unavailable from the configured batch runtime.');setVoiceState('listening');setVoiceOpen(true);await loadVoiceCapability()}catch(reason){setVoiceState('error');showError(reason)}}
@@ -968,6 +977,7 @@ export function App() {
               </button>
             </div>
           )}
+          {activityCapture?.policy.enabled&&<div className={`capture-global ${activityCapture.policy.paused||!activityCapture.readiness.available?'paused':'active'}`} role="status"><button aria-label="Open whole-device activity capture controls" onClick={()=>setDrawer('activity')}>{activityCapture.readiness.available&&!activityCapture.policy.paused?'● Capturing':'Ⅱ Activity paused'}</button><button aria-label="Pause whole-device activity capture" disabled={activityCapture.policy.paused} onClick={()=>void updateActivityCapture({paused:true}).catch(showError)}>Pause</button></div>}
           {selectedChat&&<button className="knowledge-button" onClick={()=>void delegateTask()}>Delegate task</button>}
           <button className="knowledge-button" onClick={() => setDrawer('knowledge')}>
             Knowledge <span>⌘K</span>
@@ -1446,6 +1456,14 @@ export function App() {
             )}
             {drawer === 'activity' && (
               <div className="drawer-body">
+                <section className="capture-console" aria-label="Whole-device activity capture">
+                  <header><div><strong>Whole-device history</strong><small role="status">{!activityCapture?'Checking…':!activityCapture.policy.enabled?'Off':activityCapture.policy.paused||!activityCapture.readiness.available?'Paused':'Capturing periodic snapshots'}</small></div><span className={activityCapture?.policy.enabled&&!activityCapture.policy.paused&&activityCapture.readiness.available?'active':'paused'} /></header>
+                  <p>Opt-in periodic screenshots, never video. Pause is immediate and never backfills. No cloud capture or raw OCR is placed in receipts.</p>
+                  {activityCapture&&<><div className="capture-readiness"><strong>{activityCapture.readiness.available?'Native capture ready':'Native capture unavailable'}</strong><span>{activityCapture.readiness.reason}</span></div><label>Raw snapshot retention<select aria-label="Raw snapshot retention" value={activityCapture.policy.retentionDays} onChange={(event)=>void updateActivityCapture({retentionDays:Number(event.target.value) as 90|183|365}).catch(showError)}><option value="90">90 days</option><option value="183">6 months</option><option value="365">1 year</option></select></label><label>Excluded app bundle IDs or process names<textarea aria-label="Excluded apps, one per line" value={activityExclusions} onChange={(event)=>setActivityExclusions(event.target.value)} onBlur={()=>void updateActivityCapture({exclusions:activityExclusions.split('\n').map((item)=>item.trim()).filter(Boolean)}).catch(showError)} placeholder="com.example.private-app" /></label><label className="capture-check"><input type="checkbox" checked={activityCapture.policy.syncRaw} onChange={(event)=>void updateActivityCapture({syncRaw:event.target.checked}).catch(showError)} />Encrypted raw snapshot sync and backup (can use substantial storage/bandwidth)</label><div className="drawer-actions"><button disabled={!activityCapture.readiness.available} onClick={()=>void updateActivityCapture({enabled:true,paused:false}).catch(showError)}>Preview &amp; resume</button><button className="secondary" disabled={!activityCapture.policy.enabled||activityCapture.policy.paused} onClick={()=>void updateActivityCapture({paused:true}).catch(showError)}>Pause now</button><button className="secondary" disabled={!activityCapture.policy.enabled} onClick={()=>void updateActivityCapture({enabled:false,paused:true}).catch(showError)}>Stop</button></div><small>{activityCapture.storage.count} snapshots · {(activityCapture.storage.bytes/1024/1024).toFixed(1)} MB local raw storage</small></>}
+                  <div className="activity-filters"><input aria-label="Search captured app timeline" placeholder="Search app, process, or device" value={activitySnapshotQuery} onChange={(event)=>setActivitySnapshotQuery(event.target.value)} /><button disabled={!activitySnapshots.length} onClick={()=>void removeAllActivitySnapshots().catch(showError)}>Delete all raw</button></div>
+                  {activitySnapshots.map((item)=><article className="capture-item" key={item.id}><div><strong>{item.appTitle||item.appProcess}</strong><small>{item.appBundleId} · {item.deviceId} / {item.displayId}</small><small>Captured {new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(new Date(item.capturedAt))} · expires {new Intl.DateTimeFormat(undefined,{dateStyle:'medium'}).format(new Date(item.expiresAt))} · {(item.bytes/1024).toFixed(1)} KB{item.synced?' · encrypted sync queued/retained':' · local only'}</small></div><div><button aria-label={`View snapshot from ${item.appTitle||item.appProcess}`} onClick={()=>void previewActivitySnapshot(item.id).catch(showError)}>View</button><button aria-label={`Delete snapshot from ${item.appTitle||item.appProcess}`} onClick={()=>void removeActivitySnapshot(item.id).catch(showError)}>Delete</button></div>{activityPreview?.id===item.id&&<figure className="capture-preview"><img src={activityPreview.url} alt={`Private snapshot from ${item.appTitle||item.appProcess} at ${item.capturedAt}`} /><button onClick={()=>setActivityPreview(undefined)}>Close preview</button></figure>}</article>)}
+                  {!activitySnapshots.length&&<p className="drawer-empty">No raw activity snapshots. Waypoint has not captured this screen.</p>}
+                </section>
                 <p className="drawer-intro">A workspace-scoped history of meaningful local actions. Event details never copy prompts, documents, transcripts, file paths, or credentials.</p>
                 <div className="activity-filters">
                   <input value={activityQuery} onChange={(event) => setActivityQuery(event.target.value)} placeholder="Filter activity" aria-label="Filter activity" />
