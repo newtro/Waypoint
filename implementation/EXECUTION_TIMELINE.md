@@ -260,3 +260,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Built default-off policy/readiness, retention/exclusions/pause/stop, fixture snapshot provenance, private search/view/delete UI, opt-in backup/sync, resumable encrypted attachment materialization, and anti-resurrection deletion.
 - Initial review returned 0 blocker / 4 high / 3 medium / 2 low. Repairs covered sync-off deletion, commit-time policy races, recipient opt-out, private viewing, attachment/digest/MIME binding, durable sync status, transfer tests, and preview-memory clearing.
 - Final verdict: SHIP, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 86 suites / 396 tests, lint/build, dependency checks, native macOS arm64 package/runtime closure and isolated launch, diff hygiene. Evidence: `implementation/P4_ACTIVITY_CAPTURE_EVIDENCE.md`.
+# 2026-08-03 — P5 cross-device control
+
+- Froze a narrow user-dispatched workspace-summary vertical slice over existing encrypted sync; no relay or external changes.
+- Built durable job envelopes, canonical idempotency, target-local policy/epoch checks, finite leases, cancellation/global stop, recovery, backup/restore, deletion tombstones, IPC, and settings/history UI.
+- Initial independent review returned 0 blocker / 5 high / 1 medium; repaired authority, cancellation, idempotency, target profile binding, encrypted peer coverage, and UI truthfulness gaps.
+- Full repaired local gate passed 88 suites / 405 tests, dependency audit, macOS arm64 packaging, and packaged runtime closure. Final Phase B review: SHIP, 0 blocker / 0 high / 2 medium / 0 low. Two physical Macs and Windows remain explicit release gates.
+- Final P4+P5 whole-program review: SHIP, 0 blocker / 0 high / 2 medium / 0 low; no cross-feature privacy/lifecycle/global-stop defect remained.

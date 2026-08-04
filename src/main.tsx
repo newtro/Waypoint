@@ -66,6 +66,7 @@ export function App() {
     [syncDevices, setSyncDevices] = useState<Awaited<ReturnType<Window['waypoint']['syncDevices']>>>([]),
     [pendingPeers, setPendingPeers] = useState<Awaited<ReturnType<Window['waypoint']['pendingSyncEnrollments']>>>([]),
     [bootstrapBundle, setBootstrapBundle] = useState('');
+  const [deviceControl,setDeviceControl]=useState<Awaited<ReturnType<Window['waypoint']['deviceControlStatus']>>>();
   const [briefing, setBriefing] = useState<Briefing>();
   const [ruleSuggestions, setRuleSuggestions] = useState<RuleSuggestion[]>([]),
     [learnedRules, setLearnedRules] = useState<LearnedRule[]>([]),
@@ -328,14 +329,16 @@ export function App() {
     setSyncStatus(nextSync);
     setDesktopSync(nextDesktop);
     if (nextDesktop.configured) {
-      const [devices, pending] = await Promise.all([window.waypoint.syncDevices(next.id).catch(() => []), window.waypoint.pendingSyncEnrollments(next.id).catch(() => [])]);
+      const [devices, pending,control] = await Promise.all([window.waypoint.syncDevices(next.id).catch(() => []), window.waypoint.pendingSyncEnrollments(next.id).catch(() => []),window.waypoint.deviceControlStatus(next.id)]);
       if (refreshGate.current.isCurrent(token)) {
         setSyncDevices(devices);
         setPendingPeers(pending);
+        setDeviceControl(control);
       }
     } else {
       setSyncDevices([]);
       setPendingPeers([]);
+      setDeviceControl(undefined);
     }
   }
   async function selectWorkspace(next: WorkspaceSummary) {
@@ -803,6 +806,8 @@ export function App() {
       showError(reason);
     }
   }
+  async function toggleDeviceWorker(){if(!workspace||!deviceControl)return;try{const result=await window.waypoint.updateDeviceControl(workspace.id,{...deviceControl.policy,enabled:!deviceControl.policy.enabled});if(!result.canceled){setNotice(result.policy.enabled?'This device now accepts the listed trusted commands.':'This device worker is disabled.');await refresh()}}catch(reason){showError(reason)}}
+  async function dispatchDeviceSummary(targetDeviceId:string){if(!workspace)return;try{await window.waypoint.dispatchDeviceCommand(workspace.id,targetDeviceId,'Return a bounded workspace summary',crypto.randomUUID());setNotice('Encrypted command queued for the selected trusted device.');await window.waypoint.syncNow(workspace.id);await refresh()}catch(reason){showError(reason)}}
 
   if (!workspace)
     return (
@@ -1635,6 +1640,7 @@ export function App() {
                       ))}
                     </>
                   )}
+                  {desktopSync?.configured&&deviceControl&&<div className="device-control-panel"><h4>Trusted device commands</h4><p className="settings-copy">User-dispatched, encrypted Waypoint commands only. An enrolled peer may decline until its worker policy is enabled. Remote terminal and remote Codex/Claude agents are not enabled in this slice.</p><div className="drawer-actions"><button onClick={()=>void toggleDeviceWorker()}>{deviceControl.policy.enabled?'Disable this device worker':'Enable this device worker'}</button></div>{syncDevices.filter((item)=>item.status==='active'&&item.deviceId!==desktopSync.deviceId).map((item)=><article className="provider-row" key={`worker-${item.deviceId}`}><span><strong>Enrolled peer</strong><small>{item.deviceId.slice(0,12)}…</small></span><button onClick={()=>void dispatchDeviceSummary(item.deviceId)}>Queue summary</button></article>)}<h4>Command history</h4><div className="activity-list">{deviceControl.jobs.length?deviceControl.jobs.slice(0,20).map((job)=><article className="activity-item execution" key={job.id}><span/><div><strong>{job.capability} · {job.status}</strong><small>{job.resultSummary??job.errorCode??`Target ${job.targetDeviceId.slice(0,12)}…`}</small><small>{new Date(job.updatedAt).toLocaleString()} · lease/status events {job.events.length}</small><details><summary>Execution history</summary>{job.events.map((event)=><small key={event.sequence}>{event.sequence} · {event.type} · {event.summary}</small>)}</details></div>{['queued','leased','running'].includes(job.status)?<button className="quiet-button" onClick={()=>workspace&&void window.waypoint.cancelDeviceCommand(workspace.id,job.id).then(()=>refresh()).catch(showError)}>Cancel</button>:<button className="quiet-button" onClick={()=>workspace&&window.confirm('Permanently delete this command history and its sync record?')&&void window.waypoint.deleteDeviceCommand(workspace.id,job.id).then(()=>refresh()).catch(showError)}>Delete</button>}</article>):<p className="empty-copy">No cross-device commands in this workspace.</p>}</div></div>}
                 </section>
                 <section>
                   <h3>Backup & recovery</h3>

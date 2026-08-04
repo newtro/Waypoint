@@ -73,6 +73,11 @@ declare global {
       revokeSyncDevice(workspaceId: string, deviceId: string): Promise<{ canceled: boolean; rotation?: { keyEpoch: number } }>;
       resumeSyncRotation(workspaceId: string): Promise<{ keyEpoch: number }>;
       syncNow(workspaceId: string): Promise<{ sent: number; received: number; activePeers: number }>;
+      deviceControlStatus(workspaceId:string):Promise<{policy:{version:1;enabled:boolean;preferredDeviceId?:string;failover:boolean;allowedCapabilities:Array<'waypoint.workspace_summary'|'agent.codex'|'agent.claude'>;maxDurationMs:number;maxConcurrency:1};jobs:Array<{id:string;controllerDeviceId:string;targetDeviceId:string;capability:string;status:string;resultSummary?:string;errorCode?:string;createdAt:string;updatedAt:string;events:Array<{sequence:number;type:string;summary:string;createdAt:string}>}>;sync:{configured:boolean;deviceId?:string;keyEpoch:number};capabilities:Array<{id:string;available:boolean;label:string;reason?:string}>}>;
+      updateDeviceControl(workspaceId:string,policy:unknown):Promise<{canceled:boolean;policy:Awaited<ReturnType<Window['waypoint']['deviceControlStatus']>>['policy']}>;
+      dispatchDeviceCommand(workspaceId:string,targetDeviceId:string,instruction:string,idempotencyKey:string):Promise<{id:string}>;
+      cancelDeviceCommand(workspaceId:string,jobId:string):Promise<{canceled:boolean}>;
+      deleteDeviceCommand(workspaceId:string,jobId:string):Promise<{deleted:true}>;
       webhookChannels(workspaceId:string):Promise<{channels:Array<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;secretVersion:number;status:'active'|'revoked';createdAt:string;rotatedAt:string;revokedAt?:string}>;killSwitch:boolean}>;
       createWebhookChannel(workspaceId:string,label:string):Promise<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;secretVersion:number;status:'active';createdAt:string;rotatedAt:string;secret:string}>;
       rotateWebhookChannel(workspaceId:string,channelId:string):Promise<{channelId:string;secretVersion:number;secret:string}>;
