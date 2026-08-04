@@ -8,6 +8,10 @@ import { groupChatHistory, type HistorySort } from './chat-history';
 import waypointMark from './assets/waypoint-mark.svg';
 import './styles.css';
 import './provider-settings.css';
+import'./voice-mode.css';
+import{BrowserPcmCapture}from'./voice-capture';
+import{cancelLateVoiceRun}from'./voice-run-cancellation';
+type VoiceMode='push_to_talk'|'hands_free';type VoiceState='off'|'listening'|'transcribing'|'thinking'|'speaking'|'error';
 
 type Chat = Awaited<ReturnType<Window['waypoint']['listChats']>>[number];
 type Document = Awaited<ReturnType<Window['waypoint']['listDocuments']>>[number];
@@ -26,6 +30,7 @@ type WebhookEvent=Awaited<ReturnType<Window['waypoint']['listWebhookEvents']>>[n
 type ToolSettings=Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>;type ToolReceipt=Awaited<ReturnType<Window['waypoint']['toolGatewayReceipts']>>[number];type ToolCapabilities=Awaited<ReturnType<Window['waypoint']['toolGatewayCapabilities']>>;
 type ToolFailure=Awaited<ReturnType<Window['waypoint']['toolFailures']>>[number];
 type OpenRouterStatus=Awaited<ReturnType<Window['waypoint']['openRouterStatus']>>;
+type VoiceCapability=Awaited<ReturnType<Window['waypoint']['voiceCapability']>>;
 type Drawer = 'briefing' | 'knowledge' | 'rules' | 'meetings' | 'automations' | 'activity' | 'health' | 'settings' | undefined;
 
 export function App() {
@@ -80,10 +85,12 @@ export function App() {
     [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>(),[webhookChannels,setWebhookChannels]=useState<WebhookChannels>(),[webhookEvents,setWebhookEvents]=useState<WebhookEvent[]>([]);
   const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolFailures,setToolFailures]=useState<ToolFailure[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState('');
   const[openRouter,setOpenRouter]=useState<OpenRouterStatus>(),[openRouterKey,setOpenRouterKeyDraft]=useState('');
+  const[voiceCapability,setVoiceCapability]=useState<VoiceCapability>(),[voiceOpen,setVoiceOpen]=useState(false),[voiceState,setVoiceState]=useState<VoiceState>('off'),[voiceMode,setVoiceMode]=useState<VoiceMode>('push_to_talk'),[voiceDevice,setVoiceDevice]=useState(''),[voiceDevices,setVoiceDevices]=useState<MediaDeviceInfo[]>([]),[voicePartial,setVoicePartial]=useState('');
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     overlayRef = useRef<HTMLElement>(null),
     previousFocusRef = useRef<HTMLElement | null>(null);
+  const voiceCaptureRef=useRef(new BrowserPcmCapture()),voiceTurnRef=useRef(0),voiceSubmissionRef=useRef<number|undefined>(undefined),voiceRunRef=useRef<{turn:number;chatId:string;sourceMessageId?:string;runId?:string;spoken?:boolean}|undefined>(undefined);
   const meetingRecorderRef = useRef<MediaRecorder | undefined>(undefined),
     meetingStreamRef = useRef<MediaStream | undefined>(undefined),
     meetingChunksRef = useRef<Blob[]>([]),
@@ -97,7 +104,7 @@ export function App() {
     setError(reason instanceof Error ? reason.message : String(reason));
   }
   async function loadToolGateway(){if(!workspace)return;const[settings,receipts,failures,caps]=await Promise.all([window.waypoint.toolGatewaySettings(workspace.id),window.waypoint.toolGatewayReceipts(workspace.id),window.waypoint.toolFailures(workspace.id),window.waypoint.toolGatewayCapabilities()]);setToolSettings(settings);setDenyDraft(settings.denyPatterns.join('\n'));setToolReceipts(receipts);setToolFailures(failures);setToolCapabilities(caps)}
-  async function saveToolGateway(overrides:Partial<ToolSettings>={}){if(!workspace||!toolSettings)return;const next={stopped:overrides.stopped??toolSettings.stopped,denyPatterns:overrides.denyPatterns??denyDraft.split('\n').map((item)=>item.trim()).filter(Boolean),suppressCommit:overrides.suppressCommit??toolSettings.suppressCommit,suppressPush:overrides.suppressPush??toolSettings.suppressPush};setToolSettings(await window.waypoint.updateToolGatewaySettings(workspace.id,next));await loadToolGateway();setNotice(next.stopped?'Tool Gateway stopped for this workspace.':'Tool Gateway policy saved.')}
+  async function saveToolGateway(overrides:Partial<ToolSettings>={}){if(!workspace||!toolSettings)return;const next={stopped:overrides.stopped??toolSettings.stopped,denyPatterns:overrides.denyPatterns??denyDraft.split('\n').map((item)=>item.trim()).filter(Boolean),suppressCommit:overrides.suppressCommit??toolSettings.suppressCommit,suppressPush:overrides.suppressPush??toolSettings.suppressPush};setToolSettings(await window.waypoint.updateToolGatewaySettings(workspace.id,next));if(next.stopped)await stopVoiceMode();await loadToolGateway();setNotice(next.stopped?'Tool Gateway and active voice stopped for this workspace.':'Tool Gateway policy saved.')}
   async function refreshOpenRouter(){setOpenRouter(await window.waypoint.openRouterStatus())}
   async function storeOpenRouterKey(){if(!openRouterKey)return;await window.waypoint.setOpenRouterKey(openRouterKey);setOpenRouterKeyDraft('');await refreshOpenRouter();setNotice('OpenRouter key stored in OS-protected storage. It is not shown, exported, backed up, synced, or relayed.')}
   async function saveOpenRouterSettings(){if(!openRouter)return;await window.waypoint.updateOpenRouterSettings(openRouter.settings);await refreshOpenRouter();setNotice('OpenRouter preferences saved. Hosted requests occur only when the provider and explicit hosted-request switch are enabled.')}
@@ -363,6 +370,13 @@ export function App() {
   }, [capabilities, chatCli]);
   useEffect(()=>{if(!workspace||!selectedChatId||!selectedProfileId||chatCli==='openrouter'){const clear=window.setTimeout(()=>setRouteProposal(undefined),0);return()=>window.clearTimeout(clear)}const token=routeGate.current.begin(),timer=window.setTimeout(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)},0),ids=attachments.filter((item)=>item.ownerId===selectedChatId).map((item)=>item.id);void window.waypoint.proposeChatRoute(workspace.id,selectedChatId,chatCli,selectedProfileId,ids,false).then((route)=>{if(routeGate.current.isCurrent(token))setRouteProposal(route)}).catch(()=>{if(routeGate.current.isCurrent(token))setRouteProposal(undefined)});return()=>window.clearTimeout(timer)},[workspace,selectedChatId,chatCli,selectedProfileId,attachments]);
   useEffect(()=>{void Promise.resolve().then(refreshOpenRouter).catch(()=>undefined)},[]);
+  // Capability refresh is intentionally keyed only to opening the voice surface.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{if(!voiceOpen)return;void loadVoiceCapability().catch(showError)},[voiceOpen]);
+  // Speech completion is accepted only for the exact live turn and visible state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>window.waypoint.onVoiceSpeechState((event)=>{if(event.workspaceId!==workspace?.id||event.chatId!==selectedChatId||event.turnId!==voiceTurnRef.current||!voiceOpen||voiceState!=='speaking')return;if(event.result==='failed'){setVoiceState('error');setError('Local speech playback failed.');return}if(event.result==='completed'&&voiceMode==='hands_free'){void voiceCaptureRef.current.start(voiceDevice||undefined,(reason)=>void failVoiceCapture(reason)).then(()=>{if(event.turnId!==voiceTurnRef.current)return;voiceTurnRef.current++;setVoiceState('listening');setVoicePartial('Listening locally… partial text is unavailable from the configured batch runtime.')}).catch((reason)=>{setVoiceState('error');showError(reason)});return}setVoiceState('off');setVoicePartial('')}),[workspace,selectedChatId,voiceMode,voiceDevice,voiceOpen,voiceState]);
+  useEffect(()=>{if(voiceState!=='thinking'||!workspace||!selectedChatId)return;const voice=voiceRunRef.current;if(!voice||voice.turn!==voiceTurnRef.current||voice.chatId!==selectedChatId||!voice.runId||voice.spoken)return;const run=runs.find((item)=>String(item.id)===voice.runId);if(!run)return;if(['failed','timed_out','canceled'].includes(String(run.status))){setVoiceState('error');setError(`Voice turn ${String(run.status).replace('_',' ')}; no stale response will be spoken.`);return}if(run.status!=='completed'||typeof run.assistantMessageId!=='string')return;const chat=chats.find((item)=>item.id===selectedChatId),answer=chat?.messages.find((item)=>item.id===run.assistantMessageId&&item.role==='assistant')?.body;if(!answer?.trim())return;voice.spoken=true;const turn=voice.turn;void window.waypoint.speakVoice(workspace.id,selectedChatId,turn,answer).then(()=>{if(turn===voiceTurnRef.current&&voiceOpen)setVoiceState('speaking')}).catch((reason)=>{if(turn===voiceTurnRef.current){setVoiceState('error');showError(reason)}})},[voiceState,workspace,selectedChatId,chats,runs,voiceOpen]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -465,6 +479,12 @@ export function App() {
       setAttachmentBusy(false);
     }
   }
+  async function loadVoiceCapability(){const capability=await window.waypoint.voiceCapability();setVoiceCapability(capability);if(navigator.mediaDevices?.enumerateDevices){const devices=(await navigator.mediaDevices.enumerateDevices()).filter((item)=>item.kind==='audioinput');setVoiceDevices(devices);if(!voiceDevice&&devices[0])setVoiceDevice(devices[0].deviceId)}return capability}
+  async function failVoiceCapture(reason:'device_lost'|'capture_limit'){await stopVoiceMode();setVoiceState('error');setError(reason==='device_lost'?'The selected microphone disconnected.':'The two-minute voice capture limit was reached.')}
+  async function startVoiceCapture(){if(!workspace||!selectedChat)return;setError('');try{const capability=voiceCapability??await loadVoiceCapability();if(!capability.stt.available){setVoiceOpen(true);setError(capability.stt.reason);return}if(voiceState==='thinking'||voiceState==='speaking'){const exact=voiceRunRef.current;if(exact?.runId)await cancelRun(exact.runId);await window.waypoint.stopVoice(workspace.id,selectedChat.id);voiceTurnRef.current++}await voiceCaptureRef.current.start(voiceDevice||undefined,(reason)=>void failVoiceCapture(reason));voiceTurnRef.current++;voiceRunRef.current=undefined;setVoicePartial('Listening locally… partial text is unavailable from the configured batch runtime.');setVoiceState('listening');setVoiceOpen(true);await loadVoiceCapability()}catch(reason){setVoiceState('error');showError(reason)}}
+  async function finishVoiceCapture(){if(!workspace||!selectedChat||voiceState!=='listening')return;const turn=voiceTurnRef.current;let wav:Uint8Array|undefined;setVoiceState('transcribing');setVoicePartial('Transcribing with the configured local runtime…');try{wav=await voiceCaptureRef.current.stop();if(turn!==voiceTurnRef.current)return;const result=await window.waypoint.transcribeVoice(workspace.id,selectedChat.id,voiceMode,wav);if(turn!==voiceTurnRef.current)return;const prompt=result.text.trim();if(!prompt)throw new Error('The local runtime returned an empty transcript.');setVoicePartial(prompt);const textarea=composerRef.current;if(!textarea)throw new Error('Chat composer is unavailable.');textarea.value=prompt;voiceSubmissionRef.current=turn;voiceRunRef.current={turn,chatId:selectedChat.id};setVoiceState('thinking');textarea.form?.requestSubmit()}catch(reason){if(turn===voiceTurnRef.current){setVoiceState('error');showError(reason)}}finally{wav?.fill(0)}}
+  async function stopVoiceMode(){voiceTurnRef.current++;voiceSubmissionRef.current=undefined;await voiceCaptureRef.current.cancel();if(workspace&&selectedChat)await window.waypoint.stopVoice(workspace.id,selectedChat.id).catch(()=>undefined);const exact=voiceRunRef.current;if(exact?.runId)await cancelRun(exact.runId).catch(()=>undefined);voiceRunRef.current=undefined;setVoiceState('off');setVoicePartial('')}
+  async function toggleHandsFree(){if(voiceState==='listening')await finishVoiceCapture();else await startVoiceCapture()}
   async function runChat(event: FormEvent<HTMLFormElement>, chatId: string) {
     event.preventDefault();
     if (!workspace) return;
@@ -479,13 +499,16 @@ export function App() {
     try {
       if(cli==='openrouter'&&attachmentIds.length)throw new Error('OpenRouter file delivery is not enabled. Remove attachments or use an eligible local CLI; files remain local.');
       const messageId = await window.waypoint.addMessage(workspace.id, chatId, 'user', prompt, attachmentIds);
-      if(cli==='openrouter'){const hosted=await window.waypoint.runOpenRouterChat({workspaceId:workspace.id,chatId,sourceMessageId:messageId,prompt,role:'everyday',attachmentIds});if(hosted.fallbackProvider){await window.waypoint.runChat(workspace.id,chatId,messageId,hosted.fallbackProvider,profile,prompt,model,undefined,[]);setNotice(hosted.reason??`Hosted cap reached; ${hosted.fallbackProvider} subscription fallback started.`)}else setNotice(`OpenRouter ${hosted.model} is responding within the reserved per-request cap…`);form.reset();await refresh();return}
+      const voiceTurn=voiceSubmissionRef.current;voiceSubmissionRef.current=undefined;if(voiceTurn!==undefined&&voiceRunRef.current?.turn===voiceTurn)voiceRunRef.current.sourceMessageId=messageId;
+      if(cli==='openrouter'){const hosted=await window.waypoint.runOpenRouterChat({workspaceId:workspace.id,chatId,sourceMessageId:messageId,prompt,role:'everyday',attachmentIds});let exactRunId:string,runKind:'hosted'|'local';if(hosted.fallbackProvider){const fallback=await window.waypoint.runChat(workspace.id,chatId,messageId,hosted.fallbackProvider,profile,prompt,model,undefined,[]);exactRunId=fallback.runId;runKind='local';setNotice(hosted.reason??`Hosted cap reached; ${hosted.fallbackProvider} subscription fallback started.`)}else{if(typeof hosted.runId!=='string')throw new Error('Hosted voice run did not return an execution identity.');exactRunId=hosted.runId;runKind='hosted';setNotice(`OpenRouter ${hosted.model} is responding within the reserved per-request cap…`)}if(voiceTurn!==undefined){if(voiceTurn!==voiceTurnRef.current)await cancelLateVoiceRun(runKind,workspace.id,exactRunId,window.waypoint);else if(voiceRunRef.current?.turn===voiceTurn)voiceRunRef.current.runId=exactRunId}form.reset();await refresh();return}
       const started = await window.waypoint.runChat(workspace.id, chatId, messageId, cli, profile, prompt, model, undefined, attachmentIds);
+      if(voiceTurn!==undefined&&voiceRunRef.current?.turn===voiceTurn)voiceRunRef.current.runId=started.runId;if(voiceTurn!==undefined&&voiceTurn!==voiceTurnRef.current)await cancelRun(started.runId);
       form.reset();
       const unsupported = started.attachmentDelivery.unsupported;
       setNotice(unsupported.length ? `${unsupported.length} attachment${unsupported.length === 1 ? ' remains' : 's remain'} local because ${cli} cannot accept the file type.` : `${cli} is responding…`);
       await refresh();
     } catch (reason) {
+      if(voiceState==='thinking')setVoiceState('error');
       showError(reason);
       await refresh().catch(showError);
       setAttachments(await window.waypoint.listChatAttachments(workspace.id, chatId).catch(() => []));
@@ -1027,6 +1050,7 @@ export function App() {
             </section>
             <div className="composer-dock">
               <form className="composer" onSubmit={(event) => void runChat(event, selectedChat.id)}>
+                {voiceOpen&&<section className="voice-mode" aria-label="Voice chat controls"><header><div><strong>Voice chat · {voiceState.replace('_',' ')}</strong><small role="status" aria-live="polite">{voicePartial||voiceCapability?.stt.reason||'Checking local speech capability…'}</small></div><button type="button" className="quiet-button" onClick={()=>void stopVoiceMode().then(()=>setVoiceOpen(false))} aria-label="Close and stop voice chat">×</button></header><p>Microphone audio stays ephemeral and local. Waypoint asks for permission only when you start. Headphones reduce echo. This is turn-based voice, not full duplex.</p><div className="voice-settings"><label>Mode<select value={voiceMode} onChange={(event)=>setVoiceMode(event.target.value as VoiceMode)} disabled={voiceState!=='off'&&voiceState!=='error'}><option value="push_to_talk">Push to talk</option><option value="hands_free">Hands-free session</option></select></label><label>Microphone<select value={voiceDevice} onChange={(event)=>setVoiceDevice(event.target.value)} disabled={voiceState!=='off'&&voiceState!=='error'}><option value="">System default</option>{voiceDevices.map((device,index)=><option value={device.deviceId} key={device.deviceId||index}>{device.label||`Microphone ${index+1}`}</option>)}</select></label></div>{!voiceCapability?.stt.available?<div className="voice-readiness"><strong>Local transcription not ready</strong><span>{voiceCapability?.stt.reason}</span><button type="button" onClick={()=>void window.waypoint.configureVoiceRuntime().then((result)=>setVoiceCapability(result.capability)).catch(showError)}>Choose installed runtime + model…</button></div>:<div className="voice-actions">{voiceMode==='push_to_talk'?<button type="button" className="voice-primary" disabled={voiceState==='transcribing'} onPointerDown={()=>void startVoiceCapture()} onPointerUp={()=>void finishVoiceCapture()} onPointerCancel={()=>void stopVoiceMode()} onKeyDown={(event)=>{if(!event.repeat&&(event.key===' '||event.key==='Enter')){event.preventDefault();void startVoiceCapture()}}} onKeyUp={(event)=>{if(event.key===' '||event.key==='Enter'){event.preventDefault();void finishVoiceCapture()}}}>{voiceState==='listening'?'Release to send':voiceState==='thinking'||voiceState==='speaking'?'Hold to interrupt':'Hold to talk'}</button>:<button type="button" className="voice-primary" disabled={voiceState==='transcribing'} onClick={()=>void toggleHandsFree()}>{voiceState==='listening'?'Finish turn':voiceState==='thinking'||voiceState==='speaking'?'Interrupt and listen':'Start hands-free'}</button>}<button type="button" onClick={()=>void stopVoiceMode()} disabled={voiceState==='off'}>Stop now</button></div>}<small>{voiceCapability?.tts.available?'Replies use the local macOS system voice.':'Speech playback is unavailable on this platform.'} Raw microphone audio is never added to chat, backup, sync, or activity.</small></section>}
                 {queued.length > 0 && (
                   <div className="file-queue" aria-label="Queued attachments">
                     {queued.map((item) => (
@@ -1059,6 +1083,7 @@ export function App() {
                     <button type="button" className="attach" disabled={attachmentBusy} onClick={() => void chooseAttachments()} aria-label="Attach files">
                       ＋
                     </button>
+                    <button type="button" className="attach" onClick={()=>setVoiceOpen((value)=>!value)} aria-label={voiceOpen?'Hide voice chat controls':'Open voice chat controls'} aria-expanded={voiceOpen}>◉</button>
                     <select name="cli" value={chatCli} onChange={(event) => setChatCli(event.target.value as 'codex' | 'claude'|'openrouter')} aria-label="AI provider">
                       {capabilities.map((item) => (
                         <option key={item.name} value={item.name} disabled={!item.available || item.compatible === false}>

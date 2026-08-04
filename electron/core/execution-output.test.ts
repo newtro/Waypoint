@@ -1,0 +1,2 @@
+import{describe,expect,it}from'vitest';import{canonicalExecutionText}from'./execution-output.js'
+describe('canonicalExecutionText',()=>{it('assembles Claude deltas but prefers the final canonical message',()=>{const deltas=[{type:'text',text:'Hello ',rawType:'stream_event.content_block_delta'},{type:'text',text:'world',rawType:'stream_event.content_block_delta'}];expect(canonicalExecutionText('claude',deltas)).toBe('Hello world');expect(canonicalExecutionText('claude',[...deltas,{type:'text',text:'Hello world!',rawType:'assistant'}])).toBe('Hello world!')})})

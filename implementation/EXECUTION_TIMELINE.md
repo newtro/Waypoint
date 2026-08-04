@@ -246,3 +246,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Implemented protected, explicitly activated OpenRouter routing with model preferences, budget/cost observability, subscription fallback, hosted chat provenance, cancellation, lifecycle, backup, and sync.
 - Initial review found 1 blocker/4 high; production chat wiring, atomic reservation, incremental sync, bounded response handling, and keyed prompt provenance were repaired. Re-review exposed replacement-sync and hard-cap gaps; final repairs added targeted full snapshots, provider token/max-price controls, and authoritative over-cap accounting.
 - Final review: SHIP (0 blocker/0 high/2 medium/0 low). Full gate: 78 files/365 tests, lint/build, dependency audit, macOS package/runtime closure, and diff hygiene. No live provider call or key use occurred.
+
+## P2 — local-first Voice Chat Mode (2026-08-03)
+
+- Froze the bounded acceptance gate in `implementation/P2_VOICE_CHAT_PLAN.md`: explicit visible sessions, user-imported local whisper.cpp-compatible runtime/model, ephemeral capture, normal chat routing, macOS local TTS, barge-in/stop, and no cloud/download/background recording.
+- Implemented the in-chat state/readiness UI, capture/runtime/TTS adapters, exact execution/message correlation, global stop, durable minimized voice receipts, and normal chat lifecycle behavior.
+- Independent review began at 0 blocker / 5 high / 4 medium. Repairs covered abort propagation, crash cleanup, error minimization, runtime/path/device truthfulness, exact response/run ownership, and stale speech. A final race repair dispatches just-returned hosted cancellation through the hosted API while retaining local fallback cancellation.
+- Final verdict: SHIP, blocker 0 / high 0 / medium 0 / low 0. Terminal gate: 84 suites / 382 tests, lint/build, zero dependency vulnerabilities/undeclared licenses, macOS arm64 package/runtime closure, and diff hygiene. Evidence: `implementation/P2_VOICE_CHAT_EVIDENCE.md`.

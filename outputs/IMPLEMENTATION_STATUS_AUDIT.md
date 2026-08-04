@@ -28,9 +28,9 @@ The remaining R5 expansions require a wider user policy or device/network author
 
 After Backup Slice 1, proactive webhooks/calendar remain external-authority gated, backup encryption/automatic retention require key-recovery/retention policy, and mobile/peer execution remain device-policy gated. Backup Slice 2 is the next safe ordered local work: off-main responsiveness hardening for the already approved explicit verification/drill operations.
 
-Production local document ingestion and P1 local trigger/webhook simulation are complete. The next safe substantive phase is first-class local voice chat (no cloud API or implicit model download). Two-instance sync testing remains after the ordered safely implementable feature gates.
+Production local document ingestion, P1 local trigger/webhook simulation, and the bounded P2 local voice-chat baseline are complete. P2 requires an explicit user-installed/selected whisper.cpp-compatible runtime/model for live STT and does not claim full duplex. The next ordered safe phase is P3, the opt-in CrisperWhisper post-meeting transcription evaluation, subject to its explicit license/model-install approval gate. Two-instance sync testing remains after the ordered safely implementable feature gates.
 
-The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: live voice → CrisperWhisper meeting lab → opt-in whole-device activity capture → local peer-control policy/simulation → richer local orchestration → calendar/meeting fixture contracts → local memory consolidation/reflection → two-instance validation. Real accounts/connectors/public ingress, model installs, capture sync, peer activation, scheduled/auto-applied reflection, Windows/release, and mobile distribution remain separately authority/hardware gated.
+The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: CrisperWhisper meeting lab → opt-in whole-device activity capture → local peer-control policy/simulation → richer local orchestration → calendar/meeting fixture contracts → local memory consolidation/reflection → two-instance validation. Real accounts/connectors, model installs, capture sync, peer activation, scheduled/auto-applied reflection, Windows/release, and mobile distribution remain separately authority/hardware gated.
 
 ## Sequencing decision
 

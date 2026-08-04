@@ -345,3 +345,10 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 
 - P6A is moved to the bottom of the roadmap and is not a dependency for the next phase.
 - Its implementation-ready contract remains preserved, but no A/B harness code, provider/model activation, API call, or deployment is authorized by this sequencing update.
+
+# 2026-08-03 — P2 local voice baseline
+
+- Ship an explicit, turn-based voice-chat baseline now; do not imply full-duplex realtime behavior. Final transcript text follows the ordinary durable chat/provider path, while raw microphone audio is ephemeral and excluded from chat, activity content, backup, sync, and relay.
+- Keep STT unavailable until the user explicitly chooses an installed, probed whisper.cpp-compatible executable and local model. Waypoint does not download models or use cloud speech. Use local macOS system speech for the first reviewed TTS adapter.
+- Stop is identity-aware and dominates capture, transcription, hosted/subscription generation, and playback. Speech is sourced only from the exact durable assistant message linked to the active run; missing CLI events are never invented.
+- Defer streaming partial STT/VAD, Kokoro, Moshi/full duplex, CrisperWhisper meeting transcription, Windows speech/package evidence, and real microphone/model performance to their separately gated phases.
