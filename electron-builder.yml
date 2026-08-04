@@ -8,7 +8,11 @@ files:
   - dist-electron/spikes/cli-capabilities.js
 mac:
   target: dir
+  minimumSystemVersion: '13.3.0'
   category: public.app-category.productivity
+  extraResources:
+    - from: vendor/voice/macos-arm64
+      to: voice
   extendInfo:
     NSMicrophoneUsageDescription: Waypoint uses microphone audio only after you explicitly start Voice Chat or a local meeting recording.
 win:

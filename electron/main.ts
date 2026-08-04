@@ -34,6 +34,7 @@ import{NativeSpeechAdapter,VoiceRuntimeRegistry}from'./core/voice-runtime.js';
 import{macActivityCaptureReadiness,validateActivityCapturePolicy}from'./core/activity-capture.js';
 import{VoiceOperationRegistry}from'./core/voice-turn-manager.js';
 import{remotePolicyDigest}from'./core/cross-device-control.js';
+import{installedCliModelCatalog}from'./core/provider-model-catalog.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
@@ -154,7 +155,7 @@ function registerIpc(): void {
   handle('waypoint:activity-capture-delete-all',(_event,input:unknown)=>({deleted:store.deleteAllActivitySnapshots(text((input as Record<string,unknown>).workspaceId,'workspace ID',64))}));
   handle('waypoint:activity-capture-purge',(_event,input:unknown)=>({purged:store.purgeExpiredActivitySnapshots(text((input as Record<string,unknown>).workspaceId,'workspace ID',64))}));
   handle('waypoint:voice-capability',()=>voiceRuntime.capability());
-  handle('waypoint:voice-configure',async()=>{const binary=await dialog.showOpenDialog({title:'Choose installed whisper.cpp executable',properties:['openFile']});if(binary.canceled||!binary.filePaths[0])return{canceled:true,capability:voiceRuntime.capability()};const model=await dialog.showOpenDialog({title:'Choose local whisper.cpp model',properties:['openFile'],filters:[{name:'GGUF model',extensions:['gguf','bin']}]});if(model.canceled||!model.filePaths[0])return{canceled:true,capability:voiceRuntime.capability()};return{canceled:false,capability:await voiceRuntime.configure(binary.filePaths[0],model.filePaths[0])}});
+  handle('waypoint:voice-configure',()=>({canceled:false,capability:voiceRuntime.capability()}));
   handle('waypoint:voice-remove-runtime',()=>({capability:voiceRuntime.remove()}));
   handle('waypoint:voice-transcribe',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64),mode=value.mode==='hands_free'?'hands_free':'push_to_talk';if(store.toolGatewaySettings(workspaceId).stopped)throw new Error('voice_global_stop_active');const audio=value.audio;if(!(audio instanceof Uint8Array))throw new Error('voice_audio_invalid');const controller=voiceOperations.begin(workspaceId,chatId);store.recordVoiceActivity(workspaceId,chatId,'started',{mode});try{const result=await voiceRuntime.transcribe(audio,controller.signal);if(controller.signal.aborted||store.toolGatewaySettings(workspaceId).stopped)throw new Error('voice_canceled');store.recordVoiceActivity(workspaceId,chatId,'transcribed',{mode,provider:result.provider});return{text:result.text,provider:result.provider}}catch(error){const code=controller.signal.aborted?'voice_canceled':voiceFailureCode(error);store.recordVoiceActivity(workspaceId,chatId,'failed',{mode,reason:code});throw new Error(code,{cause:error})}finally{voiceOperations.finish(workspaceId,chatId,controller);audio.fill(0)}});
   handle('waypoint:voice-speak',(event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64),turnId=Number(value.turnId),body=text(value.text,'speech text',200_000);if(!Number.isSafeInteger(turnId)||turnId<1)throw new Error('voice_turn_invalid');if(store.toolGatewaySettings(workspaceId).stopped)throw new Error('voice_global_stop_active');const previous=voiceSpeechOwner;if(previous){voiceSpeech.stop();voiceSpeechOwner=undefined;previous.notify('canceled')}const owner={workspaceId,chatId,turnId,notify:(result:SpeechResult)=>{store.recordVoiceActivity(workspaceId,chatId,result==='failed'?'failed':'stopped',{reason:`tts_${result}`});if(!event.sender.isDestroyed())event.sender.send('waypoint:voice-speech-state',{workspaceId,chatId,turnId,result})}};voiceSpeechOwner=owner;voiceSpeech.speak(body,(result)=>{if(voiceSpeechOwner!==owner)return;voiceSpeechOwner=undefined;owner.notify(result)});return{speaking:true}});
@@ -546,6 +547,9 @@ function registerIpc(): void {
   });
   handle('waypoint:list-chats', (_event, input: unknown) => store.listChats(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
   handle('waypoint:cli-capabilities', async () => Promise.all([detectCli('codex'), detectCli('claude')]));
+  handle('waypoint:cli-model-catalog',async()=>installedCliModelCatalog(await Promise.all([detectCli('codex'),detectCli('claude')])));
+  handle('waypoint:chat-model-preferences',(_event,input:unknown)=>store.chatModelPreferences(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)));
+  handle('waypoint:chat-model-preference',(_event,input:unknown)=>{const value=input as Record<string,unknown>;if(!['codex','claude'].includes(String(value.provider)))throw new Error('Chat provider is invalid');return store.setChatModelPreference(text(value.workspaceId,'workspace ID',64),value.provider as'codex'|'claude',String(value.model??''))});
   handle('waypoint:propose-chat-route',async(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64),preferred=text(value.preferred,'preferred provider',20);if(!['codex','claude'].includes(preferred))throw new Error('Unsupported preferred provider');const profileId=text(value.securityProfileId,'security profile ID',64);if(!store.listSecurityProfiles(workspaceId).some((item)=>item.id===profileId))throw new Error('Security profile not found');const ids=Array.isArray(value.attachmentIds)?value.attachmentIds.map((item)=>text(item,'attachment ID',64)):[],available=new Map(store.listChatAttachments(workspaceId,chatId).map((item)=>[item.id,item]));if(ids.some((id)=>!available.has(id)))throw new Error('Attachment not found in chat');return proposeRoute({capabilities:await Promise.all([detectCli('codex'),detectCli('claude')]),preferred:preferred as 'codex'|'claude',allowFallback:value.allowFallback===true,securityProfileId:profileId,attachments:ids.map((id)=>({id,mediaType:available.get(id)!.mediaType,bytes:available.get(id)!.bytes}))})});
   handle('waypoint:list-security-profiles', (_event, input: unknown) => store.listSecurityProfiles(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
   handle('waypoint:list-executions', (_event, input: unknown) => {
@@ -993,7 +997,11 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.whenReady().then(() => {
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'waypoint.sqlite'));
-    voiceRuntime=new VoiceRuntimeRegistry(path.join(app.getPath('userData'),'voice-runtime.json'));
+    const voiceRoot=app.isPackaged?path.join(process.resourcesPath,'voice'):path.resolve(currentDirectory,'../../vendor/voice/macos-arm64');
+    voiceRuntime=new VoiceRuntimeRegistry(path.join(app.getPath('userData'),'voice-runtime.json'),process.platform,undefined,{
+      binaryPath:path.join(voiceRoot,'bin/waypoint-whisper'),modelPath:path.join(voiceRoot,'ggml-base.en-q5_1.bin'),frameworkPath:path.join(voiceRoot,'Frameworks/whisper.framework/Versions/A/whisper'),label:'Whisper base.en q5_1',
+      binarySha256:'f74342a44a2addfafcfd30ba74f8bbdeef4044d82f530ae58f49fc20e6d79b4a',modelSha256:'4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f',frameworkSha256:'9664726a3ecf1d9fdadcbc731b9dba3b5bbeea184d42797e044a347c2b7c8ea5'
+    },process.arch,process.getSystemVersion());
     providerVault=new ProtectedProviderVault(app.getPath('userData'),{available:()=>safeStorage.isEncryptionAvailable(),encrypt:(value)=>safeStorage.encryptString(value),decrypt:(value)=>safeStorage.decryptString(value)});
     toolFailureFingerprintKey=loadToolFailureFingerprintKey();
     const vault = new ProtectedSyncVault(path.join(app.getPath('userData'), 'sync-secrets'), {

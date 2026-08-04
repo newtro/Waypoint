@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "platform": "darwin-arm64",
+  "runtime": {
+    "name": "whisper.cpp",
+    "version": "1.8.4",
+    "source": "https://github.com/ggml-org/whisper.cpp/releases/tag/v1.8.4",
+    "officialXcframeworkSha256": "1c7a93bd20fe4e57e0af12051ddb34b7a434dfc9acc02c8313393150b6d1821f",
+    "helperSha256": "f74342a44a2addfafcfd30ba74f8bbdeef4044d82f530ae58f49fc20e6d79b4a"
+  },
+  "model": {
+    "name": "Whisper base.en q5_1",
+    "file": "ggml-base.en-q5_1.bin",
+    "source": "https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-base.en-q5_1.bin",
+    "bytes": 59721011,
+    "sha1": "d26d7ce5a1b6e57bea5d0431b9c20ae49423c94a",
+    "sha256": "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f"
+  },
+  "minimumMacOS": "13.3",
+  "cloudFallback": false,
+  "automaticDownload": false
+}

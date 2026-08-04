@@ -274,3 +274,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Added the corrected four-model curated selector with Qwen 3.8 Max and legacy/custom saved-value preservation.
 - Repaired source-turn execution ordering/deduplication, terminal response-state cleanup, selector sizing, and compact accessible Delegate/Knowledge header grouping.
 - Focused gate passed 5 suites / 25 tests; full gate passed 90 suites / 418 tests, lint/build, dependency audit, macOS arm64 package, runtime closure, and diff hygiene. Initial expanded review findings (1 medium / 1 low) were repaired; final re-review was SHIP with 0 blocker / 0 high / 0 medium / 0 low.
+# 2026-08-04 — P2 zero-friction voice/provider controls
+
+- Read the active voice plan and audited official runtime/model licenses, artifacts, architecture and hashes.
+- Diagnosed normal protected-key state read-only: secret file present, provider settings absent; no secret contents or paid request accessed.
+- Built bundled arm64 STT resources, auto-discovery/integrity checks, curated installed-CLI model selection and single OpenRouter activation flow.
+- Focused tests/lint/build passed; full 426-test suite, dependency audit, arm64 package closure and packaged synthetic transcription passed.
+- Independent review found the macOS-version truthfulness, package dynamic closure, preference persistence, platform-scoped resources and activation integration gaps. All were repaired; Settings/composer synchronization and strict provider validation were added during final review.
+- Final gate: 93 files / 430 tests, lint/build, zero dependency vulnerabilities, arm64 package/hash/rpath/helper closure, consent-free packaged transcription, isolated and normal-data launches. Final independent verdict: 0 blocker / 0 high / 0 medium / 1 low.
