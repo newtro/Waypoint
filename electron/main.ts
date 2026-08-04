@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, screen } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, screen, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
@@ -87,6 +87,7 @@ function handle(channel: string, listener: (event: IpcMainInvokeEvent, input: un
     return listener(event, input);
   });
 }
+handle('waypoint:open-external',async(_event,input:unknown)=>{const value=String((input as Record<string,unknown>)?.url??'');if(value.length>2048)throw new Error('External link is invalid');const url=new URL(value);if(url.href.length>2048||!['https:','http:','mailto:'].includes(url.protocol)||url.username||url.password)throw new Error('External link is not allowed');await shell.openExternal(url.href);return{opened:true}});
 
 function text(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string' || value.length > max) throw new Error(`Invalid ${field}`);

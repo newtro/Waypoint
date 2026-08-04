@@ -16,6 +16,8 @@ import{openRouterModelChoices}from'./openrouter-model-catalog';
 import{responseNoticeAfterRuns,runsForSourceMessage,uniqueChatRuns,uniqueExecutionEvents}from'./chat-run-presentation';
 import{withLegacyModel}from'./provider-model-choices';
 import{nextOpenRouterActivation}from'./openrouter-activation';
+import{shouldFollowChat}from'./chat-scroll';
+import{ChatMarkdown}from'./chat-markdown';
 type VoiceMode='push_to_talk'|'hands_free';type VoiceState='off'|'listening'|'transcribing'|'thinking'|'speaking'|'error';
 
 type Chat = Awaited<ReturnType<Window['waypoint']['listChats']>>[number];
@@ -98,6 +100,8 @@ export function App() {
   const[voiceCapability,setVoiceCapability]=useState<VoiceCapability>(),[voiceEngineStatus,setVoiceEngineStatus]=useState<VoiceEngineStatus>(),[voiceEngine,setVoiceEngine]=useState<'fast_local'|'full_duplex_experimental'>('fast_local'),[voiceSessionActive,setVoiceSessionActive]=useState(false),[voiceState,setVoiceState]=useState<VoiceState>('off'),[voiceMode,setVoiceMode]=useState<VoiceMode>('push_to_talk'),[voiceDevice,setVoiceDevice]=useState(''),[voiceDevices,setVoiceDevices]=useState<MediaDeviceInfo[]>([]),[voicePartial,setVoicePartial]=useState('');
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
+    transcriptRef = useRef<HTMLElement>(null),
+    transcriptFollowingRef = useRef(true),
     overlayRef = useRef<HTMLElement>(null),
     previousFocusRef = useRef<HTMLElement | null>(null);
   const voiceCaptureRef=useRef(new BrowserPcmCapture()),voiceMonitorRef=useRef(new BrowserSpeechMonitor()),voicePlayerRef=useRef(new BrowserVoicePlayer(undefined,(scope)=>void window.waypoint.voicePlaybackComplete(scope.workspaceId,scope.chatId,scope.turnId),(scope)=>void window.waypoint.voicePlaybackStopped(scope.workspaceId,scope.chatId,scope.turnId))),voiceTurnRef=useRef(0),voiceSubmissionRef=useRef<number|undefined>(undefined),voiceRunRef=useRef<{turn:number;workspaceId?:string;chatId:string;sourceMessageId?:string;runId?:string;spoken?:boolean}|undefined>(undefined),voiceStateRef=useRef<VoiceState>('off'),voicePressReleasedRef=useRef(false),voiceCaptureTargetRef=useRef<{workspaceId:string;chatId:string}|undefined>(undefined),voiceScopeRef=useRef<{workspaceId?:string;chatId?:string}>({});
@@ -392,6 +396,8 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{if(drawer!=='settings')return;void loadVoiceCapability().catch(showError)},[drawer]);
   useEffect(()=>{voiceStateRef.current=voiceState},[voiceState]);
+  useEffect(()=>{transcriptFollowingRef.current=true;requestAnimationFrame(()=>{const element=transcriptRef.current;if(element)element.scrollTop=element.scrollHeight})},[selectedChatId]);
+  useEffect(()=>{if(!transcriptFollowingRef.current)return;requestAnimationFrame(()=>{const element=transcriptRef.current;if(element)element.scrollTop=element.scrollHeight})},[chats,runs,selectedChatId]);
   useEffect(()=>{const offChunk=window.waypoint.onVoiceAudioChunk((event)=>{if(event.workspaceId===workspace?.id&&event.chatId===selectedChatId&&event.turnId===voiceTurnRef.current)void voicePlayerRef.current.push(event)}),offEnd=window.waypoint.onVoiceAudioEnd((event)=>voicePlayerRef.current.end(event)),offStop=window.waypoint.onVoiceAudioStop((event)=>void voicePlayerRef.current.stop(event));return()=>{offChunk();offEnd();offStop()}},[workspace,selectedChatId]);
   // Speech completion is accepted only for the exact live turn and visible state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -575,7 +581,7 @@ export function App() {
       showError(reason);
     }
   }
-  function executionHistory(run:ExecutionRunView){const events=uniqueExecutionEvents(run),toolEvents=events.filter((event)=>['tool','agent','diagnostic','provider','progress','terminal','policy'].includes(String(event.type))),text=events.filter((event)=>event.type==='text').map((event)=>String(event.text??'')).join('');return <Fragment key={`execution-${String(run.id)}`}><details className="execution-timeline" open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):String(event.type??'Provider status')}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This provider did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>{run.status!=='completed'&&<article className={`run-strip ${String(run.status)}`}><div><span className="status-dot"/><strong>{run.status==='running'?`${run.cli} is responding`:String(run.status).replace('_',' ')}</strong>{text&&<p>{text}</p>}{failureAdvice(run)&&<small>{failureAdvice(run)}</small>}</div><div>{run.status==='running'&&<button onClick={()=>void cancelRun(String(run.id))}>Stop</button>}{['failed','timed_out','canceled'].includes(String(run.status))&&<button onClick={()=>void retryRun(run)}>Retry</button>}</div></article>}</Fragment>}
+  function executionHistory(run:ExecutionRunView){const events=uniqueExecutionEvents(run),toolEvents=events.filter((event)=>['tool','agent','diagnostic','provider','progress','terminal','policy'].includes(String(event.type))),text=events.filter((event)=>event.type==='text').map((event)=>String(event.text??'')).join('');return <Fragment key={`execution-${String(run.id)}`}><details className="execution-timeline" open={run.status==='running'}><summary><span className="status-dot"/><strong>{String(run.cli)} execution · {String(run.status).replace('_',' ')}</strong><small>{toolEvents.length?`${toolEvents.length} structured event${toolEvents.length===1?'':'s'}`:'No provider tool events exposed'}</small></summary><ol>{toolEvents.map((event,index)=><li key={`${String(run.id)}-${String(event.sequence??index)}`}><b>{event.type==='tool'?String(event.name??'Tool action'):event.type==='agent'?String(event.name??'Agent event'):String(event.type??'Provider status')}</b>{typeof event.text==='string'&&<span>{event.text.slice(0,1000)}</span>}<small>{event.createdAt?new Date(String(event.createdAt)).toLocaleTimeString():''}</small></li>)}</ol>{!toolEvents.length&&<p>This provider did not expose an internal tool event for this run. Waypoint does not infer or invent one.</p>}</details>{run.status!=='completed'&&<article className={`run-strip ${String(run.status)}`}><div><span className="status-dot"/><strong>{run.status==='running'?`${run.cli} is responding`:String(run.status).replace('_',' ')}</strong>{text&&<ChatMarkdown body={text}/>} {failureAdvice(run)&&<small>{failureAdvice(run)}</small>}</div><div>{run.status==='running'&&<button onClick={()=>void cancelRun(String(run.id))}>Stop</button>}{['failed','timed_out','canceled'].includes(String(run.status))&&<button onClick={()=>void retryRun(run)}>Retry</button>}</div></article>}</Fragment>}
   async function delegateTask(){if(!workspace||!selectedChat)return;const parent=runs.find((item)=>item.chatId===selectedChat.id&&Number(item.depth)===0&&item.cli==='claude'&&item.status==='completed'&&Array.isArray(item.events)&&item.events.some((event)=>event&&typeof event==='object'&&(event as Record<string,unknown>).type==='text'&&String((event as Record<string,unknown>).text??'').trim())&&!runs.some((child)=>child.parentExecutionId===item.id));if(!parent){setError('No completed Claude result has an unused child-task budget. Codex child tasks remain unavailable until a reviewed no-tool mode exists.');return}const type=window.prompt('Task type: analyze, summarize, or critique','critique')?.trim() as 'analyze'|'summarize'|'critique'|undefined;if(!type)return;const instruction=window.prompt('Bounded child instruction','Critique the prior answer for correctness and missing risks.')?.trim();if(!instruction)return;const source=selectedChat.messages.find((item)=>item.id===String(parent.sourceMessageId));if(!source){setError('The parent source message is unavailable.');return}try{await window.waypoint.runChat(workspace.id,selectedChat.id,source.id,'claude',String(parent.securityProfileId),instruction,parent.model?String(parent.model):undefined,String(parent.id),[],type);setNotice(`${type} child task started with the parent profile and a 60-second cap.`);await refresh()}catch(reason){showError(reason);await refresh().catch(showError)}}
   async function remove(kind: 'document' | 'chat' | 'memory', id: string) {
     if (!workspace || !window.confirm(`Delete this ${kind} and its owned local data? This cannot be undone.`)) return;
@@ -1030,7 +1036,7 @@ export function App() {
         )}
         {selectedChat ? (
           <>
-            <section className="transcript" aria-label="Conversation" aria-live="polite">
+            <section ref={transcriptRef} className="transcript" aria-label="Conversation" aria-live="polite" onScroll={(event)=>{const element=event.currentTarget;transcriptFollowingRef.current=shouldFollowChat(element.scrollHeight,element.scrollTop,element.clientHeight)}}>
               {!selectedChat.messages.length && (
                 <div className="empty-chat">
                   <div className="compass">✦</div>
@@ -1044,7 +1050,7 @@ export function App() {
                 <article className={`chat-message ${message.role}`}>
                   <div className="message-role">{message.role === 'assistant' ? <img className="assistant-mark" src={waypointMark} alt="Waypoint" /> : <span>You</span>}</div>
                   <div className="message-content">
-                    <p>{message.body}</p>
+                    {message.role==='assistant'?<ChatMarkdown body={message.body}/>:<p>{message.body}</p>}
                     {attachments.some((item) => item.ownerId === message.id) && (
                       <div className="sent-files">
                         {attachments
@@ -1070,7 +1076,6 @@ export function App() {
             </section>
             <div className="composer-dock">
               <form className="composer" onSubmit={(event) => void runChat(event, selectedChat.id)}>
-                {voiceState!=='off'&&<div className={`voice-transient ${voiceState}`} role="status" aria-live="polite"><span className="voice-pulse"/>{voicePartial||voiceState.replace('_',' ')}</div>}
                 {queued.length > 0 && (
                   <div className="file-queue" aria-label="Queued attachments">
                     {queued.map((item) => (
@@ -1124,9 +1129,10 @@ export function App() {
                       {composerModelChoices.map((model)=><option value={model.id} key={model.id||'default'}>{model.label}</option>)}
                     </select>
                   </div>
-                  <button className="send" aria-label="Send message">
-                    ↑
-                  </button>
+                  <div className="composer-status-actions">
+                    {voiceState!=='off'&&<div className={`voice-transient ${voiceState}`} role="status" aria-live="polite"><span className="voice-pulse"/><span>{voicePartial||voiceState.replace('_',' ')}</span></div>}
+                    <button className="send" aria-label="Send message">↑</button>
+                  </div>
                 </div>
                 <p className="capability-copy">{chatCli==='openrouter'?'Text only · hosted cost · attachments stay local · cancel available.':chatCli === 'codex' ? 'Images and text can be passed to the Codex CLI. PDF and Word stay local.' : 'Text can be passed to Claude. Images, PDF, and Word stay local.'} {chatCli!=='openrouter'&&cliModels.find((item)=>item.provider===chatCli)?.reason}</p>
                 <p className="route-copy" role="status">{chatCli==='openrouter'?`${openRouter?.capability.reason??'OpenRouter status unavailable'} Fallback only at cap to the configured available subscription route.`:routeProposal?.selected?`Route: ${routeProposal.selected} · local signed-in CLI · ${routeProposal.fallbackEnabled?'fallback enabled':'no fallback'} · ${routeProposal.securityProfileId}`:'No eligible local route. Check provider health; fallback remains disabled.'}</p>

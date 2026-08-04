@@ -3,6 +3,7 @@ let currentWorkspaceId: string | undefined;
 
 contextBridge.exposeInMainWorld('waypoint', {
   bootstrap: () => ipcRenderer.invoke('waypoint:bootstrap'),
+  openExternal:(url:string)=>ipcRenderer.invoke('waypoint:open-external',{url}),
   activityCaptureStatus:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-status',{workspaceId}),
   updateActivityCapture:(workspaceId:string,policy:unknown)=>ipcRenderer.invoke('waypoint:activity-capture-update',{workspaceId,policy}),
   listActivitySnapshots:(workspaceId:string,query?:string)=>ipcRenderer.invoke('waypoint:activity-capture-list',{workspaceId,query}),

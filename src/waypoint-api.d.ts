@@ -4,6 +4,7 @@ import type { DiagnosticsReport } from '../electron/core/diagnostics';
 declare global {
   interface Window {
     waypoint: {
+      openExternal(url:string):Promise<{opened:true}>;
       bootstrap(): Promise<{ workspaces: WorkspaceSummary[] }>;
       activityCaptureStatus(workspaceId:string):Promise<{policy:{version:1;enabled:boolean;paused:boolean;retentionDays:90|183|365;syncRaw:boolean;exclusions:string[]};readiness:{available:false;state:string;reason:string;permissionRequired:boolean};storage:{count:number;bytes:number}}>;
       updateActivityCapture(workspaceId:string,policy:{version:1;enabled:boolean;paused:boolean;retentionDays:90|183|365;syncRaw:boolean;exclusions:string[]}):ReturnType<Window['waypoint']['activityCaptureStatus']>;
