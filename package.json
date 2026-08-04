@@ -31,8 +31,9 @@
     "spike:embedding-compare": "tsx spikes/embedding-benchmark-harness.ts",
     "verify:embedding-candidates": "tsx spikes/embedding-benchmark-harness.ts",
     "prepare:fast-voice": "tsx scripts/prepare-fast-voice-assets.ts",
+    "prepare:agent-browser": "tsx scripts/prepare-agent-browser-assets.ts",
     "verify:fast-voice": "npm run prepare:fast-voice && npm run build && tsx scripts/fast-voice-benchmark.ts",
-    "package:dir": "npm run prepare:fast-voice && npm run build && electron-builder --dir --config electron-builder.yml"
+    "package:dir": "npm run prepare:fast-voice && npm run prepare:agent-browser && npm run build && electron-builder --dir --config electron-builder.yml"
   },
   "dependencies": {
     "libsodium-wrappers-sumo": "0.8.4",
@@ -47,10 +48,12 @@
   "devDependencies": {
     "@electron/asar": "3.4.1",
     "@eslint/js": "10.0.1",
+    "@playwright/browser-chromium": "1.62.1",
     "@types/node": "26.1.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
+    "agent-browser": "0.33.2",
     "electron": "43.2.0",
     "electron-builder": "26.15.3",
     "eslint": "10.8.0",

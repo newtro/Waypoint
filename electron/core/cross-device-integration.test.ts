@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { WorkspaceStore } from "./store.js";
+import {remotePolicyDigest} from './cross-device-control.js';
 
 describe("isolated two-store remote job convergence", () => {
   it("returns results, makes controller cancellation dominate, rejects stale epoch, deduplicates, and prevents resurrection after delete", () => {
@@ -19,8 +20,7 @@ describe("isolated two-store remote job convergence", () => {
       worker = new WorkspaceStore(workerPath),
       controllerId = "controller_device_01",
       workerId = "worker_device_00001",
-      requestPolicy = "a".repeat(64),
-      targetPolicy = "b".repeat(64);
+      targetPolicy = remotePolicyDigest('waypoint.workspace_summary');
     controller.configureSyncDevice(workspace.id, controllerId);
     worker.configureSyncDevice(workspace.id, workerId);
     worker.setDeviceControlPolicy(workspace.id, {
@@ -38,7 +38,7 @@ describe("isolated two-store remote job convergence", () => {
         capability: "waypoint.workspace_summary",
         instruction: "Return summary",
         idempotencyKey: "paired_request_0001",
-        profileDigest: requestPolicy,
+        profileDigest: targetPolicy,
         keyEpoch: 4,
         timeoutMs: 60_000,
       }),

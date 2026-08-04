@@ -11,6 +11,8 @@ extraResources:
     to: fast-local
   - from: build/icons/waypoint.png
     to: waypoint.png
+  - from: vendor/browser-staging
+    to: agent-browser
 mac:
   target: dir
   icon: build/icons/waypoint.png

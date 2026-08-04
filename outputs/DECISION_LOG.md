@@ -408,5 +408,17 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Select Vercel Labs `agent-browser` as Waypoint's preferred model-neutral interactive browser backend. Keep Microsoft Playwright CLI solely for deterministic E2E verification and regression traces.
 - Preserve a user-only workspace/device choice between a snapshot of an existing signed-in Chrome profile and a Waypoint-isolated persistent profile. Never extract or display cookies, passwords, tokens, or browser storage secrets.
 - Do not mark the capability available until a pinned native Mac/Windows runtime, browser closure, profile isolation, content/action policies, cancellation, receipts, and hostile-page security tests pass Build-to-Complete. The currently installed 0.9.0 binary is not adopted; current 0.33.2 package metadata has a Node 24 wrapper requirement while Waypoint development uses Node 22, so package closure is an explicit gate.
+
+## 2026-08-04 — Requested features remain tracked through gates
+
+- A requested Waypoint feature may be temporarily fail-closed when a security, compatibility, licensing, hardware, account, or external dependency gate is unresolved, but it is not dropped, removed from the roadmap, or treated as permanently deferred without explicit user authorization.
+- Every unavailable feature retains a named repair path, acceptance evidence still required, and a truthful product state. A bounded preparation slice or unavailable UI is not completion and is not abandonment.
+
+## 2026-08-04 — Agent Browser read/navigation Preview boundary
+
+- Ship the first model-neutral browser capability as a user-controlled **Preview** limited to HTTPS open, bounded snapshot, wait, and close on explicitly configured public domains. Click and form input remain repair-required until Waypoint has explicit action authorization and a protected input channel that does not expose values in process arguments.
+- Browser traffic uses both Agent Browser domain boundaries and a Waypoint-owned loopback CONNECT gate that resolves each requested host and rejects private, loopback, link-local, mapped, documentation, multicast, and other covered non-global addresses. The browser subprocess receives a minimal environment and a per-workspace Waypoint home, never the user's global Agent Browser configuration.
+- Persistent restore is intentionally disabled because Agent Browser 0.33.2 refuses restore together with domain allowlisting. Existing-profile snapshots and safe persistent sessions remain tracked; security controls are not weakened to simulate completion.
+- Global Stop, policy changes, isolated-data clear, and app shutdown must await browser-session closure and revoke the network gate. Browser state is excluded from backup/sync and is removed only after closure is proven.
 - Large experimental assets are installed only through one explicit in-app action or a dedicated full package, with exact size/resource disclosure, pinned hashes, staging/resume/cancel, atomic activation, rollback/removal, and no external shell steps. Fixture manifests prove mechanics before any multi-GB download.
 - Shared measured fields are first-audio, interruption-to-silence, turn-end delay, and readiness/error. Upstream latency claims are evidence for candidate selection, never Waypoint performance claims.
