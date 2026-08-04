@@ -1,0 +1,7 @@
+import path from'node:path'
+import{FastLocalSpeechProcessAdapter}from'../electron/core/fast-local-speech.js'
+const root=path.resolve('vendor/voice/fast-local-staging/kitten'),worker=path.resolve('dist-electron/electron/core/fast-local-speech-worker.js'),adapter=new FastLocalSpeechProcessAdapter(root,worker)
+if(!await adapter.probe())throw new Error('Fast Local production worker readiness probe failed')
+let chunks=0;const metric=await adapter.speak('Waypoint is ready to help. This representative response verifies early local audio before the remaining reply finishes.',()=>chunks++);if(metric.firstAudioMs===undefined||metric.firstAudioMs>1_000||metric.canceled||chunks<2)throw new Error(`Fast Local first-audio gate failed: ${JSON.stringify({...metric,chunks})}`)
+let canceledChunks=0;const cancelStarted=performance.now(),canceled=await adapter.speak('A long cancellation fixture validates that no later synthesis segment survives a hard stop. '.repeat(40),()=>{canceledChunks++;adapter.stop()}),cancelWallMs=performance.now()-cancelStarted;if(!canceled.canceled||canceledChunks!==1||cancelWallMs>1_500)throw new Error(`Fast Local cancellation gate failed: ${JSON.stringify({...canceled,canceledChunks,cancelWallMs})}`)
+console.log(JSON.stringify({schemaVersion:1,engine:'fast_local',runtime:'sherpa-onnx-node@1.13.4',model:'kitten-nano-en-v0.1-fp16',firstPlayableAudioMs:metric.firstAudioMs,turnGenerationMs:metric.generationMs,chunks,cancelWallMs,canceledChunks},null,2))

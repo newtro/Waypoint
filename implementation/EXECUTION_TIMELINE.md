@@ -289,3 +289,11 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Implemented schema-25 preferences, single composer control, transient status, hands-free speech boundary, push-to-talk race handling and accessibility/reduced-motion behavior.
 - Independent review drove repair of preference restoration, immutable target/scope cancellation (including pending permission), and truthful terminal cleanup across early/late failures.
 - Final gate passed 94 files / 433 tests, lint/build, zero dependency vulnerabilities, arm64 package/runtime closure and packaged visual inspection. Final verdict: 0 blocker / 0 high / 0 medium.
+
+## 2026-08-04 — P2 local voice engines Phase B/C
+
+- Audited Pocket, Kokoro, and Kitten archives; rejected Pocket on the exact redistribution gate and Kokoro on measured latency.
+- Bundled pinned sherpa/Kitten assets, implemented isolated synthesis workers plus Web Audio streaming/playback cancellation, and retained the existing Settings-only engine contract.
+- Replaced the remaining live macOS-only STT path with a packaged, isolated sherpa Whisper tiny.en worker shared by macOS and Windows package definitions. Full gate passed 99 suites / 455 tests, lint/build, dependency audit, native arm64 package, real packaged TTS/STT initialization, sub-one-second synthesis, and diff hygiene.
+- Final independent whole-program review: PASS / SHIP, 0 blocker / 0 high / 0 medium / 2 low. Windows runtime/audio hardware and consented acoustic echo/barge-in remain explicit release validations.
+- Verified 684 ms development and 744 ms packaged first audio, hard worker cancellation, 452 tests, lint/build/package/runtime closure, and zero audit vulnerabilities. Windows and consented acoustic validation remain explicit device gates.

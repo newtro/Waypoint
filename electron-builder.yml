@@ -6,6 +6,9 @@ files:
   - dist/**/*
   - dist-electron/electron/**/*
   - dist-electron/spikes/cli-capabilities.js
+extraResources:
+  - from: vendor/voice/fast-local-staging
+    to: fast-local
 mac:
   target: dir
   minimumSystemVersion: '13.3.0'

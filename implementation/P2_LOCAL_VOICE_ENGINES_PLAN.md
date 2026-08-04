@@ -19,7 +19,7 @@ Acceptance:
 
 ## Phase B — Fast Local packaged runtime
 
-Target: pinned sherpa-onnx Node/native runtime with a Pocket TTS int8 model and a reviewed redistribution-safe default English voice, plus the existing bundled Whisper STT initially and sherpa VAD when its acoustic gate passes.
+Target: pinned sherpa-onnx Node/native runtime with a redistribution-safe default English voice and a common packaged Whisper STT model; Pocket TTS remains only a candidate until its exact model/default-voice redistribution terms are unambiguous. The completed gate selected Apache-2.0 Kitten Nano English v0.1 fp16 for TTS and the official MIT Whisper tiny.en int8 sherpa export for STT.
 
 Acceptance:
 

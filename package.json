@@ -30,14 +30,17 @@
     "spike:embeddings": "tsx spikes/embedding-benchmark.ts",
     "spike:embedding-compare": "tsx spikes/embedding-benchmark-harness.ts",
     "verify:embedding-candidates": "tsx spikes/embedding-benchmark-harness.ts",
-    "package:dir": "npm run build && electron-builder --dir --config electron-builder.yml"
+    "prepare:fast-voice": "tsx scripts/prepare-fast-voice-assets.ts",
+    "verify:fast-voice": "npm run prepare:fast-voice && npm run build && tsx scripts/fast-voice-benchmark.ts",
+    "package:dir": "npm run prepare:fast-voice && npm run build && electron-builder --dir --config electron-builder.yml"
   },
   "dependencies": {
     "libsodium-wrappers-sumo": "0.8.4",
     "mammoth": "1.12.0",
     "pdfjs-dist": "6.2.108",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sherpa-onnx-node": "1.13.4"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",

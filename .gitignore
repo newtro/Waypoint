@@ -3,6 +3,7 @@ dist/
 dist-electron/
 dist-preload/
 release/
+vendor/voice/fast-local-staging/
 *.log
 *.tsbuildinfo
 .DS_Store
