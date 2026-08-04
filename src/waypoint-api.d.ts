@@ -367,6 +367,8 @@ declare global {
       transcribeVoice(workspaceId:string,chatId:string,mode:'push_to_talk'|'hands_free',audio:Uint8Array):Promise<{text:string;provider:'whisper.cpp'}>;
       speakVoice(workspaceId:string,chatId:string,turnId:number,text:string):Promise<{speaking:true}>;
       stopVoice(workspaceId:string,chatId:string):Promise<{stopped:true}>;
+      voicePreferences(workspaceId:string):Promise<{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'}>;
+      updateVoicePreferences(workspaceId:string,value:{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'}):Promise<{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'}>;
       onVoiceSpeechState(listener:(event:{workspaceId:string;chatId:string;turnId:number;result:'completed'|'canceled'|'failed'})=>void):()=>void;
       setOpenRouterKey(apiKey:string):Promise<{keyConfigured:true}>;
       removeOpenRouterKey():Promise<{keyConfigured:false}>;

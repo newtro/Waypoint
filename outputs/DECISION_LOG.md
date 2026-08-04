@@ -368,3 +368,9 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 - Populate Codex choices from the installed CLI's machine-readable visible catalog. Since the installed Claude CLI exposes no account-scoped model catalog without a live request, offer only `Claude default (CLI selected)` rather than guessing aliases. Unknown historic values remain visible legacy/custom options.
 - Treat OpenRouter secret presence and paid-request activation as separate facts but expose one unambiguous activation action. It enables both existing gates only after the key is protected, preserves saved/legacy models and caps, and performs no background health or paid request.
 - Persist Codex/Claude model preferences per workspace on the local device and mirror them between Settings and composer. Do not back up or sync them: installed CLI catalogs and availability are device-specific, so transporting a selection could make another device claim an unavailable model. Unknown local values stay visible as legacy/custom until the user changes them.
+
+# 2026-08-04 — P2 voice-chat interaction redesign
+
+- Make voice a single composer action, not a conversation configuration surface. Persist ordinary voice preferences per workspace on the local device and place all configuration/readiness/privacy/diagnostics in Settings.
+- Define hands-free as an explicit session toggle with local speech/silence turn boundaries and automatic listening resume after local TTS. It remains turn-based, not full-duplex; no cloud VAD/STT or raw-audio persistence is introduced.
+- Define push-to-talk as pointer/keyboard hold-and-release. A release that races microphone permission/start is remembered and closes the capture immediately once started; cancel/Stop invalidates the attempt.

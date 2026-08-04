@@ -282,3 +282,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Focused tests/lint/build passed; full 426-test suite, dependency audit, arm64 package closure and packaged synthetic transcription passed.
 - Independent review found the macOS-version truthfulness, package dynamic closure, preference persistence, platform-scoped resources and activation integration gaps. All were repaired; Settings/composer synchronization and strict provider validation were added during final review.
 - Final gate: 93 files / 430 tests, lint/build, zero dependency vulnerabilities, arm64 package/hash/rpath/helper closure, consent-free packaged transcription, isolated and normal-data launches. Final independent verdict: 0 blocker / 0 high / 0 medium / 1 low.
+
+# 2026-08-04 — P2 voice-chat UX redesign
+
+- Audited the rejected packaged interaction and set the compact-control/Settings-only acceptance gate.
+- Implemented schema-25 preferences, single composer control, transient status, hands-free speech boundary, push-to-talk race handling and accessibility/reduced-motion behavior.
+- Independent review drove repair of preference restoration, immutable target/scope cancellation (including pending permission), and truthful terminal cleanup across early/late failures.
+- Final gate passed 94 files / 433 tests, lint/build, zero dependency vulnerabilities, arm64 package/runtime closure and packaged visual inspection. Final verdict: 0 blocker / 0 high / 0 medium.

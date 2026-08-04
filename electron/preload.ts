@@ -328,6 +328,8 @@ contextBridge.exposeInMainWorld('waypoint', {
   cancelOpenRouterRun:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:cancel-openrouter-run',{workspaceId,runId}),
   voiceCapability:()=>ipcRenderer.invoke('waypoint:voice-capability'),
   configureVoiceRuntime:()=>ipcRenderer.invoke('waypoint:voice-configure'),
+  voicePreferences:(workspaceId:string)=>ipcRenderer.invoke('waypoint:voice-preferences',{workspaceId}),
+  updateVoicePreferences:(workspaceId:string,value:{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system'})=>ipcRenderer.invoke('waypoint:voice-update-preferences',{workspaceId,...value}),
   removeVoiceRuntime:()=>ipcRenderer.invoke('waypoint:voice-remove-runtime'),
   transcribeVoice:(workspaceId:string,chatId:string,mode:'push_to_talk'|'hands_free',audio:Uint8Array)=>ipcRenderer.invoke('waypoint:voice-transcribe',{workspaceId,chatId,mode,audio}),
   speakVoice:(workspaceId:string,chatId:string,turnId:number,text:string)=>ipcRenderer.invoke('waypoint:voice-speak',{workspaceId,chatId,turnId,text}),
