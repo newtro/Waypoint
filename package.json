@@ -2,21 +2,43 @@
   "name": "waypoint",
   "version": "0.0.0",
   "private": true,
-  "packageManager": "npm@10.9.2",
+  "packageManager": "npm@12.0.1",
   "engines": {
-    "node": "22.16.x",
-    "npm": "10.9.x"
+    "node": "24.15.x",
+    "npm": "12.0.x"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.15.x",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "12.0.x",
+      "onFail": "error"
+    }
+  },
+  "allowScripts": {
+    "@playwright/browser-chromium@1.62.1": true,
+    "agent-browser@0.33.2": false,
+    "electron-winstaller@5.4.0": false,
+    "esbuild@0.28.1": false,
+    "fsevents@2.3.3": true
   },
   "description": "Personal-first second-brain desktop application",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "build": "tsc -b && tsc -p tsconfig.preload.json && cp dist-preload/preload.js dist-electron/electron/preload.cjs && vite build",
+    "preinstall": "node scripts/enforce-toolchain.mjs",
+    "build": "tsc -b && tsc -p tsconfig.preload.json && node scripts/copy-preload.mjs && vite build",
     "dev": "vite",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:dependencies": "npm audit --audit-level=high && npm run report:dependencies",
+    "verify:dependencies": "npm audit --audit-level=low && npm audit signatures && npm run verify:dependency-policy && npm run verify:malware-advisories && npm run report:dependencies",
+    "verify:dependency-policy": "tsx scripts/dependency-policy.ts",
+    "verify:malware-advisories": "tsx scripts/malware-advisory-check.ts",
     "report:dependencies": "tsx scripts/dependency-report.ts",
     "report:sbom": "npm sbom --sbom-format cyclonedx --omit dev",
     "performance:baseline": "tsx scripts/performance-baseline.ts",

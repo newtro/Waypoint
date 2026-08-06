@@ -1,7 +1,9 @@
 import { closeSync, copyFileSync, existsSync, fsyncSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
+import path from 'node:path'
 import type { ExportArchive } from './types.js'
 import { ARCHIVE_LIMITS } from './limits.js'
+import { syncDirectoryDurably, syncFileDurably } from './durable-fs.js'
 
 const allowedTables = new Set(['documents','revisions','chats','messages','memories','memory_suggestions','commitments','rule_suggestions','rule_suggestion_sources','learned_rules','rule_outcomes','relationships','reflection_runs','reflection_sources','reflection_proposals','reflection_proposal_sources','attachments','document_import_sources','meetings','fixture_playbooks','fixture_playbook_runs','local_trigger_settings','local_events','local_trigger_rules','local_trigger_runs','external_inbound_events','tool_gateway_settings','tool_gateway_receipts','tool_failure_knowledge','provider_usage_receipts','hosted_runs','hosted_run_events','activity_capture_settings','activity_snapshots','device_control_settings','remote_jobs','remote_job_events','activities','tombstones','security_profiles','executions','execution_events'])
 
@@ -65,25 +67,24 @@ export function readBackupReadonly(filePath:string):ExportArchive{return readBac
 
 export type BackupFaultBoundary = 'temporary-durable'|'previous-durable'|'destination-replaced'
 
-function syncFile(filePath:string):void { const descriptor=openSync(filePath,'r');try{fsyncSync(descriptor)}finally{closeSync(descriptor)} }
-function syncDirectory(filePath:string):void { const descriptor=openSync(pathDirectory(filePath),'r');try{fsyncSync(descriptor)}finally{closeSync(descriptor)} }
-function pathDirectory(filePath:string):string { const index=Math.max(filePath.lastIndexOf('/'),filePath.lastIndexOf('\\'));return index<0?'.':filePath.slice(0,index)||'/' }
+function syncFile(filePath:string):void { syncFileDurably(filePath) }
+function syncDirectory(filePath:string):void { syncDirectoryDurably(path.dirname(filePath)) }
 
 export function recoverInterruptedBackup(filePath:string): 'current'|'previous'|'none' {
-  const previousPath=`${filePath}.previous`,directory=pathDirectory(filePath),base=filePath.slice(directory==='/'?1:directory.length+1)
+  const previousPath=`${filePath}.previous`,directory=path.dirname(filePath),base=path.basename(filePath)
   const escapedBase=base.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
   const partialPattern=new RegExp(`^${escapedBase}\\.partial-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,'i')
   const candidates=readdirSync(directory).filter((entry)=>partialPattern.test(entry))
   let currentValid=false,previousValid=false
   if(existsSync(filePath)){try{readBackupFile(filePath);currentValid=true}catch{/* A prior crash may have exposed a damaged destination. */}}
   if(existsSync(previousPath)){try{readBackupFile(previousPath);previousValid=true}catch{/* Never restore an invalid prior copy. */}}
-  const validCandidates=candidates.filter((candidate)=>{try{readBackupFile(`${directory}/${candidate}`);return true}catch{return false}})
+  const validCandidates=candidates.filter((candidate)=>{try{readBackupFile(path.join(directory,candidate));return true}catch{return false}})
   if(!currentValid&&previousValid){
     const recovery=`${filePath}.partial-recovery`;copyFileSync(previousPath,recovery);syncFile(recovery);renameSync(recovery,filePath);syncDirectory(filePath);currentValid=true
   } else if(!currentValid&&!previousValid&&validCandidates.length===1) {
-    renameSync(`${directory}/${validCandidates[0]}`,filePath);syncDirectory(filePath);currentValid=true
+    renameSync(path.join(directory,validCandidates[0]),filePath);syncDirectory(filePath);currentValid=true
   }
-  if(currentValid)for(const candidate of validCandidates)if(existsSync(`${directory}/${candidate}`))rmSync(`${directory}/${candidate}`,{force:true})
+  if(currentValid)for(const candidate of validCandidates){const candidatePath=path.join(directory,candidate);if(existsSync(candidatePath))rmSync(candidatePath,{force:true})}
   return currentValid?(previousValid?'previous':'current'):'none'
 }
 

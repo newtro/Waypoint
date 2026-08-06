@@ -10,7 +10,7 @@ export type VoiceCapability = { stt: { available: boolean; provider: 'whisper.cp
 type Runner = (file: string, args: string[], options: { timeout: number; maxBuffer: number; signal?: AbortSignal }) => Promise<{ stdout: string; stderr: string }>;
 
 const defaultRunner: Runner = (file, args, options) => new Promise((resolve, reject) => execFile(file, args, { timeout: options.timeout, maxBuffer: options.maxBuffer, signal: options.signal, encoding: 'utf8' }, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr })));
-function regular(pathname: string) { const stat = lstatSync(pathname); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('voice_runtime_path_invalid'); return stat; }
+function regular(pathname: string) { const resolved=path.resolve(pathname),parsed=path.parse(resolved),parts=resolved.slice(parsed.root.length).split(path.sep).filter(Boolean);let current=parsed.root,stat=lstatSync(current);for(const[index,part]of parts.entries()){current=path.join(current,part);stat=lstatSync(current);const allowedMacRootAlias=process.platform==='darwin'&&index===0&&['var','tmp','etc'].includes(part);if(stat.isSymbolicLink()&&!allowedMacRootAlias)throw new Error('voice_runtime_path_invalid')}if(!stat.isFile()||stat.isSymbolicLink())throw new Error('voice_runtime_path_invalid');return stat; }
 function digest(pathname: string) { return createHash('sha256').update(readFileSync(pathname)).digest('hex'); }
 
 function supportedMacVersion(version:string){const [major=0,minor=0]=version.split('.').map(Number);return major>13||major===13&&minor>=3}

@@ -82,10 +82,11 @@ For a fuller walkthrough, see [Getting started on macOS](docs/GETTING_STARTED_MA
 
 ### Build from source
 
-Requirements: Node.js 22.16, npm, and a repository checkout. Docker is neither required nor used.
+Requirements: Node.js 24.15, npm 12.0, and a repository checkout. Docker is neither required nor used.
 
 ```sh
-npm install
+# Activate .nvmrc with your Node version manager first (for example: fnm use).
+npm ci
 npm test
 npm run lint
 npm run build
