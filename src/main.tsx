@@ -18,6 +18,7 @@ import{withLegacyModel}from'./provider-model-choices';
 import{nextOpenRouterActivation}from'./openrouter-activation';
 import{shouldFollowChat}from'./chat-scroll';
 import{ChatMarkdown}from'./chat-markdown';
+import{meetingWavSegments}from'./meeting-transcription.js';
 type VoiceMode='push_to_talk'|'hands_free';type VoiceState='off'|'listening'|'transcribing'|'thinking'|'speaking'|'error';
 
 type Chat = Awaited<ReturnType<Window['waypoint']['listChats']>>[number];
@@ -93,7 +94,7 @@ export function App() {
     [recordingMeetingId, setRecordingMeetingId] = useState<string>(),
     [recordingSeconds, setRecordingSeconds] = useState(0),
     [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({}),
-    [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>();
+    [transcriptionCapability, setTranscriptionCapability] = useState<TranscriptionCapability>(),[meetingTranscriptionRun,setMeetingTranscriptionRun]=useState<{runId:string;meetingId:string;completed:number}>();
   const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
     [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),[triggerLab,setTriggerLab]=useState<TriggerLab>(),[webhookChannels,setWebhookChannels]=useState<WebhookChannels>(),[webhookEvents,setWebhookEvents]=useState<WebhookEvent[]>([]);
   const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolFailures,setToolFailures]=useState<ToolFailure[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState(''),[webSearchKey,setWebSearchKeyDraft]=useState('');
@@ -104,9 +105,9 @@ export function App() {
     transcriptRef = useRef<HTMLElement>(null),
     transcriptFollowingRef = useRef(true),
     overlayRef = useRef<HTMLElement>(null),
-    previousFocusRef = useRef<HTMLElement | null>(null);
+    previousFocusRef = useRef<HTMLElement | null>(null),activeWorkspaceRef=useRef<string|undefined>(undefined);activeWorkspaceRef.current=workspace?.id;
   const voiceCaptureRef=useRef(new BrowserPcmCapture()),voiceMonitorRef=useRef(new BrowserSpeechMonitor()),voicePlayerRef=useRef(new BrowserVoicePlayer(undefined,(scope)=>void window.waypoint.voicePlaybackComplete(scope.workspaceId,scope.chatId,scope.turnId),(scope)=>void window.waypoint.voicePlaybackStopped(scope.workspaceId,scope.chatId,scope.turnId))),voiceTurnRef=useRef(0),voiceSubmissionRef=useRef<number|undefined>(undefined),voiceRunRef=useRef<{turn:number;workspaceId?:string;chatId:string;sourceMessageId?:string;runId?:string;spoken?:boolean}|undefined>(undefined),voiceStateRef=useRef<VoiceState>('off'),voicePressReleasedRef=useRef(false),voiceCaptureTargetRef=useRef<{workspaceId:string;chatId:string}|undefined>(undefined),voiceScopeRef=useRef<{workspaceId?:string;chatId?:string}>({});
-  const meetingRecorderRef = useRef<MediaRecorder | undefined>(undefined),
+  const meetingTranscriptionGenerationRef=useRef(0),meetingRecorderRef = useRef<MediaRecorder | undefined>(undefined),
     meetingStreamRef = useRef<MediaStream | undefined>(undefined),
     meetingChunksRef = useRef<Blob[]>([]),
     meetingTimerRef = useRef<number | undefined>(undefined),
@@ -305,6 +306,8 @@ export function App() {
     setMeetings(await window.waypoint.listMeetings(workspace.id));
     setNotice(reviewed ? 'Transcript marked reviewed.' : 'Transcript draft saved locally.');
   }
+  async function transcribeMeeting(meetingId:string){if(!workspace||meetingTranscriptionRun)return;const generation=++meetingTranscriptionGenerationRef.current,origin=workspace.id,{audio}=await window.waypoint.readMeetingAudio(origin,meetingId),context=new AudioContext();let runId:string|undefined,decoded:AudioBuffer|undefined;try{if(audio.byteLength>25*1024*1024)throw new Error('Automatic local transcription currently supports recordings up to 25 MiB and ten minutes; manual transcript review remains available.');decoded=await context.decodeAudioData(audio.buffer.slice(audio.byteOffset,audio.byteOffset+audio.byteLength));const started=await window.waypoint.startMeetingTranscription(origin,meetingId);runId=started.runId;setMeetingTranscriptionRun({runId,meetingId,completed:0});let index=0;for(const wav of meetingWavSegments(decoded)){try{await window.waypoint.transcribeMeetingSegment(origin,meetingId,runId,index,wav)}finally{wav.fill(0)}index++;if(meetingTranscriptionGenerationRef.current===generation)setMeetingTranscriptionRun({runId,meetingId,completed:index})}const result=await window.waypoint.finishMeetingTranscription(origin,meetingId,runId);if(activeWorkspaceRef.current===origin&&meetingTranscriptionGenerationRef.current===generation){setTranscriptDrafts((current)=>({...current,[meetingId]:result.transcript}));setMeetings(await window.waypoint.listMeetings(origin));setNotice(`Local draft created with ${result.provider}. Review speakers and text before saving to knowledge.`)}}catch(reason){if(runId)await window.waypoint.cancelMeetingTranscription(origin,meetingId,runId).catch(()=>undefined);if(activeWorkspaceRef.current===origin&&meetingTranscriptionGenerationRef.current===generation)showError(reason)}finally{if(decoded)for(let channel=0;channel<decoded.numberOfChannels;channel++)decoded.getChannelData(channel).fill(0);await context.close().catch(()=>undefined);if(meetingTranscriptionGenerationRef.current===generation)setMeetingTranscriptionRun(undefined);audio.fill(0)}}
+  async function cancelMeetingTranscription(){if(!workspace||!meetingTranscriptionRun)return;await window.waypoint.cancelMeetingTranscription(workspace.id,meetingTranscriptionRun.meetingId,meetingTranscriptionRun.runId);setNotice('Canceling local meeting transcription; the previous transcript remains unchanged.')}
   async function saveMeetingMemory(meetingId: string) {
     if (!workspace) return;
     await window.waypoint.saveMeetingMemory(workspace.id, meetingId);
@@ -313,6 +316,7 @@ export function App() {
   }
   async function removeMeeting(meetingId: string) {
     if (!workspace || !window.confirm('Permanently delete this local recording, transcript, and source-owned memory?')) return;
+    if(meetingTranscriptionRun?.meetingId===meetingId)await window.waypoint.cancelMeetingTranscription(workspace.id,meetingId,meetingTranscriptionRun.runId);
     await window.waypoint.deleteMeeting(workspace.id, meetingId);
     setMeetings(await window.waypoint.listMeetings(workspace.id));
   }
@@ -1454,6 +1458,7 @@ export function App() {
                           <div className="meeting-actions">
                             <button onClick={() => void playMeeting(item.id).catch(showError)}>Play</button>
                             <button onClick={() => void window.waypoint.exportMeetingAudio(workspace.id, item.id).catch(showError)}>Export audio</button>
+                            {meetingTranscriptionRun?.meetingId===item.id?<button onClick={()=>void cancelMeetingTranscription().catch(showError)}>Cancel transcription ({meetingTranscriptionRun.completed} segments)</button>:<button disabled={!transcriptionCapability?.available||Boolean(meetingTranscriptionRun)} onClick={()=>void transcribeMeeting(item.id)}>Transcribe locally</button>}
                           </div>
                           <textarea
                             aria-label={`Transcript draft for ${item.title}`}

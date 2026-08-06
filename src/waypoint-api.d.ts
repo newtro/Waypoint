@@ -122,13 +122,18 @@ declare global {
       updateMeetingTranscript(workspaceId: string, meetingId: string, transcript: string, reviewed: boolean): Promise<{ ok: true }>;
       saveMeetingMemory(workspaceId: string, meetingId: string): Promise<{ memoryId: string }>;
       deleteMeeting(workspaceId: string, meetingId: string): Promise<{ ok: true }>;
-      readMeetingAudio(workspaceId: string, meetingId: string): Promise<{ mediaType: string; audio: Uint8Array }>;
+      readMeetingAudio(workspaceId: string, meetingId: string): Promise<{ mediaType: string; audio: Uint8Array<ArrayBuffer> }>;
       exportMeetingAudio(workspaceId: string, meetingId: string): Promise<{ canceled: boolean }>;
       meetingTranscriptionCapability(): Promise<{
-        available: false;
+        available: boolean;
         provider: string;
+        speakerDiarization:boolean;
         reason: string;
       }>;
+      startMeetingTranscription(workspaceId:string,meetingId:string):Promise<{runId:string}>;
+      transcribeMeetingSegment(workspaceId:string,meetingId:string,runId:string,index:number,audio:Uint8Array):Promise<{completedSegments:number}>;
+      finishMeetingTranscription(workspaceId:string,meetingId:string,runId:string):Promise<{transcript:string;provider:string}>;
+      cancelMeetingTranscription(workspaceId:string,meetingId:string,runId:string):Promise<{canceled:boolean}>;
       createLocalWebhookFixture(workspaceId:string,eventType:string,idempotencyKey:string,payload:Record<string,string|number|boolean|null>):Promise<{eventId:string}>;
       listLocalTriggerLab(workspaceId:string):Promise<{killSwitch:boolean;authority:{source:string;network:false;publicIngress:false;schedule:false;model:false;externalEffects:false;unattended:false;proposedEffects:0};events:Array<{id:string;eventType:string;occurredAt:string;receivedAt:string;payloadDigest:string;status:'quarantined'}>;rules:Array<{id:string;sourceEventId:string;statement:string;version:number;definitionDigest:string;status:'suggested'|'paused'|'killed';createdAt:string;updatedAt:string;runs:Array<{id:string;status:'dry_run'|'retrying'|'dead_letter';attempt:number;proposedEffects:0;digest:string;createdAt:string}>}>}>;
       approveLocalTriggerRule(workspaceId:string,ruleId:string):Promise<{ok:true}>;

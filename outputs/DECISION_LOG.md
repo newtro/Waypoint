@@ -434,3 +434,10 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Desktop-host setup, bind interface/firewall exposure, certificate/key pin, device enrollment, revocation/rotation, fallback policy, and worker authority are user-only security controls. Ordinary routing preferences may remain shared AI/UI domain settings.
 - Do not expose an unauthenticated LAN HTTP listener. Implementation requires pinned authenticated transport, existing end-to-end workspace encryption, signed requests, replay/size/rate bounds, protected keys, and packaged Mac/Windows hostile-network validation.
 - No VM, DNS, Caddy, PostgreSQL, firewall, or hosted service change is authorized by this decision.
+
+# 2026-08-06 — Bounded zero-friction Meeting Intelligence
+
+- Reuse the already packaged, reviewed Fast Local Whisper tiny.en runtime for local post-meeting English transcription; do not introduce a second download, CLI, cloud service, or credential.
+- Automatic transcription is initially limited to ten minutes / 25 MiB / 48 kHz stereo because Chromium must decode the complete saved recording before it can produce bounded two-minute PCM worker segments. Longer recordings retain the existing manual transcript workflow rather than risking multi-gigabyte renderer memory.
+- Generated text is always an unreviewed draft. Waypoint does not infer speaker identity or claim diarization. Reviewed knowledge creation, source provenance, deletion cascade, backup/restore, and workspace isolation remain unchanged.
+- CrisperWhisper remains an optional high-fidelity meeting benchmark and speaker diarization remains repair-required; neither is dropped or silently activated.
