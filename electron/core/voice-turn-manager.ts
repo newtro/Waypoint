@@ -23,4 +23,5 @@ export class VoiceOperationRegistry{
  finish(workspaceId:string,chatId:string,controller:AbortController){const key=this.key(workspaceId,chatId);if(this.active.get(key)===controller)this.active.delete(key)}
  stop(workspaceId:string,chatId?:string){let count=0;for(const[key,controller]of this.active)if(key.startsWith(`${workspaceId}:`)&&(!chatId||key===this.key(workspaceId,chatId))){controller.abort();this.active.delete(key);count++}return count}
  count(){return this.active.size}
+ countFor(workspaceId:string){let count=0;for(const key of this.active.keys())if(key.startsWith(`${workspaceId}:`))count++;return count}
 }

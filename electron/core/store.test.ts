@@ -19,6 +19,28 @@ const provenance = { provider: 'test', providerVersion: '1', model: 'fixture', m
 const receipt=(profile:ReturnType<WorkspaceStore['listSecurityProfiles']>[number],kind:'root'|'child',prompt:string)=>serializeExecutionBudget(createExecutionBudget({kind,profile,prompt,attachmentCount:0}))
 
 describe('durable local workspace', () => {
+  it('hard-deletes a non-last workspace and its attachment bytes while preserving other workspaces', () => {
+    const { root, store, workspace } = fixture();
+    const disposable = store.createWorkspace('Disposable QA', root);
+    const chat = store.createChat(disposable.id, 'QA chat');
+    const source = path.join(root, 'qa.txt');
+    writeFileSync(source, 'disposable attachment');
+    const attachmentId = store.addAttachment(disposable.id, chat, 'qa.txt', 'text/plain', source);
+    const storedPath = path.join(root, 'attachments', `${attachmentId}-qa.txt`);
+    store.createDocument(disposable.id, 'Disposable indexed note', 'workspace deletion sentinel');
+    const meeting = store.createMeeting(disposable.id, 'Disposable meeting');
+    store.finalizeMeetingAudio(disposable.id, meeting, 'audio/webm', Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1]));
+    const meetingPath = store.meetingAudio(disposable.id, meeting).path;
+    expect(existsSync(storedPath)).toBe(true);
+    expect(existsSync(meetingPath)).toBe(true);
+    expect(store.searchText(disposable.id, 'sentinel')).toHaveLength(1);
+    expect(store.deleteWorkspace(disposable.id)).toMatchObject({ id: disposable.id, name: 'Disposable QA' });
+    expect(store.listWorkspaces()).toEqual([expect.objectContaining({ id: workspace.id })]);
+    expect(existsSync(storedPath)).toBe(false);
+    expect(existsSync(meetingPath)).toBe(false);
+    expect(() => store.deleteWorkspace(workspace.id)).toThrow('at least one workspace');
+    store.close();
+  });
   it('recognizes only durable execution capabilities', () => {
     const { root, store, workspace } = fixture(), other = store.createWorkspace('Other', path.join(root, 'other'))
     const chat = store.createChat(workspace.id, 'Scoped run'), profile = store.listSecurityProfiles(workspace.id)[0]

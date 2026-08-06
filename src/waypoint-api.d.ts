@@ -19,6 +19,7 @@ declare global {
       deleteAllActivitySnapshots(workspaceId:string):Promise<{deleted:number}>;
       purgeExpiredActivitySnapshots(workspaceId:string):Promise<{purged:number}>;
       createWorkspace(name: string): Promise<WorkspaceSummary>;
+      deleteWorkspace(workspaceId: string): Promise<WorkspaceSummary>;
       createDocument(workspaceId: string, title: string, body: string): Promise<{ id: string; revisionId: string }>;
       captureMessageAsDocument(workspaceId: string, messageId: string): Promise<{ id: string; revisionId: string }>;
       updateDocument(workspaceId: string, objectId: string, title: string, body: string): Promise<string>;

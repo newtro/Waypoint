@@ -115,8 +115,11 @@ export class ProtectedSyncVault {
   remove(workspaceId: string): void {
     if (!ID.test(workspaceId)) throw new Error("Invalid workspace identity");
     rmSync(this.path(workspaceId), { force: true });
+    rmSync(`${this.path(workspaceId)}.backup`, { force: true });
     rmSync(this.pendingPath(workspaceId), { force: true });
+    rmSync(`${this.pendingPath(workspaceId)}.backup`, { force: true });
     rmSync(this.hostPath(workspaceId), { force: true });
+    rmSync(`${this.hostPath(workspaceId)}.backup`, { force: true });
   }
   savePending(value: ProtectedPendingEnrollment): void {
     validatePending(value);

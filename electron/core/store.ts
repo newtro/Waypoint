@@ -280,6 +280,30 @@ export class WorkspaceStore {
     return workspace;
   }
 
+  deleteWorkspace(workspaceId: string): WorkspaceSummary {
+    const workspaces = this.listWorkspaces();
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    if (!workspace) throw new Error('Workspace not found');
+    if (workspaces.length <= 1) throw new Error('Waypoint must keep at least one workspace');
+    const files = [
+      ...(this.db.prepare('SELECT relative_path relativePath FROM attachments WHERE workspace_id=?').all(workspaceId) as Array<{ relativePath: string }>).map((row) => this.attachmentPath(row.relativePath)),
+      ...(this.db.prepare('SELECT audio_relative_path relativePath FROM meetings WHERE workspace_id=? AND audio_relative_path IS NOT NULL').all(workspaceId) as Array<{ relativePath: string }>).map((row) => this.meetingAudioPath(row.relativePath)),
+    ];
+    const staged = files.filter(existsSync).map((source) => ({ source, staged: `${source}.deleting-${randomUUID()}` }));
+    try {
+      for (const file of staged) renameSync(file.source, file.staged);
+      this.transaction(() => {
+        this.db.prepare('DELETE FROM search_fts WHERE workspace_id=?').run(workspaceId);
+        this.db.prepare('DELETE FROM workspaces WHERE id=?').run(workspaceId);
+      });
+    } catch (error) {
+      for (const file of staged.reverse()) if (existsSync(file.staged)) renameSync(file.staged, file.source);
+      throw error;
+    }
+    for (const file of staged) try { rmSync(file.staged, { force: true }); } catch { /* startup reconciliation finishes staged cleanup */ }
+    return workspace;
+  }
+
   syncStatus(workspaceId: string): Record<string, unknown> {
     return this.syncJournal.status(workspaceId);
   }

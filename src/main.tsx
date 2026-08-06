@@ -101,6 +101,7 @@ export function App() {
   const[toolSettings,setToolSettings]=useState<ToolSettings>(),[toolReceipts,setToolReceipts]=useState<ToolReceipt[]>([]),[toolFailures,setToolFailures]=useState<ToolFailure[]>([]),[toolCapabilities,setToolCapabilities]=useState<ToolCapabilities>(),[denyDraft,setDenyDraft]=useState(''),[webSearchKey,setWebSearchKeyDraft]=useState('');
   const[rollupSettings,setRollupSettings]=useState<RollupSettings>(),[rollupPreview,setRollupPreview]=useState<Awaited<ReturnType<Window['waypoint']['composeCrossWorkspaceRollup']>>>();
   const[openRouter,setOpenRouter]=useState<OpenRouterStatus>(),[openRouterKey,setOpenRouterKeyDraft]=useState('');
+  const [workspaceDialog, setWorkspaceDialog] = useState<'create'|'delete'>(), [workspaceNameDraft, setWorkspaceNameDraft] = useState('');
   const[voiceCapability,setVoiceCapability]=useState<VoiceCapability>(),[voiceEngineStatus,setVoiceEngineStatus]=useState<VoiceEngineStatus>(),[voiceEngine,setVoiceEngine]=useState<'fast_local'|'full_duplex_experimental'>('fast_local'),[voiceSessionActive,setVoiceSessionActive]=useState(false),[voiceState,setVoiceState]=useState<VoiceState>('off'),[voiceMode,setVoiceMode]=useState<VoiceMode>('push_to_talk'),[voiceDevice,setVoiceDevice]=useState(''),[voiceDevices,setVoiceDevices]=useState<MediaDeviceInfo[]>([]),[voicePartial,setVoicePartial]=useState('');
   const refreshGate = useRef(new RefreshGate()),routeGate=useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
@@ -108,6 +109,7 @@ export function App() {
     transcriptFollowingRef = useRef(true),
     overlayRef = useRef<HTMLElement>(null),
     previousFocusRef = useRef<HTMLElement | null>(null),activeWorkspaceRef=useRef<string|undefined>(undefined);activeWorkspaceRef.current=workspace?.id;
+  const workspaceDialogRef = useRef<HTMLElement>(null), workspaceDialogOpenerRef = useRef<HTMLElement | null>(null);
   const voiceCaptureRef=useRef(new BrowserPcmCapture()),voiceMonitorRef=useRef(new BrowserSpeechMonitor()),voicePlayerRef=useRef(new BrowserVoicePlayer(undefined,(scope)=>void window.waypoint.voicePlaybackComplete(scope.workspaceId,scope.chatId,scope.turnId),(scope)=>void window.waypoint.voicePlaybackStopped(scope.workspaceId,scope.chatId,scope.turnId))),voiceTurnRef=useRef(0),voiceSubmissionRef=useRef<number|undefined>(undefined),voiceRunRef=useRef<{turn:number;workspaceId?:string;chatId:string;sourceMessageId?:string;runId?:string;spoken?:boolean}|undefined>(undefined),voiceStateRef=useRef<VoiceState>('off'),voicePressReleasedRef=useRef(false),voiceCaptureTargetRef=useRef<{workspaceId:string;chatId:string}|undefined>(undefined),voiceScopeRef=useRef<{workspaceId?:string;chatId?:string}>({});
   const meetingTranscriptionGenerationRef=useRef(0),meetingRecorderRef = useRef<MediaRecorder | undefined>(undefined),
     meetingStreamRef = useRef<MediaStream | undefined>(undefined),
@@ -475,6 +477,22 @@ export function App() {
       previousFocusRef.current?.focus();
     };
   }, [drawer, sidebarOpen]);
+  useEffect(() => {
+    if (!workspaceDialog) return;
+    workspaceDialogOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = workspaceDialogRef.current;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setWorkspaceDialog(undefined); return; }
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled])')];
+      if (!items.length) return;
+      const first = items[0], last = items.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); window.setTimeout(() => workspaceDialogOpenerRef.current?.focus(), 0); };
+  }, [workspaceDialog]);
 
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -485,6 +503,27 @@ export function App() {
     } catch (reason) {
       showError(reason);
     }
+  }
+  async function addWorkspace(name: string) {
+    if (!name.trim()) return;
+    try {
+      const created = await window.waypoint.createWorkspace(name);
+      await selectWorkspace(created);
+      setWorkspaces((await window.waypoint.bootstrap()).workspaces);
+      setNotice(`Workspace “${created.name}” created.`);
+      setWorkspaceDialog(undefined); setWorkspaceNameDraft('');
+    } catch (reason) { showError(reason); }
+  }
+  async function removeWorkspace() {
+    if (!workspace || workspaces.length <= 1) return;
+    try {
+      await window.waypoint.deleteWorkspace(workspace.id);
+      const remaining = (await window.waypoint.bootstrap()).workspaces;
+      setWorkspaces(remaining);
+      await selectWorkspace(remaining[0]);
+      setNotice(`Workspace “${workspace.name}” permanently deleted.`);
+      setWorkspaceDialog(undefined);
+    } catch (reason) { showError(reason); }
   }
   async function beginNewChat() {
     if (!workspace) return;
@@ -1007,8 +1046,17 @@ export function App() {
           <small>
             <i /> Local only
           </small>
+          <div className="workspace-actions">
+            <button type="button" onClick={() => { setWorkspaceNameDraft(''); setWorkspaceDialog('create'); }} aria-label="Create a new workspace">+ New workspace</button>
+            <button type="button" className="danger" disabled={workspaces.length <= 1 || Boolean(recordingMeetingId) || voiceSessionActive || voiceState!=='off'} onClick={() => setWorkspaceDialog('delete')} aria-label={`Delete workspace ${workspace.name}`}>Delete</button>
+          </div>
         </div>
       </aside>
+
+      {workspaceDialog && <div className="workspace-dialog-scrim" role="presentation"><section ref={workspaceDialogRef} className="workspace-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-dialog-title">
+        <h2 id="workspace-dialog-title">{workspaceDialog==='create'?'Create workspace':`Delete “${workspace.name}”?`}</h2>
+        {workspaceDialog==='create'?<form onSubmit={(event)=>{event.preventDefault();void addWorkspace(workspaceNameDraft)}}><label>Workspace name<input autoFocus required maxLength={120} value={workspaceNameDraft} onChange={(event)=>setWorkspaceNameDraft(event.target.value)} /></label><div><button type="button" onClick={()=>setWorkspaceDialog(undefined)}>Cancel</button><button type="submit">Create workspace</button></div></form>:<><p>Permanently delete this workspace and all of its chats, knowledge, attachments, settings, and history? This cannot be undone.</p><div><button autoFocus type="button" onClick={()=>setWorkspaceDialog(undefined)}>Cancel</button><button type="button" className="danger" onClick={()=>void removeWorkspace()}>Permanently delete</button></div></>}
+      </section></div>}
 
       <main className="chat-main">
         <header className="chat-header">

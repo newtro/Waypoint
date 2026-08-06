@@ -45,6 +45,7 @@ import{ControlledWebTools}from'./core/web-tools.js';
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
 let syncService: DesktopSyncService;
+let syncVault: ProtectedSyncVault;
 let peerHostRuntime:PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
 const syncAbort = new AbortController();
@@ -262,6 +263,24 @@ function registerIpc(): void {
     const name = text((input as { name?: unknown })?.name, 'workspace name', 120).trim();
     if (!name) throw new Error('Workspace name is required');
     return store.createWorkspace(name, app.getPath('userData'));
+  });
+  handle('waypoint:delete-workspace', async (_event, input: unknown) => {
+    const workspaceId = text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64);
+    const workspaces = store.listWorkspaces();
+    if (!workspaces.some((item) => item.id === workspaceId)) throw new Error('Workspace not found');
+    if (workspaces.length <= 1) throw new Error('Waypoint must keep at least one workspace');
+    if ([...activeDocumentIndexes].some((key) => key.startsWith(`${workspaceId}:`))) throw new Error('Wait for document indexing to finish before deleting this workspace');
+    if (activeSyncRuns.has(workspaceId) || activeReflectionRuns.has(workspaceId) || [...activeHostedRuns.values()].some((run) => run.workspaceId === workspaceId) || [...meetingTranscriptionRuns.values()].some((run) => run.workspaceId === workspaceId) || [...activeRemoteExecutions.values()].some((run) => run.workspaceId === workspaceId) || store.listExecutions(workspaceId).some((run) => run.status === 'running') || store.listToolReceipts(workspaceId).some((run) => run.status === 'running') || voiceOperations.countFor(workspaceId) > 0 || voiceSpeechOwner?.workspaceId === workspaceId) throw new Error('Stop active workspace operations before deleting this workspace');
+    const browserClosed = await toolGateway.stopAndCloseBrowser(workspaceId, gatewayPolicy(workspaceId));
+    if (!browserClosed && browserClosure) throw new Error('Close the active browser session before deleting this workspace');
+    voiceOperations.stop(workspaceId);
+    if (voiceSpeechOwner?.workspaceId === workspaceId) { fastVoiceSpeech.stop(); voiceSpeechOwner = undefined; }
+    const capture = store.activityCapturePolicy(workspaceId); if (capture.enabled && !capture.paused) store.setActivityCapturePolicy(workspaceId, { ...capture, paused: true });
+    if (peerHostRuntime.status().workspaceId === workspaceId) await peerHostRuntime.stop();
+    const workspace = store.deleteWorkspace(workspaceId);
+    try { syncVault.remove(workspaceId); } catch { console.warn('Workspace deleted, but protected sync residue requires maintenance cleanup'); }
+    for (const root of ['browser-sessions','peer-host']) try { rmSync(path.join(app.getPath('userData'), root, workspaceId), { recursive: true, force: true }); } catch { console.warn(`Workspace deleted, but ${root} residue requires maintenance cleanup`); }
+    return workspace;
   });
   handle('waypoint:create-document', (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
@@ -1091,6 +1110,7 @@ else {
       encrypt: (value) => safeStorage.encryptString(value),
       decrypt: (value) => safeStorage.decryptString(Buffer.from(value)),
     });
+    syncVault = vault;
     toolGateway=new ToolGateway({domain:async(workspaceId,command,input,origin)=>{if(command==='rollup.compose'){const requested=Array.isArray(input.families)?input.families.map(String).filter((item):item is 'commitments'|'meetings'|'briefing_status'=>['commitments','meetings','briefing_status'].includes(item)):undefined;return{value:store.composeCrossWorkspaceRollup(workspaceId,requested,true),summary:'Composed an explicitly granted cross-workspace roll-up'}};if(command==='workspace.summary')return{value:{workspace:store.listWorkspaces().find((item)=>item.id===workspaceId),chats:store.listChats(workspaceId).length,documents:store.listDocuments(workspaceId).length,memories:store.listMemories(workspaceId).length},summary:'Read workspace summary'};if(command==='chat.create'){const id=store.createChat(workspaceId,text(input.title,'chat title',300));return{value:{chatId:id},summary:'Created chat',rollbackRef:`delete:chat:${id}`}}if(command==='memory.create'){const id=store.createMemory(workspaceId,text(input.title,'memory title',300),text(input.body,'memory body',10_000));return{value:{memoryId:id},summary:'Created memory',rollbackRef:`delete:memory:${id}`}}if(command==='provider.preferences.update'){const current=store.openRouterSettings(),next=store.setOpenRouterSettings({...current,strategicModel:input.strategicModel===undefined?current.strategicModel:text(input.strategicModel,'strategic model ID',200),everydayModel:input.everydayModel===undefined?current.everydayModel:text(input.everydayModel,'everyday model ID',200),fallbackProvider:['codex','claude'].includes(String(input.fallbackProvider))?input.fallbackProvider as 'codex'|'claude':current.fallbackProvider,monthlyCapMicros:input.monthlyCapMicros===undefined?current.monthlyCapMicros:Number(input.monthlyCapMicros),ytdCapMicros:input.ytdCapMicros===undefined?current.ytdCapMicros:Number(input.ytdCapMicros),warningPercent:input.warningPercent===undefined?current.warningPercent:Number(input.warningPercent)});return{value:{...next,enabled:undefined,liveRequestsEnabled:undefined},summary:'Updated non-security provider preferences'}}throw new Error(origin==='ai'?'tool_domain_command_unavailable':'Unknown domain command')},progress:(event)=>{for(const window of BrowserWindow.getAllWindows())if(toolWindowWorkspaces.get(window.webContents.id)===event.workspaceId)window.webContents.send('waypoint:tool-gateway-progress',event)},complete:(result)=>{store.saveToolReceipt(result.receipt)},preflight:(request)=>{const material=toolFailureKeyFor(request.workspaceId,vault);return store.findToolFailure(request.workspaceId,failureIdentity(material.key,request,material.capabilityVersion,localFailureContext()))},learn:(request,result,overrideReason,remediation)=>{const material=toolFailureKeyFor(request.workspaceId,vault);store.recordToolOutcome(request,failureIdentity(material.key,request,material.capabilityVersion,localFailureContext()),result,safeFailureNote(overrideReason),safeFailureNote(remediation))}})
     toolGateway.configureWeb(async(request,signal)=>{if(request.tool==='web.fetch'){const result=await controlledWebTools.fetchPage({url:text(request.arguments.url,'web URL',2048),signal});return{output:result.output,summary:result.summary,value:{sourceUrls:result.sourceUrls,contentType:result.contentType,status:result.status}}}const result=await controlledWebTools.search({query:text(request.arguments.query,'web search query',500),count:request.arguments.count===undefined?5:Number(request.arguments.count),apiKey:webSearchVault.getKey(),signal});return{output:result.output,summary:result.summary,value:{sourceUrls:result.sourceUrls}}})
     peerHostRuntime=new PeerHostRuntime(path.join(app.getPath('userData'),'peer-host'),vault);

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('waypoint', {
   deleteAllActivitySnapshots:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-delete-all',{workspaceId}),
   purgeExpiredActivitySnapshots:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-purge',{workspaceId}),
   createWorkspace: (name: string) => ipcRenderer.invoke('waypoint:create-workspace', { name }),
+  deleteWorkspace: (workspaceId: string) => ipcRenderer.invoke('waypoint:delete-workspace', { workspaceId }),
   createDocument: (workspaceId: string, title: string, body: string) =>
     ipcRenderer.invoke('waypoint:create-document', {
       workspaceId,
