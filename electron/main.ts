@@ -22,6 +22,7 @@ import { ATTACHMENT_MEDIA_BY_EXTENSION, MAX_ATTACHMENTS_PER_OWNER, readAndValida
 import { isEffectivelyMaximized, restoreWindowState, type SavedWindowState, type WindowBounds } from './core/window-state.js';
 import { ProtectedSyncVault } from './core/sync/protected-sync-vault.js';
 import { DesktopSyncService } from './core/sync/desktop-sync-service.js';
+import { PeerHostRuntime } from './core/sync/peer-host-runtime.js';
 import { recordSyncActivityBestEffort } from './core/activity-recording.js';
 import { assertRoute, proposeRoute } from './core/provider-routing.js';
 import {assertChildAgainstParent,childContext,createChildTask,type ChildTaskManifest} from './core/agent-policy.js';
@@ -44,6 +45,7 @@ import{ControlledWebTools}from'./core/web-tools.js';
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
 let syncService: DesktopSyncService;
+let peerHostRuntime:PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
 const syncAbort = new AbortController();
 let trustedSenderId: number | undefined;
@@ -276,6 +278,8 @@ function registerIpc(): void {
   handle('waypoint:rollback-document-index',(_event,input:unknown)=>{const value=input as Record<string,unknown>;return store.rollbackDocumentIndex(text(value.workspaceId,'workspace ID',64),text(value.documentId,'document ID',64))});
   handle('waypoint:sync-status', (_event, input: unknown) => sanitizeSyncStatus(store.syncStatus(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64))));
   handle('waypoint:desktop-sync-status', (_event, input: unknown) => syncService.status(text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64)));
+  handle('waypoint:desktop-sync-host-start',async(_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>).workspaceId,'workspace ID',64),confirmation=await dialog.showMessageBox({type:'warning',buttons:['Host on this device','Cancel'],defaultId:1,cancelId:1,message:'Host encrypted peer sync on this device?',detail:'Waypoint will listen on your local network. Enrolled peers can connect while this app is awake and running. Public webhooks and offline relay delivery still require the optional hosted relay.'});if(confirmation.response!==0)return{canceled:true};return{canceled:false,...await syncService.startPeerHost(workspaceId)}});
+  handle('waypoint:desktop-sync-host-stop',async(_event,input:unknown)=>syncService.stopPeerHost(text((input as Record<string,unknown>).workspaceId,'workspace ID',64)));
   handle('waypoint:desktop-sync-initialize', async (_event, input: unknown) => {
     const workspaceId = text((input as Record<string, unknown>).workspaceId, 'workspace ID', 64);
     if (!store.listWorkspaces().some((item) => item.id === workspaceId)) throw new Error('Workspace not found');
@@ -285,7 +289,7 @@ function registerIpc(): void {
       defaultId: 1,
       cancelId: 1,
       message: 'Set up this Mac as the first sync owner?',
-      detail: 'This creates local protected keys. An authorized operator must register the displayed public bootstrap bundle before sync connects.',
+      detail: 'This creates local protected keys. Next, host directly on this device or explicitly configure the optional hosted relay.',
     });
     if (confirmation.response !== 0) return { canceled: true };
     const bootstrap = syncService.initializeOwner(workspaceId);
@@ -1084,7 +1088,8 @@ else {
     });
     toolGateway=new ToolGateway({domain:async(workspaceId,command,input,origin)=>{if(command==='workspace.summary')return{value:{workspace:store.listWorkspaces().find((item)=>item.id===workspaceId),chats:store.listChats(workspaceId).length,documents:store.listDocuments(workspaceId).length,memories:store.listMemories(workspaceId).length},summary:'Read workspace summary'};if(command==='chat.create'){const id=store.createChat(workspaceId,text(input.title,'chat title',300));return{value:{chatId:id},summary:'Created chat',rollbackRef:`delete:chat:${id}`}}if(command==='memory.create'){const id=store.createMemory(workspaceId,text(input.title,'memory title',300),text(input.body,'memory body',10_000));return{value:{memoryId:id},summary:'Created memory',rollbackRef:`delete:memory:${id}`}}if(command==='provider.preferences.update'){const current=store.openRouterSettings(),next=store.setOpenRouterSettings({...current,strategicModel:input.strategicModel===undefined?current.strategicModel:text(input.strategicModel,'strategic model ID',200),everydayModel:input.everydayModel===undefined?current.everydayModel:text(input.everydayModel,'everyday model ID',200),fallbackProvider:['codex','claude'].includes(String(input.fallbackProvider))?input.fallbackProvider as 'codex'|'claude':current.fallbackProvider,monthlyCapMicros:input.monthlyCapMicros===undefined?current.monthlyCapMicros:Number(input.monthlyCapMicros),ytdCapMicros:input.ytdCapMicros===undefined?current.ytdCapMicros:Number(input.ytdCapMicros),warningPercent:input.warningPercent===undefined?current.warningPercent:Number(input.warningPercent)});return{value:{...next,enabled:undefined,liveRequestsEnabled:undefined},summary:'Updated non-security provider preferences'}}throw new Error(origin==='ai'?'tool_domain_command_unavailable':'Unknown domain command')},progress:(event)=>{for(const window of BrowserWindow.getAllWindows())if(toolWindowWorkspaces.get(window.webContents.id)===event.workspaceId)window.webContents.send('waypoint:tool-gateway-progress',event)},complete:(result)=>{store.saveToolReceipt(result.receipt)},preflight:(request)=>{const material=toolFailureKeyFor(request.workspaceId,vault);return store.findToolFailure(request.workspaceId,failureIdentity(material.key,request,material.capabilityVersion,localFailureContext()))},learn:(request,result,overrideReason,remediation)=>{const material=toolFailureKeyFor(request.workspaceId,vault);store.recordToolOutcome(request,failureIdentity(material.key,request,material.capabilityVersion,localFailureContext()),result,safeFailureNote(overrideReason),safeFailureNote(remediation))}})
     toolGateway.configureWeb(async(request,signal)=>{if(request.tool==='web.fetch'){const result=await controlledWebTools.fetchPage({url:text(request.arguments.url,'web URL',2048),signal});return{output:result.output,summary:result.summary,value:{sourceUrls:result.sourceUrls,contentType:result.contentType,status:result.status}}}const result=await controlledWebTools.search({query:text(request.arguments.query,'web search query',500),count:request.arguments.count===undefined?5:Number(request.arguments.count),apiKey:webSearchVault.getKey(),signal});return{output:result.output,summary:result.summary,value:{sourceUrls:result.sourceUrls}}})
-    void DesktopSyncService.create(vault)
+    peerHostRuntime=new PeerHostRuntime(path.join(app.getPath('userData'),'peer-host'),vault);
+    void DesktopSyncService.create(vault,peerHostRuntime)
       .then((service) => {
         syncService = service;
         registerIpc();
@@ -1127,7 +1132,7 @@ else {
     shutdownStarted = true;
     syncAbort.abort();
     const browserShutdown=Promise.all((store?.listWorkspaces()??[]).map((workspace)=>toolGateway.stopAndCloseBrowser(workspace.id,gatewayPolicy(workspace.id))))
-    void Promise.allSettled([workbench.shutdown(),browserShutdown]).finally(() => {
+    void Promise.allSettled([workbench.shutdown(),browserShutdown,peerHostRuntime?.stop()]).finally(() => {
       store?.close();
       app.exit(0);
     });

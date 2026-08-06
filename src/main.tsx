@@ -132,7 +132,7 @@ export function App() {
   async function changeComposerModel(value:string){if(chatCli==='openrouter'){if(!openRouter)return;const next={...openRouter.settings,everydayModel:value};setOpenRouter({...openRouter,settings:next});await window.waypoint.updateOpenRouterSettings(next);await refreshOpenRouter();return}if(!workspace)return;setChatModels(await window.waypoint.setChatModelPreference(workspace.id,chatCli,value))}
   async function openAutomations() {
     if (!workspace) return;
-    const[nextPlaybooks,nextLab,nextSync]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id),window.waypoint.desktopSyncStatus(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);if(nextSync.configured){const[channels,events]=await Promise.all([window.waypoint.webhookChannels(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]);setWebhookChannels(channels);setWebhookEvents(events)}else{setWebhookChannels(undefined);setWebhookEvents([])}
+    const[nextPlaybooks,nextLab,nextSync]=await Promise.all([window.waypoint.listFixturePlaybooks(workspace.id),window.waypoint.listLocalTriggerLab(workspace.id),window.waypoint.desktopSyncStatus(workspace.id)]);setPlaybooks(nextPlaybooks);setTriggerLab(nextLab);if(nextSync.configured&&nextSync.transportMode==='hosted-relay'){const[channels,events]=await Promise.all([window.waypoint.webhookChannels(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]);setWebhookChannels(channels);setWebhookEvents(events)}else{setWebhookChannels(undefined);setWebhookEvents([]);if(nextSync.configured)setNotice('Public inbound webhooks require the optional hosted relay. Direct desktop hosting remains available for peer sync and agent control.')}
     setSidebarOpen(false);
     setDrawer('automations');
   }
@@ -780,7 +780,7 @@ export function App() {
       const result = await window.waypoint.initializeDesktopSync(workspace.id);
       if (result.bootstrap) {
         setBootstrapBundle(JSON.stringify(result.bootstrap));
-        setNotice('Protected owner identity created. Register the public bootstrap bundle on the relay, then refresh.');
+        setNotice('Protected owner identity created. Host on this device for direct peer sync, or explicitly configure the optional hosted relay.');
       }
       await refresh();
     } catch (reason) {
@@ -1600,11 +1600,11 @@ export function App() {
                 </section>
                 <section>
                   <h3>Secure device sync</h3>
-                  <p className="drawer-intro">End-to-end encrypted through the pinned Waypoint relay. Keys stay in protected storage on each device.</p>
+                  <p className="drawer-intro">End-to-end encrypted directly through a desktop host or through the optional Waypoint relay. Keys stay in protected storage on each device.</p>
                   <dl className="settings-list">
                     <div>
-                      <dt>Relay</dt>
-                      <dd>{desktopSync?.configured ? 'Connected identity' : desktopSync?.pendingEnrollment ? 'Approval pending' : 'Not configured'}</dd>
+                      <dt>Transport</dt>
+                      <dd>{desktopSync?.configured?desktopSync.transportMode==='desktop-host'?(desktopSync.peerHost?.running?'Desktop host running':'Desktop host offline'):'Optional hosted relay':desktopSync?.pendingEnrollment?'Approval pending':'Not configured'}</dd>
                     </div>
                     <div>
                       <dt>Key epoch</dt>
@@ -1640,6 +1640,7 @@ export function App() {
                   {desktopSync?.configured && (
                     <>
                       <div className="drawer-actions">
+                        {desktopSync.peerHost?.running?<button className="secondary" onClick={()=>workspace&&void window.waypoint.stopDesktopSyncHost(workspace.id).then(()=>refresh()).catch(showError)}>Stop desktop host</button>:<button onClick={()=>workspace&&void window.waypoint.startDesktopSyncHost(workspace.id).then(()=>refresh()).catch(showError)}>Host on this device</button>}
                         <button onClick={() => void invitePeer()}>Invite device</button>
                         {desktopSync.rotationTargetEpoch && (
                           <button
@@ -1656,6 +1657,8 @@ export function App() {
                           </button>
                         )}
                       </div>
+                      <p className="settings-help">{desktopSync.peerHost?.reason??'Desktop hosting is stopped. The hosted relay remains optional for public webhooks, all-peers-offline delivery, and remote reachability.'}</p>
+                      {desktopSync.peerHost?.running&&<p className="settings-help">Endpoint {desktopSync.peerHost.endpoint} · certificate {desktopSync.peerHost.fingerprintSha256?.slice(0,16)}…</p>}
                       {pendingPeers.map((item) => (
                         <article className="provider-row" key={item.requestId}>
                           <span>

@@ -65,6 +65,7 @@
     "react-dom": "19.2.8",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
+    "selfsigned": "3.0.1",
     "sherpa-onnx-node": "1.13.4"
   },
   "devDependencies": {

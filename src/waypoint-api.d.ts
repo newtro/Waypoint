@@ -43,7 +43,11 @@ declare global {
         keyEpoch: number;
         rotationTargetEpoch?: number;
         endpoint: string;
+        transportMode:'hosted-relay'|'desktop-host';
+        peerHost?:{running:boolean;mode:'desktop-host';endpoint?:string;reason:string;startedAt?:string;fingerprintSha256?:string;workspaceId?:string;identityRotated?:boolean};
       }>;
+      startDesktopSyncHost(workspaceId:string):Promise<{canceled:boolean;running?:boolean;endpoint?:string;reason?:string}>;
+      stopDesktopSyncHost(workspaceId:string):Promise<{running:boolean;mode:'desktop-host';endpoint?:string;reason:string}>;
       initializeDesktopSync(workspaceId: string): Promise<{
         canceled: boolean;
         bootstrap?: {

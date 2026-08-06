@@ -89,14 +89,20 @@ Authority gates: macOS screen-recording permission is per-device and explicit. W
 
 Add a product flow for choosing **this device**, an explicit preferred trusted peer, or **automatic eligible device**. Routing policy considers online health, model/tool capability, free memory/storage, workspace data policy, security profile, cost class, and user preference. Every remote command uses a target-issued finite lease bound to workspace, execution, profile digest, capability set, epoch, expiry, and cancellation channel. Failover is off by default and never crosses provider/device/data policy silently.
 
+The primary topology is **desktop peer-host mode**: one explicitly selected Waypoint desktop hosts the workspace control plane and enrolled clients connect directly on the local network or through a user-authorized direct route. The Ubuntu relay remains shipped and supported as an optional transport, not a mandatory third component. It is required only for public inbound webhooks, store-and-forward delivery while all desktops are offline, or remote reachability when no direct path exists. Ordinary local chat, knowledge, voice, capture, meetings, tools, and single-device operation never depend on either host or relay.
+
 Acceptance:
 
 - Device picker/status shows why eligible/ineligible, preferred device, lease/queue/run state, route explanation, expected fallback, cancel/revoke, and target-local approval requirements.
+- Host setup is explicit and user-only. It creates a protected host identity, a certificate/public-key pin, bounded listen policy, one-time authenticated enrollment invitation, and a visible endpoint/fingerprint/expiry. No listener starts on app launch merely because sync exists.
+- Direct transport authenticates both enrolled devices, pins host identity, preserves existing end-to-end workspace encryption and signed requests, rejects private-key export, and applies the same revocation, epoch rotation, nonce/replay, quota, size, and workspace isolation rules as the relay path.
+- Status distinguishes `local host`, `direct peer`, `optional relay`, `host asleep/offline`, `direct path unavailable`, and `relay not configured`. Automatic relay fallback is off unless the user enables it for that workspace; fallback never changes data, agent, provider, or tool authority.
+- Host sleep/quit/network change closes reachability truthfully. Clients remain useful locally, queue bounded encrypted changes, and show that delivery waits for the host or an explicitly configured relay; they never claim online convergence.
 - Local simulator proves lease issue/renew/expiry/replay/revocation, duplicate commands, target restart, lost response, offline queue, preferred-device recovery, safe failover/no-failover, cancellation, attachment resumption, and content-minimized audit.
 - Target device revalidates profile, roots, tools, model, secrets, budgets, workspace epoch, and current revocation; relay/client cannot widen authority.
 - Peer embedding work uses the same policy boundary: capability/memory/availability/workspace permission/preference select the worker, provenance identifies device/runtime/model, and local fallback or explicit unavailable state is deterministic.
 
-Activation gate: real peer execution waits for V1 convergence/security evidence and explicit user approval of eligible devices, fallback, leases, unattended categories, and data transfer. Physical two-Mac and Mac↔Windows runs remain required before release claims.
+Activation gate: LAN/direct listener availability requires a reviewed native TLS/certificate-pinning implementation, firewall/bind-address UX, hostile-LAN tests, sleep/network-change recovery, and packaged Mac/Windows closure. Real peer execution then waits for V1 convergence/security evidence and explicit user approval of eligible devices, fallback, leases, unattended categories, and data transfer. Physical two-Mac and Mac↔Windows runs remain required before release claims. The optional hosted relay is not a prerequisite for direct-mode implementation or testing.
 
 ## P6 — multi-provider/model and multi-agent orchestration
 

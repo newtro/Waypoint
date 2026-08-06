@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('waypoint', {
   rollbackDocumentIndex:(workspaceId:string,documentId:string)=>ipcRenderer.invoke('waypoint:rollback-document-index',{workspaceId,documentId}),
   syncStatus: (workspaceId: string) => ipcRenderer.invoke('waypoint:sync-status', { workspaceId }),
   desktopSyncStatus: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-status', { workspaceId }),
+  startDesktopSyncHost:(workspaceId:string)=>ipcRenderer.invoke('waypoint:desktop-sync-host-start',{workspaceId}),
+  stopDesktopSyncHost:(workspaceId:string)=>ipcRenderer.invoke('waypoint:desktop-sync-host-stop',{workspaceId}),
   initializeDesktopSync: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-initialize', { workspaceId }),
   createSyncInvitation: (workspaceId: string) =>
     ipcRenderer.invoke('waypoint:desktop-sync-create-invitation', {

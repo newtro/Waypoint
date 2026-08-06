@@ -425,3 +425,12 @@ When a decision changes, record the date, prior choice, new choice, reason, and 
 # 2026-08-04 — Controlled web tools are explicit, bounded external capabilities
 
 Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-main Tool Gateway. Search uses a user-supplied Brave Search API key stored only with OS protected storage; fetch is public HTTPS only. Both default off per workspace, label remote text as untrusted, preserve explicit source URLs, and share receipts, cancellation, global stop, failure learning, backup/sync lifecycle, and hard deletion. Private networks, credentials, arbitrary schemes/ports, unsafe redirects/MIME types, and unbounded bodies fail closed. No background health call or silent external request is permitted.
+
+# 2026-08-06 — Desktop peer-host is primary; Ubuntu relay is optional
+
+- One explicitly configured Waypoint desktop may host enrollment, device presence, encrypted sync transport, and cross-device agent control for trusted peers. The common Mac-host/Windows-client topology must not require a third always-on VM.
+- Preserve the deployed Ubuntu relay and every shipped relay-dependent feature. Reclassify it as an optional store-and-forward/public-reachability transport for public inbound webhooks, delivery while all peers are offline, or cases where direct connectivity is unavailable.
+- No transport is required for single-device/local product behavior. A sleeping/offline host means direct delivery waits; the UI must not imply convergence. Relay fallback is per-workspace, explicit, visible, and off by default.
+- Desktop-host setup, bind interface/firewall exposure, certificate/key pin, device enrollment, revocation/rotation, fallback policy, and worker authority are user-only security controls. Ordinary routing preferences may remain shared AI/UI domain settings.
+- Do not expose an unauthenticated LAN HTTP listener. Implementation requires pinned authenticated transport, existing end-to-end workspace encryption, signed requests, replay/size/rate bounds, protected keys, and packaged Mac/Windows hostile-network validation.
+- No VM, DNS, Caddy, PostgreSQL, firewall, or hosted service change is authorized by this decision.

@@ -5,6 +5,8 @@ directories:
 files:
   - dist/**/*
   - dist-electron/electron/**/*
+  - dist-electron/node/relay/**/*.js
+  - '!dist-electron/node/relay/**/*.test.js'
   - dist-electron/spikes/cli-capabilities.js
 extraResources:
   - from: vendor/voice/fast-local-staging

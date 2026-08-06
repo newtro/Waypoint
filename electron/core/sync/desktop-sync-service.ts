@@ -1,35 +1,509 @@
-import {DesktopRelayClient,WAYPOINT_RELAY_ORIGIN} from './desktop-relay-client.js'
-import {WaypointCrypto} from './crypto.js'
-import {ProtectedSyncVault} from './protected-sync-vault.js'
-import type {EnrollmentInvitation} from './types.js'
-import {DesktopSyncPump,type SyncPumpStore} from './desktop-sync-pump.js'
-import {openInboundWebhook} from './webhook-crypto.js'
+import {
+  DesktopRelayClient,
+  WAYPOINT_RELAY_ORIGIN,
+} from "./desktop-relay-client.js";
+import { WaypointCrypto } from "./crypto.js";
+import { ProtectedSyncVault } from "./protected-sync-vault.js";
+import type { EnrollmentInvitation } from "./types.js";
+import { DesktopSyncPump, type SyncPumpStore } from "./desktop-sync-pump.js";
+import { openInboundWebhook } from "./webhook-crypto.js";
+import { PeerHostRuntime } from "./peer-host-runtime.js";
+import type { DesktopHostDescriptor } from "./peer-host-transport.js";
 
-interface InvitationToken{invitation:EnrollmentInvitation;secret:string}
-const encode=(value:unknown)=>Buffer.from(JSON.stringify(value)).toString('base64url')
-const decode=(value:string):InvitationToken=>{if(value.length>8192)throw new Error('Enrollment token is too large');let parsed:unknown;try{parsed=JSON.parse(Buffer.from(value,'base64url').toString('utf8'))}catch{throw new Error('Enrollment token is invalid')}if(!parsed||typeof parsed!=='object'||!('invitation'in parsed)||!('secret'in parsed))throw new Error('Enrollment token is invalid');return parsed as InvitationToken}
+interface InvitationToken {
+  invitation: EnrollmentInvitation;
+  secret: string;
+  transport?: { mode: "hosted-relay" } | DesktopHostDescriptor;
+}
+const encode = (value: unknown) =>
+  Buffer.from(JSON.stringify(value)).toString("base64url");
+const decode = (value: string): InvitationToken => {
+  if (value.length > 8192) throw new Error("Enrollment token is too large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Enrollment token is invalid");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !("invitation" in parsed) ||
+    !("secret" in parsed)
+  )
+    throw new Error("Enrollment token is invalid");
+  return parsed as InvitationToken;
+};
 
-export class DesktopSyncService{
-  private constructor(private readonly vault:ProtectedSyncVault,private readonly crypto:WaypointCrypto){}
-  static async create(vault:ProtectedSyncVault){return new DesktopSyncService(vault,await WaypointCrypto.create())}
-  initializeOwner(workspaceId:string){if(this.vault.load(workspaceId))throw new Error('Workspace sync is already configured');const device=this.crypto.generateDevice(),workspaceKey=this.crypto.generateWorkspaceKey();this.vault.save({version:1,workspaceId,device,workspaceKey,keyEpoch:1,endpoint:WAYPOINT_RELAY_ORIGIN});return{workspaceId,deviceId:device.deviceId,signingPublicKey:device.signingPublicKey,encryptionPublicKey:device.encryptionPublicKey,endpoint:WAYPOINT_RELAY_ORIGIN,bootstrapRequired:true}}
-  status(workspaceId:string){const active=this.vault.load(workspaceId),pending=this.vault.loadPending(workspaceId);return active?{configured:true,pendingEnrollment:false,deviceId:active.device.deviceId,keyEpoch:active.keyEpoch,rotationTargetEpoch:active.rotation?.targetEpoch,endpoint:active.endpoint}:pending?{configured:false,pendingEnrollment:true,deviceId:pending.device.deviceId,keyEpoch:0,endpoint:pending.endpoint}:{configured:false,pendingEnrollment:false,keyEpoch:0,endpoint:WAYPOINT_RELAY_ORIGIN}}
-  async createInvitation(workspaceId:string){const active=this.required(workspaceId),client=await DesktopRelayClient.create(active),value=this.crypto.createEnrollmentInvitation(workspaceId,active.device,active.keyEpoch,new Date(Date.now()+15*60_000));await client.registerInvitation(value.invitation);return{token:encode(value),expiresAt:value.invitation.expiresAt}}
-  async submitEnrollment(token:string){const value=decode(token),device=this.crypto.generateDevice(),request=this.crypto.createEnrollmentRequest({workspaceId:value.invitation.workspaceId,device});await DesktopRelayClient.submitEnrollment(WAYPOINT_RELAY_ORIGIN,value.invitation.invitationId,value.secret,request);this.vault.savePending({version:1,workspaceId:request.workspaceId,device,request,endpoint:WAYPOINT_RELAY_ORIGIN});return{workspaceId:request.workspaceId,requestId:request.requestId,status:'pending' as const}}
-  async completeEnrollment(workspaceId:string){const pending=this.vault.loadPending(workspaceId);if(!pending)throw new Error('No protected pending enrollment');const {approval}=await DesktopRelayClient.enrollmentApproval(pending.endpoint,pending.request.requestId),proof=this.crypto.createEnrollmentConsumeProof(pending.request,approval,pending.device),result=await DesktopRelayClient.consumeEnrollment(pending.endpoint,proof),workspaceKey=this.crypto.unwrapWorkspaceKey(result.wrappedWorkspaceKey,pending.device);this.vault.save({version:1,workspaceId,device:pending.device,workspaceKey,keyEpoch:result.keyEpoch,endpoint:pending.endpoint,snapshotRequired:true});this.vault.removePending(workspaceId);return{configured:true,deviceId:pending.device.deviceId,keyEpoch:result.keyEpoch}}
-  async pendingEnrollments(workspaceId:string){const active=this.required(workspaceId),result=await (await DesktopRelayClient.create(active)).pendingEnrollments();return result.requests.map((request)=>({requestId:request.requestId,deviceId:request.device.deviceId,createdAt:request.createdAt,expiresAt:request.expiresAt}))}
-  async approveEnrollment(workspaceId:string,requestId:string){const active=this.required(workspaceId),client=await DesktopRelayClient.create(active),pending=await client.pendingEnrollments(),request=pending.requests.find((item)=>item.requestId===requestId);if(!request)throw new Error('Pending enrollment not found');const wrapped=this.crypto.wrapWorkspaceKey(active.workspaceKey,request.device),approval=this.crypto.approveEnrollment(request,active.device,active.keyEpoch,new Date(),wrapped);await client.approveEnrollment(approval,wrapped);return{requestId,status:'approved' as const}}
-  async devices(workspaceId:string){const active=this.required(workspaceId),result=await (await DesktopRelayClient.create(active)).listDevices();return result.devices.map((device)=>({deviceId:device.deviceId,role:device.role,status:device.status,enrolledAt:device.enrolledAt,revokedAt:device.revokedAt}))}
-  async revoke(workspaceId:string,deviceId:string){const active=this.required(workspaceId);return (await DesktopRelayClient.create(active)).revokeDevice(deviceId)}
-  async createWebhookChannel(workspaceId:string,label:string){let active=this.required(workspaceId);const result=await (await DesktopRelayClient.create(active)).createWebhookChannel(label);active={...active,webhookSecrets:[...(active.webhookSecrets??[]).filter((item)=>item.channelId!==result.channelId),{channelId:result.channelId,secretVersion:result.secretVersion,secret:result.secret}]};this.vault.save(active);return result}
-  async webhookChannels(workspaceId:string){const active=this.required(workspaceId);return (await DesktopRelayClient.create(active)).webhookChannels()}
-  async rotateWebhookChannel(workspaceId:string,channelId:string){let active=this.required(workspaceId);const result=await (await DesktopRelayClient.create(active)).rotateWebhookChannel(channelId);active={...active,webhookSecrets:[...(active.webhookSecrets??[]).filter((item)=>item.channelId!==channelId),{channelId,secretVersion:result.secretVersion,secret:result.secret}]};this.vault.save(active);return result}
-  async revokeWebhookChannel(workspaceId:string,channelId:string){const active=this.required(workspaceId),result=await (await DesktopRelayClient.create(active)).revokeWebhookChannel(channelId);this.vault.save({...active,webhookSecrets:(active.webhookSecrets??[]).filter((item)=>item.channelId!==channelId)});return result}
-  async deleteWebhookChannel(workspaceId:string,channelId:string){const active=this.required(workspaceId),result=await (await DesktopRelayClient.create(active)).deleteWebhookChannel(channelId);this.vault.save({...active,webhookSecrets:(active.webhookSecrets??[]).filter((item)=>item.channelId!==channelId)});return result}
-  async setWebhookKill(workspaceId:string,activeValue:boolean){const active=this.required(workspaceId);return (await DesktopRelayClient.create(active)).setWebhookKill(activeValue)}
-  async fetchWebhookEvents(workspaceId:string,store:{importExternalInboundEvent(workspaceId:string,input:{eventId:string;channelId:string;eventType:string;occurredAt:string;receivedAt:string;payload:Record<string,string|number|boolean|null>}):unknown},signal?:AbortSignal){const active=this.required(workspaceId),client=await DesktopRelayClient.create(active),result=await client.pullWebhookEvents(50,signal);let imported=0;for(const event of result.events){const payload=await openInboundWebhook(event.ciphertextBase64,active.device.encryptionPublicKey,active.device.encryptionPrivateKey);store.importExternalInboundEvent(workspaceId,{eventId:event.eventId,channelId:event.channelId,eventType:payload.eventType,occurredAt:payload.occurredAt,receivedAt:event.receivedAt,payload:payload.payload});if(!(await client.acknowledgeWebhookEvent(event.eventId,signal)).acknowledged)throw new Error('Inbound webhook acknowledgement failed');imported++}return{imported}}
-  async syncOnce(workspaceId:string,store:SyncPumpStore,signal?:AbortSignal){let active=await this.activateRotation(this.required(workspaceId),signal),pump=new DesktopSyncPump(active,this.crypto,await DesktopRelayClient.create(active),store);if(active.snapshotRequired){await pump.requestSnapshot(signal);active={...active,snapshotRequired:false};this.vault.save(active);pump=new DesktopSyncPump(active,this.crypto,await DesktopRelayClient.create(active),store)}return pump.runOnce(signal)}
-  async rotate(workspaceId:string){let active=this.required(workspaceId);const client=await DesktopRelayClient.create(active),started=await client.beginRotation();if(!active.rotation){active={...active,rotation:{targetEpoch:started.targetEpoch,workspaceKey:this.crypto.generateWorkspaceKey()}};this.vault.save(active)}const rotation=active.rotation;if(!rotation||rotation.targetEpoch!==started.targetEpoch)throw new Error('Local and relay rotation epochs disagree');const listed=await client.listDevices();for(const device of listed.devices.filter((item)=>item.status==='active'))await client.recordRotationWrap(started.targetEpoch,device.deviceId,this.crypto.wrapWorkspaceKey(rotation.workspaceKey,device));const committed=await client.commitRotation();this.vault.save({...active,previous:{keyEpoch:active.keyEpoch,workspaceKey:active.workspaceKey},workspaceKey:rotation.workspaceKey,keyEpoch:committed.keyEpoch,rotation:undefined});return{keyEpoch:committed.keyEpoch}}
-  private required(workspaceId:string){const value=this.vault.load(workspaceId);if(!value)throw new Error('Workspace sync is not configured');return value}
-  private async activateRotation(active:ReturnType<DesktopSyncService['required']>,signal?:AbortSignal){const proof=this.crypto.createRotationClaim(active.workspaceId,active.keyEpoch+1,active.device),claimed=await DesktopRelayClient.claimRotation(active.endpoint,proof,signal);if(!claimed)return active;const next={...active,previous:{keyEpoch:active.keyEpoch,workspaceKey:active.workspaceKey},workspaceKey:this.crypto.unwrapWorkspaceKey(claimed.wrappedWorkspaceKey,active.device),keyEpoch:claimed.keyEpoch};this.vault.save(next);return next}
+export class DesktopSyncService {
+  private constructor(
+    private readonly vault: ProtectedSyncVault,
+    private readonly crypto: WaypointCrypto,
+    private readonly peerHost?: PeerHostRuntime,
+  ) {}
+  static async create(vault: ProtectedSyncVault, peerHost?: PeerHostRuntime) {
+    return new DesktopSyncService(
+      vault,
+      await WaypointCrypto.create(),
+      peerHost,
+    );
+  }
+  initializeOwner(workspaceId: string) {
+    if (this.vault.load(workspaceId))
+      throw new Error("Workspace sync is already configured");
+    const device = this.crypto.generateDevice(),
+      workspaceKey = this.crypto.generateWorkspaceKey();
+    this.vault.save({
+      version: 1,
+      workspaceId,
+      device,
+      workspaceKey,
+      keyEpoch: 1,
+      endpoint: WAYPOINT_RELAY_ORIGIN,
+    });
+    return {
+      workspaceId,
+      deviceId: device.deviceId,
+      signingPublicKey: device.signingPublicKey,
+      encryptionPublicKey: device.encryptionPublicKey,
+      endpoint: WAYPOINT_RELAY_ORIGIN,
+      bootstrapRequired: true,
+    };
+  }
+  status(workspaceId: string) {
+    const active = this.vault.load(workspaceId),
+      pending = this.vault.loadPending(workspaceId),
+      currentHost = this.peerHost?.status(),
+      host = currentHost?.workspaceId === workspaceId ? currentHost : undefined;
+    return active
+      ? {
+          configured: true,
+          pendingEnrollment: false,
+          deviceId: active.device.deviceId,
+          keyEpoch: active.keyEpoch,
+          rotationTargetEpoch: active.rotation?.targetEpoch,
+          endpoint: active.endpoint,
+          transportMode: active.transport?.mode ?? "hosted-relay",
+          peerHost: host,
+        }
+      : pending
+        ? {
+            configured: false,
+            pendingEnrollment: true,
+            deviceId: pending.device.deviceId,
+            keyEpoch: 0,
+            endpoint: pending.endpoint,
+            transportMode: pending.transport?.mode ?? "hosted-relay",
+            peerHost: host,
+          }
+        : {
+            configured: false,
+            pendingEnrollment: false,
+            keyEpoch: 0,
+            endpoint: WAYPOINT_RELAY_ORIGIN,
+            transportMode: "hosted-relay" as const,
+            peerHost: host,
+          };
+  }
+  async startPeerHost(workspaceId: string, bindAddress?: string) {
+    if (!this.peerHost)
+      throw new Error("Desktop hosting is unavailable in this runtime");
+    const active = this.required(workspaceId),
+      result = await this.peerHost.start(active, bindAddress),
+      next = {
+        ...active,
+        endpoint: result.descriptor.endpoint,
+        transport: result.descriptor,
+      };
+    this.vault.save(next);
+    return result;
+  }
+  async stopPeerHost(workspaceId: string) {
+    if (!this.peerHost)
+      throw new Error("Desktop hosting is unavailable in this runtime");
+    const status = this.peerHost.status();
+    if (status.running && status.workspaceId !== workspaceId)
+      throw new Error("Desktop host belongs to another workspace");
+    await this.peerHost.stop();
+    return this.peerHost.status();
+  }
+  async createInvitation(workspaceId: string) {
+    const active = this.required(workspaceId),
+      client = await DesktopRelayClient.create(active),
+      value = this.crypto.createEnrollmentInvitation(
+        workspaceId,
+        active.device,
+        active.keyEpoch,
+        new Date(Date.now() + 15 * 60_000),
+      );
+    await client.registerInvitation(value.invitation);
+    return {
+      token: encode({ ...value, transport: active.transport }),
+      expiresAt: value.invitation.expiresAt,
+    };
+  }
+  async submitEnrollment(token: string) {
+    const value = decode(token),
+      device = this.crypto.generateDevice(),
+      request = this.crypto.createEnrollmentRequest({
+        workspaceId: value.invitation.workspaceId,
+        device,
+      }),
+      endpoint =
+        value.transport?.mode === "desktop-host"
+          ? value.transport.endpoint
+          : WAYPOINT_RELAY_ORIGIN,
+      peer =
+        value.transport?.mode === "desktop-host" ? value.transport : undefined;
+    await DesktopRelayClient.submitEnrollment(
+      endpoint,
+      value.invitation.invitationId,
+      value.secret,
+      request,
+      undefined,
+      peer,
+    );
+    this.vault.savePending({
+      version: 1,
+      workspaceId: request.workspaceId,
+      device,
+      request,
+      endpoint,
+      transport: value.transport,
+    });
+    return {
+      workspaceId: request.workspaceId,
+      requestId: request.requestId,
+      status: "pending" as const,
+    };
+  }
+  async completeEnrollment(workspaceId: string) {
+    const pending = this.vault.loadPending(workspaceId);
+    if (!pending) throw new Error("No protected pending enrollment");
+    const peer =
+        pending.transport?.mode === "desktop-host"
+          ? pending.transport
+          : undefined,
+      { approval } = await DesktopRelayClient.enrollmentApproval(
+        pending.endpoint,
+        pending.request.requestId,
+        undefined,
+        peer,
+      ),
+      proof = this.crypto.createEnrollmentConsumeProof(
+        pending.request,
+        approval,
+        pending.device,
+      ),
+      result = await DesktopRelayClient.consumeEnrollment(
+        pending.endpoint,
+        proof,
+        undefined,
+        peer,
+      ),
+      workspaceKey = this.crypto.unwrapWorkspaceKey(
+        result.wrappedWorkspaceKey,
+        pending.device,
+      );
+    this.vault.save({
+      version: 1,
+      workspaceId,
+      device: pending.device,
+      workspaceKey,
+      keyEpoch: result.keyEpoch,
+      endpoint: pending.endpoint,
+      transport: pending.transport,
+      snapshotRequired: true,
+    });
+    this.vault.removePending(workspaceId);
+    return {
+      configured: true,
+      deviceId: pending.device.deviceId,
+      keyEpoch: result.keyEpoch,
+    };
+  }
+  async pendingEnrollments(workspaceId: string) {
+    const active = this.required(workspaceId),
+      result = await (
+        await DesktopRelayClient.create(active)
+      ).pendingEnrollments();
+    return result.requests.map((request) => ({
+      requestId: request.requestId,
+      deviceId: request.device.deviceId,
+      createdAt: request.createdAt,
+      expiresAt: request.expiresAt,
+    }));
+  }
+  async approveEnrollment(workspaceId: string, requestId: string) {
+    const active = this.required(workspaceId),
+      client = await DesktopRelayClient.create(active),
+      pending = await client.pendingEnrollments(),
+      request = pending.requests.find((item) => item.requestId === requestId);
+    if (!request) throw new Error("Pending enrollment not found");
+    const wrapped = this.crypto.wrapWorkspaceKey(
+        active.workspaceKey,
+        request.device,
+      ),
+      approval = this.crypto.approveEnrollment(
+        request,
+        active.device,
+        active.keyEpoch,
+        new Date(),
+        wrapped,
+      );
+    await client.approveEnrollment(approval, wrapped);
+    return { requestId, status: "approved" as const };
+  }
+  async devices(workspaceId: string) {
+    const active = this.required(workspaceId),
+      result = await (await DesktopRelayClient.create(active)).listDevices();
+    return result.devices.map((device) => ({
+      deviceId: device.deviceId,
+      role: device.role,
+      status: device.status,
+      enrolledAt: device.enrolledAt,
+      revokedAt: device.revokedAt,
+    }));
+  }
+  async revoke(workspaceId: string, deviceId: string) {
+    const active = this.required(workspaceId);
+    return (await DesktopRelayClient.create(active)).revokeDevice(deviceId);
+  }
+  async createWebhookChannel(workspaceId: string, label: string) {
+    let active = this.requiredRelay(workspaceId);
+    const result = await (
+      await DesktopRelayClient.create(active)
+    ).createWebhookChannel(label);
+    active = {
+      ...active,
+      webhookSecrets: [
+        ...(active.webhookSecrets ?? []).filter(
+          (item) => item.channelId !== result.channelId,
+        ),
+        {
+          channelId: result.channelId,
+          secretVersion: result.secretVersion,
+          secret: result.secret,
+        },
+      ],
+    };
+    this.vault.save(active);
+    return result;
+  }
+  async webhookChannels(workspaceId: string) {
+    const active = this.requiredRelay(workspaceId);
+    return (await DesktopRelayClient.create(active)).webhookChannels();
+  }
+  async rotateWebhookChannel(workspaceId: string, channelId: string) {
+    let active = this.requiredRelay(workspaceId);
+    const result = await (
+      await DesktopRelayClient.create(active)
+    ).rotateWebhookChannel(channelId);
+    active = {
+      ...active,
+      webhookSecrets: [
+        ...(active.webhookSecrets ?? []).filter(
+          (item) => item.channelId !== channelId,
+        ),
+        {
+          channelId,
+          secretVersion: result.secretVersion,
+          secret: result.secret,
+        },
+      ],
+    };
+    this.vault.save(active);
+    return result;
+  }
+  async revokeWebhookChannel(workspaceId: string, channelId: string) {
+    const active = this.requiredRelay(workspaceId),
+      result = await (
+        await DesktopRelayClient.create(active)
+      ).revokeWebhookChannel(channelId);
+    this.vault.save({
+      ...active,
+      webhookSecrets: (active.webhookSecrets ?? []).filter(
+        (item) => item.channelId !== channelId,
+      ),
+    });
+    return result;
+  }
+  async deleteWebhookChannel(workspaceId: string, channelId: string) {
+    const active = this.requiredRelay(workspaceId),
+      result = await (
+        await DesktopRelayClient.create(active)
+      ).deleteWebhookChannel(channelId);
+    this.vault.save({
+      ...active,
+      webhookSecrets: (active.webhookSecrets ?? []).filter(
+        (item) => item.channelId !== channelId,
+      ),
+    });
+    return result;
+  }
+  async setWebhookKill(workspaceId: string, activeValue: boolean) {
+    const active = this.requiredRelay(workspaceId);
+    return (await DesktopRelayClient.create(active)).setWebhookKill(
+      activeValue,
+    );
+  }
+  async fetchWebhookEvents(
+    workspaceId: string,
+    store: {
+      importExternalInboundEvent(
+        workspaceId: string,
+        input: {
+          eventId: string;
+          channelId: string;
+          eventType: string;
+          occurredAt: string;
+          receivedAt: string;
+          payload: Record<string, string | number | boolean | null>;
+        },
+      ): unknown;
+    },
+    signal?: AbortSignal,
+  ) {
+    const active = this.requiredRelay(workspaceId),
+      client = await DesktopRelayClient.create(active),
+      result = await client.pullWebhookEvents(50, signal);
+    let imported = 0;
+    for (const event of result.events) {
+      const payload = await openInboundWebhook(
+        event.ciphertextBase64,
+        active.device.encryptionPublicKey,
+        active.device.encryptionPrivateKey,
+      );
+      store.importExternalInboundEvent(workspaceId, {
+        eventId: event.eventId,
+        channelId: event.channelId,
+        eventType: payload.eventType,
+        occurredAt: payload.occurredAt,
+        receivedAt: event.receivedAt,
+        payload: payload.payload,
+      });
+      if (
+        !(await client.acknowledgeWebhookEvent(event.eventId, signal))
+          .acknowledged
+      )
+        throw new Error("Inbound webhook acknowledgement failed");
+      imported++;
+    }
+    return { imported };
+  }
+  async syncOnce(
+    workspaceId: string,
+    store: SyncPumpStore,
+    signal?: AbortSignal,
+  ) {
+    let active = await this.activateRotation(
+        this.required(workspaceId),
+        signal,
+      ),
+      pump = new DesktopSyncPump(
+        active,
+        this.crypto,
+        await DesktopRelayClient.create(active),
+        store,
+      );
+    if (active.snapshotRequired) {
+      await pump.requestSnapshot(signal);
+      active = { ...active, snapshotRequired: false };
+      this.vault.save(active);
+      pump = new DesktopSyncPump(
+        active,
+        this.crypto,
+        await DesktopRelayClient.create(active),
+        store,
+      );
+    }
+    return pump.runOnce(signal);
+  }
+  async rotate(workspaceId: string) {
+    let active = this.required(workspaceId);
+    const client = await DesktopRelayClient.create(active),
+      started = await client.beginRotation();
+    if (!active.rotation) {
+      active = {
+        ...active,
+        rotation: {
+          targetEpoch: started.targetEpoch,
+          workspaceKey: this.crypto.generateWorkspaceKey(),
+        },
+      };
+      this.vault.save(active);
+    }
+    const rotation = active.rotation;
+    if (!rotation || rotation.targetEpoch !== started.targetEpoch)
+      throw new Error("Local and relay rotation epochs disagree");
+    const listed = await client.listDevices();
+    for (const device of listed.devices.filter(
+      (item) => item.status === "active",
+    ))
+      await client.recordRotationWrap(
+        started.targetEpoch,
+        device.deviceId,
+        this.crypto.wrapWorkspaceKey(rotation.workspaceKey, device),
+      );
+    const committed = await client.commitRotation();
+    this.vault.save({
+      ...active,
+      previous: {
+        keyEpoch: active.keyEpoch,
+        workspaceKey: active.workspaceKey,
+      },
+      workspaceKey: rotation.workspaceKey,
+      keyEpoch: committed.keyEpoch,
+      rotation: undefined,
+    });
+    return { keyEpoch: committed.keyEpoch };
+  }
+  private required(workspaceId: string) {
+    const value = this.vault.load(workspaceId);
+    if (!value) throw new Error("Workspace sync is not configured");
+    return value;
+  }
+  private requiredRelay(workspaceId: string) {
+    const value = this.required(workspaceId);
+    if (value.transport?.mode === "desktop-host")
+      throw new Error(
+        "Public inbound webhooks require the optional hosted relay",
+      );
+    return value;
+  }
+  private async activateRotation(
+    active: ReturnType<DesktopSyncService["required"]>,
+    signal?: AbortSignal,
+  ) {
+    const proof = this.crypto.createRotationClaim(
+        active.workspaceId,
+        active.keyEpoch + 1,
+        active.device,
+      ),
+      peer =
+        active.transport?.mode === "desktop-host"
+          ? active.transport
+          : undefined,
+      claimed = await DesktopRelayClient.claimRotation(
+        active.endpoint,
+        proof,
+        signal,
+        peer,
+      );
+    if (!claimed) return active;
+    const next = {
+      ...active,
+      previous: {
+        keyEpoch: active.keyEpoch,
+        workspaceKey: active.workspaceKey,
+      },
+      workspaceKey: this.crypto.unwrapWorkspaceKey(
+        claimed.wrappedWorkspaceKey,
+        active.device,
+      ),
+      keyEpoch: claimed.keyEpoch,
+    };
+    this.vault.save(next);
+    return next;
+  }
 }
