@@ -10,6 +10,10 @@ describe('screen capture visual workspace', () => {
     expect(styles).toMatch(/@media \(max-width: 760px\)/)
     expect(styles).toMatch(/@media \(max-height: 620px\)/)
     expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)/)
+    expect(styles).toMatch(/grid-template-rows: auto auto auto minmax\(0, 1fr\) auto/)
+    expect(styles).toMatch(/\.capture-canvas-wrap \{[\s\S]*min-height: 0/)
+    expect(styles).toMatch(/\.capture-editor > footer \{[\s\S]*env\(safe-area-inset-bottom\)/)
+    expect(styles).not.toMatch(/\.capture-canvas-wrap \{[^}]*max-height:/)
   })
 
   it('provides visible keyboard focus and distinct error, canvas, and destructive states', () => {
@@ -37,6 +41,9 @@ describe('screen capture visual workspace', () => {
     expect(component).toContain('onClick={addCentered}')
     expect(component).toContain('aria-label="Selected annotation layer"')
     expect(component).toContain('Hold Shift with arrow keys to resize')
+    for (const label of ['Discard changes', 'Save layers', 'Done · flatten']) expect(component).toContain(`>${label}<`)
+    expect(component).toContain('className="capture-editor-actions"')
+    expect(component).toContain('onSaved(saved);onClose()')
   })
 
   it('retains explicit privacy and independent-copy redaction messaging', () => {

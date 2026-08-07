@@ -23,6 +23,7 @@
 
 .capture-studio,
 .capture-editor {
+  position: relative;
   width: min(1060px, 100%);
   max-height: calc(100dvh - clamp(24px, 6vw, 68px));
   overflow: auto;
@@ -31,6 +32,16 @@
   border-radius: 18px;
   box-shadow: 0 34px 90px rgba(10, 17, 13, 0.34), 0 1px 0 rgba(255, 255, 255, 0.8) inset;
   scrollbar-width: thin;
+}
+
+.capture-editor > .capture-error {
+  position: absolute;
+  z-index: 4;
+  top: 76px;
+  right: 18px;
+  max-width: min(420px, calc(100% - 36px));
+  margin: 0;
+  box-shadow: 0 8px 24px rgba(45, 24, 22, 0.16);
 }
 
 .capture-studio > header,
@@ -379,7 +390,13 @@
 .capture-preview-actions button.primary { order: -1; border-color: var(--capture-sage); background: var(--capture-sage); color: #fff; }
 .capture-preview > button { margin: 0 26px 24px; border-color: transparent; background: var(--capture-soft); }
 
-.capture-editor { width: min(1220px, 100%); overflow: hidden; }
+.capture-editor {
+  width: min(1220px, 100%);
+  height: min(880px, calc(100dvh - clamp(24px, 6vw, 68px)));
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
 .capture-editor > header > button { width: auto; min-width: 52px; padding: 0 11px; border-radius: 9px; font-size: 10px; font-weight: 650; }
 .capture-editor > header strong,
 .capture-editor > header small { display: block; }
@@ -402,12 +419,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   padding: 8px 17px 11px;
   border-bottom: 1px solid #dde2dd;
   background: #f4f6f3;
 }
 
 .capture-editor-controls label { display: flex; align-items: center; gap: 7px; color: #6b746d; font-size: 10px; font-weight: 600; }
+.capture-editor-controls label,
+.capture-editor-controls button { flex: 0 0 auto; }
 .capture-editor-controls input[type="color"] { width: 30px; height: 28px; padding: 2px; border: 1px solid #d4dbd5; border-radius: 7px; background: #fff; }
 .capture-editor-controls select,
 .capture-editor-controls button {
@@ -424,7 +446,7 @@
 
 .capture-canvas-wrap {
   position: relative;
-  max-height: calc(100dvh - 295px);
+  min-height: 0;
   margin: 0;
   padding: 28px;
   overflow: auto;
@@ -465,18 +487,21 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 13px 17px;
+  padding: 13px 17px max(13px, env(safe-area-inset-bottom));
   border-top: 1px solid #dbe1db;
   background: #f9faf8;
 }
 
 .capture-editor > footer span {
+  min-width: 0;
   max-width: 620px;
   margin-right: auto;
   color: #86605b;
   font-size: 9px;
   line-height: 1.4;
 }
+
+.capture-editor-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 
 .capture-editor > footer button {
   min-height: 36px;
@@ -493,8 +518,8 @@
 
 @media (max-width: 760px) {
   .capture-overlay { padding: 8px; place-items: stretch; }
-  .capture-studio,
-  .capture-editor { width: 100%; max-height: calc(100dvh - 16px); margin: auto; border-radius: 13px; }
+  .capture-editor { width: 100%; height: calc(100dvh - 16px); max-height: calc(100dvh - 16px); margin: auto; border-radius: 13px; }
+  .capture-studio { width: 100%; max-height: calc(100dvh - 16px); margin: auto; border-radius: 13px; }
   .capture-studio > header,
   .capture-editor > header { padding: 19px 18px 16px 25px; }
   .capture-studio > header::before,
@@ -513,11 +538,10 @@
   .capture-ready-image img { height: min(28dvh, 210px); }
   .capture-preview-actions button { flex: 1 1 calc(50% - 6px); }
   .capture-preview > button { width: calc(100% - 36px); margin: 0 18px 20px; }
-  .capture-editor-controls { flex-wrap: wrap; }
   .capture-editor-controls button:nth-last-child(1) { margin-left: 0; }
-  .capture-canvas-wrap { max-height: calc(100dvh - 330px); padding: 22px 14px; }
-  .capture-editor > footer { flex-wrap: wrap; }
-  .capture-editor > footer span { flex: 1 0 100%; }
+  .capture-canvas-wrap { padding: 22px 14px; }
+  .capture-editor > footer { gap: 10px; }
+  .capture-editor > footer span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 
 @media (max-height: 620px) {
@@ -525,7 +549,16 @@
   .capture-editor > header { padding-top: 15px; padding-bottom: 13px; }
   .capture-studio > header::before,
   .capture-editor > header::before { top: 15px; }
-  .capture-canvas-wrap { max-height: calc(100dvh - 245px); padding-block: 20px; }
+  .capture-editor nav { padding-block: 7px 5px; }
+  .capture-editor-controls { padding-block: 6px 8px; }
+  .capture-canvas-wrap { padding-block: 16px; }
+  .capture-editor > footer { padding-block: 9px max(9px, env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 560px) {
+  .capture-editor > footer { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .capture-editor > footer span { order: 2; }
+  .capture-editor-actions { justify-content: flex-end; overflow-x: auto; padding: 2px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
