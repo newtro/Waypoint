@@ -72,6 +72,8 @@ describe("chat execution presentation", () => {
       "utf8",
     );
     expect(source).toContain("runsForSourceMessage");expect(source).toContain("executionHistory");
+    expect(source).toContain("execution-live-text");
+    expect(source).not.toContain('open={run.status === "running"}');
     expect(compact).not.toContain("{chatRuns.map((value)");
     expect(source).toContain(
       'className="chat-header-actions" role="group" aria-label="Chat actions"',

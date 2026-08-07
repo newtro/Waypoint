@@ -28,6 +28,7 @@ import "./voice-mode.css";
 import "./screen-capture.css";
 import "./composer-polish.css";
 import "./in-app-browser.css";
+import "./execution-timeline-polish.css";
 import {
   BrowserPcmCapture,
   BrowserSpeechMonitor,
@@ -2615,7 +2616,7 @@ export function App() {
         .join("");
     return (
       <Fragment key={`execution-${String(run.id)}`}>
-        <details className="execution-timeline" open={run.status === "running"}>
+        <details className={`execution-timeline ${String(run.status)}`}>
           <summary>
             <span className="status-dot" />
             <strong>
@@ -2627,34 +2628,49 @@ export function App() {
                 ? `${toolEvents.length} structured event${toolEvents.length === 1 ? "" : "s"}`
                 : "No provider tool events exposed"}
             </small>
+            <span className="execution-chevron" aria-hidden="true">
+              ⌄
+            </span>
           </summary>
-          <ol>
-            {toolEvents.map((event, index) => (
-              <li key={`${String(run.id)}-${String(event.sequence ?? index)}`}>
-                <b>
-                  {event.type === "tool"
-                    ? String(event.name ?? "Tool action")
-                    : event.type === "agent"
-                      ? String(event.name ?? "Agent event")
-                      : String(event.type ?? "Provider status")}
-                </b>
-                {typeof event.text === "string" && (
-                  <span>{event.text.slice(0, 1000)}</span>
-                )}
-                <small>
-                  {event.createdAt
-                    ? new Date(String(event.createdAt)).toLocaleTimeString()
-                    : ""}
-                </small>
-              </li>
-            ))}
-          </ol>
-          {!toolEvents.length && (
-            <p>
-              This provider did not expose an internal tool event for this run.
-              Waypoint does not infer or invent one.
-            </p>
-          )}
+          <div className="execution-timeline-body">
+            {!!toolEvents.length && (
+              <ol>
+                {toolEvents.map((event, index) => (
+                  <li
+                    key={`${String(run.id)}-${String(event.sequence ?? index)}`}
+                  >
+                    <b>
+                      {event.type === "tool"
+                        ? String(event.name ?? "Tool action")
+                        : event.type === "agent"
+                          ? String(event.name ?? "Agent event")
+                          : String(event.type ?? "Provider status")}
+                    </b>
+                    {typeof event.text === "string" && (
+                      <span>{event.text.slice(0, 1000)}</span>
+                    )}
+                    <small>
+                      {event.createdAt
+                        ? new Date(String(event.createdAt)).toLocaleTimeString()
+                        : ""}
+                    </small>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {!toolEvents.length && (
+              <p>
+                This provider did not expose an internal tool event for this
+                run. Waypoint does not infer or invent one.
+              </p>
+            )}
+            {run.status !== "completed" && text && (
+              <section className="execution-live-text">
+                <strong>Live provider output</strong>
+                <ChatMarkdown body={text} />
+              </section>
+            )}
+          </div>
         </details>
         {run.status !== "completed" && (
           <article className={`run-strip ${String(run.status)}`}>
@@ -2665,7 +2681,6 @@ export function App() {
                   ? `${run.cli} is responding`
                   : String(run.status).replace("_", " ")}
               </strong>
-              {text && <ChatMarkdown body={text} />}{" "}
               {failureAdvice(run) && <small>{failureAdvice(run)}</small>}
             </div>
             <div>
