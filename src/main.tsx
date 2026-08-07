@@ -27,6 +27,7 @@ import "./chat-header-actions.css";
 import "./voice-mode.css";
 import "./screen-capture.css";
 import "./composer-polish.css";
+import "./in-app-browser.css";
 import {
   BrowserPcmCapture,
   BrowserSpeechMonitor,
@@ -58,6 +59,13 @@ type VoiceState =
   "off" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
 
 type Chat = Awaited<ReturnType<Window["waypoint"]["listChats"]>>[number];
+function browserHostLabel(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "Enter a secure HTTPS address";
+  }
+}
 type Document = Awaited<
   ReturnType<Window["waypoint"]["listDocuments"]>
 >[number];
@@ -4104,7 +4112,9 @@ export function App() {
               <div>
                 <p>{workspace.name}</p>
                 <h2 id="drawer-title">
-                  {drawer[0].toUpperCase() + drawer.slice(1)}
+                  {drawer === "browser"
+                    ? "In-App Browser"
+                    : drawer[0].toUpperCase() + drawer.slice(1)}
                 </h2>
               </div>
               <button
@@ -4116,99 +4126,190 @@ export function App() {
               </button>
             </header>
             {drawer === "browser" && (
-              <div className="in-app-browser">
-                <form
-                  className="browser-toolbar"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void openInAppBrowser().catch(showError);
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-label="Back"
-                    disabled={!inAppBrowserState?.canGoBack}
-                    onClick={() =>
-                      workspace &&
-                      void window.waypoint.navigateInAppBrowser(
-                        workspace.id,
-                        "back",
-                      )
-                    }
+              <div
+                className={`in-app-browser ${inAppBrowserState?.loading ? "is-loading" : ""} ${inAppBrowserState?.error || error ? "has-error" : ""}`}
+              >
+                <div className="browser-chrome">
+                  <form
+                    className="browser-toolbar"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void openInAppBrowser().catch(showError);
+                    }}
                   >
-                    ←
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Forward"
-                    disabled={!inAppBrowserState?.canGoForward}
-                    onClick={() =>
-                      workspace &&
-                      void window.waypoint.navigateInAppBrowser(
-                        workspace.id,
-                        "forward",
-                      )
-                    }
-                  >
-                    →
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={
-                      inAppBrowserState?.loading ? "Stop loading" : "Reload"
-                    }
-                    onClick={() =>
-                      workspace &&
-                      void window.waypoint.navigateInAppBrowser(
-                        workspace.id,
-                        inAppBrowserState?.loading ? "stop" : "reload",
-                      )
-                    }
-                  >
-                    {inAppBrowserState?.loading ? "×" : "↻"}
-                  </button>
-                  <input
-                    aria-label="In-App Browser address"
-                    value={browserAddress}
-                    onChange={(event) => setBrowserAddress(event.target.value)}
-                    placeholder="https://allowed.example"
-                  />
-                  <button>Go</button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      workspace &&
-                      void window.waypoint.closeInAppBrowser(workspace.id)
-                    }
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      workspace &&
-                      void window.waypoint.clearInAppBrowser(workspace.id)
-                    }
-                  >
-                    Clear
-                  </button>
-                </form>
-                <div className="browser-identity" role="status">
-                  <strong>{workspace.name}</strong>
-                  <span>
-                    {inAppBrowserState?.profile ?? "Waypoint isolated"} ·{" "}
-                    {inAppBrowserState?.loading
-                      ? "Loading"
-                      : (inAppBrowserState?.error ??
-                        (inAppBrowserState?.open ? "Ready" : "Closed"))}{" "}
-                    · public-domain policy · page scripts blocked
-                  </span>
+                    <div className="browser-nav-actions">
+                      <button
+                        type="button"
+                        className="browser-icon-button"
+                        aria-label="Back"
+                        title="Back"
+                        disabled={!inAppBrowserState?.canGoBack}
+                        onClick={() =>
+                          workspace &&
+                          void window.waypoint.navigateInAppBrowser(
+                            workspace.id,
+                            "back",
+                          )
+                        }
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        className="browser-icon-button"
+                        aria-label="Forward"
+                        title="Forward"
+                        disabled={!inAppBrowserState?.canGoForward}
+                        onClick={() =>
+                          workspace &&
+                          void window.waypoint.navigateInAppBrowser(
+                            workspace.id,
+                            "forward",
+                          )
+                        }
+                      >
+                        →
+                      </button>
+                      <button
+                        type="button"
+                        className="browser-icon-button"
+                        aria-label={
+                          inAppBrowserState?.loading ? "Stop loading" : "Reload"
+                        }
+                        title={
+                          inAppBrowserState?.loading ? "Stop loading" : "Reload"
+                        }
+                        onClick={() =>
+                          workspace &&
+                          void window.waypoint.navigateInAppBrowser(
+                            workspace.id,
+                            inAppBrowserState?.loading ? "stop" : "reload",
+                          )
+                        }
+                      >
+                        {inAppBrowserState?.loading ? "×" : "↻"}
+                      </button>
+                    </div>
+                    <label className="browser-address-field">
+                      <span className="browser-address-shield" aria-hidden="true">
+                        ◈
+                      </span>
+                      <span className="sr-only">In-App Browser address</span>
+                      <input
+                        aria-label="In-App Browser address"
+                        value={browserAddress}
+                        onChange={(event) =>
+                          setBrowserAddress(event.target.value)
+                        }
+                        placeholder="https://allowed.example"
+                        spellCheck={false}
+                        autoCapitalize="none"
+                      />
+                      <span className="browser-address-host" aria-hidden="true">
+                        {browserHostLabel(browserAddress)}
+                      </span>
+                    </label>
+                    <button className="browser-go-button">Go</button>
+                    <div className="browser-session-actions">
+                      <button
+                        type="button"
+                        aria-label="Close browser session"
+                        title="Close browser session"
+                        onClick={() =>
+                          workspace &&
+                          void window.waypoint.closeInAppBrowser(workspace.id)
+                        }
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        className="browser-clear-button"
+                        aria-label="Clear isolated browser data"
+                        title="Clear isolated browser data"
+                        onClick={() =>
+                          workspace &&
+                          void window.waypoint.clearInAppBrowser(workspace.id)
+                        }
+                      >
+                        Clear data
+                      </button>
+                    </div>
+                  </form>
+                  {inAppBrowserState?.loading && (
+                    <div className="browser-progress" aria-hidden="true">
+                      <span />
+                    </div>
+                  )}
+                  <div className="browser-identity" role="status">
+                    <div className="browser-page-meta">
+                      <i
+                        className={
+                          inAppBrowserState?.error || error
+                            ? "error"
+                            : inAppBrowserState?.loading
+                              ? "loading"
+                              : inAppBrowserState?.open
+                                ? "ready"
+                                : "closed"
+                        }
+                      />
+                      <div>
+                        <strong>
+                          {inAppBrowserState?.title || "Private browser"}
+                        </strong>
+                        <small>
+                          {inAppBrowserState?.loading
+                            ? "Loading secure page…"
+                            : inAppBrowserState?.error || error
+                              ? "Page unavailable"
+                              : inAppBrowserState?.open
+                                ? browserHostLabel(
+                                    inAppBrowserState.url || browserAddress,
+                                  )
+                                : "Session closed"}
+                        </small>
+                      </div>
+                    </div>
+                    <div className="browser-policy-chips" aria-label="Browser policy">
+                      <span title="Browser data is isolated to this Waypoint session">
+                        ◉ {inAppBrowserState?.profile ?? "Waypoint isolated"}
+                      </span>
+                      <span title="Only explicitly allowed public domains can load">
+                        ◇ Public domains only
+                      </span>
+                      <span title="Untrusted page JavaScript is disabled">
+                        ⊘ Page scripts blocked
+                      </span>
+                    </div>
+                  </div>
+                  {(inAppBrowserState?.error || error) && (
+                    <div className="browser-error-banner" role="alert">
+                      <span>!</span>
+                      <div>
+                        <strong>Couldn’t open this page</strong>
+                        <small>{inAppBrowserState?.error || error}</small>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div
                   ref={inAppBrowserSlotRef}
                   className="in-app-browser-slot"
                   aria-label="Waypoint In-App Browser content"
-                />
+                >
+                  {!inAppBrowserState?.open && (
+                    <div className="browser-empty-state">
+                      <span aria-hidden="true">◎</span>
+                      <strong>Browse without leaving Waypoint</strong>
+                      <p>
+                        Enter an approved HTTPS address above. Browsing stays in
+                        an isolated profile with public-domain controls.
+                      </p>
+                      <small>Page scripts remain blocked by design.</small>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {drawer === "reflection" && (
