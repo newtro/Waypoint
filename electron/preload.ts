@@ -4,10 +4,12 @@ let currentWorkspaceId: string | undefined;
 contextBridge.exposeInMainWorld('waypoint', {
   platform: process.platform,
   onScreenCaptureRequest:(listener:()=>void)=>{const handler=()=>listener();ipcRenderer.on('waypoint:screen-capture-request',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-request',handler)},
+  onScreenCaptureCompleted:(listener:(value:{status:'completed'|'failed'|'canceled';message:string;captureId?:string})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{status:'completed'|'failed'|'canceled';message:string;captureId?:string})=>listener(value);ipcRenderer.on('waypoint:screen-capture-completed',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-completed',handler)},
   onScreenCaptureVisibility:(listener:(hidden:boolean)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{token:string;hidden:boolean})=>{listener(value.hidden);requestAnimationFrame(()=>requestAnimationFrame(()=>ipcRenderer.send('waypoint:screen-capture-visibility-ack',value)))};ipcRenderer.on('waypoint:screen-capture-visibility',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-visibility',handler)},
   screenCaptureReadiness:()=>ipcRenderer.invoke('waypoint:screen-capture-readiness'),
   screenCaptureSettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-settings',{workspaceId}),
   updateScreenCaptureSettings:(workspaceId:string,settings:unknown)=>ipcRenderer.invoke('waypoint:screen-capture-settings-update',{workspaceId,settings}),
+  setScreenCaptureShortcutRecording:(workspaceId:string,active:boolean)=>ipcRenderer.invoke('waypoint:screen-capture-shortcut-recording',{workspaceId,active}),
   screenCaptureSources:(workspaceId:string,mode:'region'|'window'|'display')=>ipcRenderer.invoke('waypoint:screen-capture-sources',{workspaceId,mode}),
   cancelScreenCaptureSources:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-cancel-sources',{workspaceId}),
   createScreenCapture:(workspaceId:string,token:string)=>ipcRenderer.invoke('waypoint:screen-capture-create',{workspaceId,token}),

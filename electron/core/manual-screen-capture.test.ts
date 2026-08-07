@@ -4,25 +4,32 @@ import {
   captureReadiness,
   assertVisibleCapturePixels,
   captureVisibilityStrategy,
+  defaultCaptureWorkflow,
   defaultCaptureShortcut,
+  normalizeCaptureShortcut,
+  quickCaptureCropBounds,
   validateCaptureLayers,
   validateCaptureSettings,
 } from './manual-screen-capture.js'
 
 describe('manual screen capture boundary', () => {
-  it('accepts only curated bounded settings', () => {
+  it('accepts bounded settings and safe user-recorded accelerators', () => {
     expect(validateCaptureSettings({
+      workflow: 'quick',
       mode: 'region',
-      shortcut: 'CommandOrControl+Shift+8',
+      shortcut: 'CommandOrControl+Shift+k',
       retentionDays: 30,
       maxCaptures: 100,
-    })).toMatchObject({ mode: 'region' })
+    })).toMatchObject({ workflow: 'quick', mode: 'region', shortcut: 'CommandOrControl+Shift+K' })
     expect(() => validateCaptureSettings({
+      workflow: 'guided',
       mode: 'display',
-      shortcut: 'Control+X',
+      shortcut: 'Control+NotAKey',
       retentionDays: 30,
       maxCaptures: 100,
     })).toThrow(/invalid/)
+    expect(normalizeCaptureShortcut('PrintScreen')).toBe('PrintScreen')
+    expect(() => normalizeCaptureShortcut('X')).toThrow(/invalid/)
   })
 
   it('bounds editable layers and irreversible tools', () => {
@@ -62,6 +69,22 @@ describe('manual screen capture boundary', () => {
     expect(captureReadiness('linux', 'unknown').available).toBe(false)
     expect(defaultCaptureShortcut('win32')).toBe('PrintScreen')
     expect(defaultCaptureShortcut('darwin')).toBe('CommandOrControl+Shift+8')
+    expect(defaultCaptureWorkflow('win32')).toBe('quick')
+    expect(defaultCaptureWorkflow('darwin')).toBe('guided')
+  })
+
+  it('maps a dragged region from display coordinates to native image pixels', () => {
+    expect(quickCaptureCropBounds(
+      { x: 100, y: 50, width: 400, height: 300 },
+      { width: 1000, height: 500 },
+      { width: 2000, height: 1000 },
+    )).toEqual({ x: 200, y: 100, width: 800, height: 600 })
+    expect(quickCaptureCropBounds(
+      { x: -10, y: -10, width: 40, height: 40 },
+      { width: 100, height: 100 },
+      { width: 100, height: 100 },
+    )).toEqual({ x: 0, y: 0, width: 30, height: 30 })
+    expect(() => quickCaptureCropBounds({ x: 0, y: 0, width: 2, height: 2 }, { width: 100, height: 100 }, { width: 100, height: 100 })).toThrow(/invalid/)
   })
 
   it('rejects the exact all-black native frame signature without rejecting dark content', () => {

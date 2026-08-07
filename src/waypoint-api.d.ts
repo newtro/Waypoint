@@ -9,10 +9,12 @@ declare global {
     waypoint: {
       platform: string;
       onScreenCaptureRequest(listener:()=>void):()=>void;
+      onScreenCaptureCompleted(listener:(value:{status:'completed'|'failed'|'canceled';message:string;captureId?:string})=>void):()=>void;
       onScreenCaptureVisibility(listener:(hidden:boolean)=>void):()=>void;
       screenCaptureReadiness():Promise<{platform:string;available:boolean;permission:string;state:string;reason:string;shortcut:{registered:boolean;shortcut:string;reason:string}}>;
-      screenCaptureSettings(workspaceId:string):Promise<{mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number}>;
-      updateScreenCaptureSettings(workspaceId:string,settings:{mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number}):Promise<{mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number;shortcutReady:boolean;shortcutReason:string}>;
+      screenCaptureSettings(workspaceId:string):Promise<{workflow:'guided'|'quick';mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number}>;
+      updateScreenCaptureSettings(workspaceId:string,settings:{workflow:'guided'|'quick';mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number}):Promise<{workflow:'guided'|'quick';mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number;shortcutReady:boolean;shortcutReason:string}>;
+      setScreenCaptureShortcutRecording(workspaceId:string,active:boolean):Promise<{registered:boolean;shortcut:string;reason:string}>;
       screenCaptureSources(workspaceId:string,mode:'region'|'window'|'display'):Promise<Array<{token:string;name:string;displayId:string;thumbnailDataUrl:string;width:number;height:number}>>;
       cancelScreenCaptureSources(workspaceId:string):Promise<{canceled:true}>;
       createScreenCapture(workspaceId:string,token:string):Promise<ScreenCaptureView>;

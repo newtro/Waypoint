@@ -19,6 +19,7 @@ import type { DiagnosticsReport } from "../electron/core/diagnostics";
 import { failureAdvice, type ExecutionRunView } from "./ai-workbench-ui";
 import { reconcileSelectedChatId, RefreshGate } from "./chat-selection";
 import { groupChatHistory, type HistorySort } from "./chat-history";
+import { HotkeyRecorder } from "./hotkey-recorder";
 import {
   addMainTab,
   chatTab,
@@ -1387,6 +1388,7 @@ export function App() {
     [workspace],
   );
   useEffect(()=>window.waypoint.onScreenCaptureRequest(()=>setScreenCaptureOpen(true)),[])
+  useEffect(()=>window.waypoint.onScreenCaptureCompleted((result)=>{if(result.status==='failed')setError(result.message);else if(result.status==='completed')setNotice(result.message)}),[])
   useEffect(()=>{if(!workspace)return;void Promise.all([window.waypoint.screenCaptureSettings(workspace.id),window.waypoint.screenCaptureReadiness()]).then(([settings,readiness])=>{setManualCaptureSettings(settings);setManualCaptureReadiness(readiness)})},[workspace])
   useEffect(() => {
     if (drawer !== "browser" || !workspace) return;
@@ -5652,15 +5654,25 @@ export function App() {
                   </div>
                 <section id="settings-capture" className="settings-section">
                   <h3>Screen capture</h3>
-                  <p className="drawer-intro">Manual and local only. Waypoint asks you to choose a window or display each time; Region opens the chosen display in the crop editor. Captures are never sent to a model unless you explicitly add one to chat and ask an image-capable route.</p>
+                  <p className="drawer-intro">Choose whether your shortcut opens the full capture studio or takes a screenshot immediately. Captures stay local and are never sent to a model unless you explicitly add one to chat.</p>
                   <div className="automation-boundary" role="status"><strong>{manualCaptureReadiness?.available?'Native capture ready':'Permission required'}</strong><span>{manualCaptureReadiness?.reason||'Checking platform capture readiness…'} {manualCaptureReadiness?.shortcut.reason}</span></div>
-                  {manualCaptureSettings&&<div className="settings-grid" aria-label="Manual screen capture settings">
-                    <label>Default capture mode<select value={manualCaptureSettings.mode} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,mode:event.target.value as typeof manualCaptureSettings.mode})}><option value="region">Region (crop after capture)</option><option value="window">Window</option><option value="display">Display</option></select></label>
-                    <label>Global shortcut<select value={manualCaptureSettings.shortcut} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,shortcut:event.target.value})}>{manualCaptureReadiness?.platform==='Windows'?<><option value="PrintScreen">Print Screen / PrtSc (default)</option><option value="CommandOrControl+Shift+8">Ctrl + Shift + 8</option><option value="CommandOrControl+Shift+9">Ctrl + Shift + 9</option><option value="CommandOrControl+Alt+8">Ctrl + Alt + 8</option></>:<>{manualCaptureSettings.shortcut==='PrintScreen'&&<option value="PrintScreen">Current Windows setting · Print Screen</option>}<option value="CommandOrControl+Shift+8">⌘ + Shift + 8</option><option value="CommandOrControl+Shift+9">⌘ + Shift + 9</option><option value="CommandOrControl+Alt+8">⌘ + Option + 8</option></>}</select></label>
-                    <label>Local retention<select value={manualCaptureSettings.retentionDays} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,retentionDays:Number(event.target.value) as 7|30|90})}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label>
-                    <label>Storage limit<select value={manualCaptureSettings.maxCaptures} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,maxCaptures:Number(event.target.value)})}><option value="50">50 captures</option><option value="100">100 captures</option><option value="250">250 captures</option><option value="500">500 captures</option></select></label>
-                  </div>}
-                  <div className="drawer-actions"><button onClick={()=>setScreenCaptureOpen(true)}>Capture now</button><button disabled={!workspace||!manualCaptureSettings} onClick={()=>workspace&&manualCaptureSettings&&void window.waypoint.updateScreenCaptureSettings(workspace.id,manualCaptureSettings).then((saved)=>{setManualCaptureSettings(saved);setNotice(saved.shortcutReason)})}>Save capture settings</button></div>
+                  {manualCaptureSettings&&<>
+                    <div className="capture-workflow-picker" role="radiogroup" aria-label="Shortcut behavior">
+                      <button type="button" role="radio" aria-checked={manualCaptureSettings.workflow==='guided'} className={manualCaptureSettings.workflow==='guided'?'active':''} onClick={()=>setManualCaptureSettings({...manualCaptureSettings,workflow:'guided'})}>
+                        <span className="capture-workflow-icon" aria-hidden="true">▣</span><strong>Guided capture</strong><small>Open the source picker, preview, crop, annotation tools, and capture library.</small>
+                      </button>
+                      <button type="button" role="radio" aria-checked={manualCaptureSettings.workflow==='quick'} className={manualCaptureSettings.workflow==='quick'?'active':''} onClick={()=>setManualCaptureSettings({...manualCaptureSettings,workflow:'quick'})}>
+                        <span className="capture-workflow-icon" aria-hidden="true">+</span><strong>Quick capture</strong><small>Stay out of the way. Capture and copy immediately with no Waypoint window.</small>
+                      </button>
+                    </div>
+                    <div className="settings-grid" aria-label="Manual screen capture settings">
+                      <label>{manualCaptureSettings.workflow==='quick'?'Quick capture target':'Default capture target'}<select value={manualCaptureSettings.mode} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,mode:event.target.value as typeof manualCaptureSettings.mode})}><option value="region">{manualCaptureSettings.workflow==='quick'?'Region · draw with crosshair':'Region · crop in studio'}</option><option value="window">Active window</option><option value="display">Display under cursor</option></select><small>{manualCaptureSettings.workflow==='quick'&&manualCaptureSettings.mode==='region'?'Press the shortcut, then drag around exactly what you want.':manualCaptureSettings.workflow==='quick'?'Pressing the shortcut captures this target immediately.':'You can change the target each time in Guided Capture.'}</small></label>
+                      <label>Global shortcut<HotkeyRecorder workspaceId={workspace?.id||''} value={manualCaptureSettings.shortcut} platform={platform} onChange={(shortcut)=>setManualCaptureSettings({...manualCaptureSettings,shortcut})}/><small>Click the shortcut, then press your preferred key combination.</small></label>
+                      <label>Local retention<select value={manualCaptureSettings.retentionDays} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,retentionDays:Number(event.target.value) as 7|30|90})}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label>
+                      <label>Storage limit<select value={manualCaptureSettings.maxCaptures} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,maxCaptures:Number(event.target.value)})}><option value="50">50 captures</option><option value="100">100 captures</option><option value="250">250 captures</option><option value="500">500 captures</option></select></label>
+                    </div>
+                  </>}
+                  <div className="drawer-actions"><button onClick={()=>setScreenCaptureOpen(true)}>Open Guided Capture</button><button disabled={!workspace||!manualCaptureSettings} onClick={()=>workspace&&manualCaptureSettings&&void window.waypoint.updateScreenCaptureSettings(workspace.id,manualCaptureSettings).then(async(saved)=>{setManualCaptureSettings(saved);setManualCaptureReadiness(await window.waypoint.screenCaptureReadiness());setNotice(saved.shortcutReason)})}>Save capture settings</button></div>
                 </section>
                 <section id="settings-tools" className="settings-section">
                   <h3>AI Tool Gateway</h3>

@@ -29,6 +29,7 @@ describe('ordered schema migration', () => {
     runMigrations(db,schemaVersion(db),[{version:31,apply:(database)=>database.exec('CREATE TABLE cross_workspace_rollups(id TEXT PRIMARY KEY)')}])
     runMigrations(db,schemaVersion(db),[{version:32,apply:(database)=>database.exec('CREATE TABLE automatic_chat_titles(id TEXT PRIMARY KEY)')}])
     runMigrations(db,schemaVersion(db),[{version:33,apply:(database)=>database.exec('CREATE TABLE screen_captures(id TEXT PRIMARY KEY)')}])
+    runMigrations(db,schemaVersion(db),[{version:34,apply:(database)=>database.exec('CREATE TABLE quick_capture_settings(id TEXT PRIMARY KEY)')}])
     expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION)
     expect((db.prepare('SELECT value FROM content').get() as {value:string}).value).toBe('preserved')
     expect(readdirSync(path.join(root,'migration-snapshots')).filter((name)=>name.endsWith('.sqlite'))).toHaveLength(1)

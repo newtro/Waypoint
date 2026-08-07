@@ -7,12 +7,13 @@ import {
   globalShortcut,
   ipcMain,
   nativeImage,
+  Notification,
   safeStorage,
   screen,
   shell,
   systemPreferences,
 } from "electron";
-import type { IpcMainInvokeEvent, WebContents } from "electron";
+import type { Display, IpcMainInvokeEvent, NativeImage, WebContents } from "electron";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
@@ -138,7 +139,7 @@ import {
 } from "./core/browser-discovery.js";
 import { InAppBrowserController } from "./core/in-app-browser.js";
 import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
-import { assertVisibleCapturePixels, captureReadiness, captureVisibilityStrategy, validateCaptureSettings, type CaptureMode } from "./core/manual-screen-capture.js";
+import { assertVisibleCapturePixels, captureReadiness, captureVisibilityStrategy, quickCaptureCropBounds, validateCaptureSettings, type CaptureMode, type CaptureSettings } from "./core/manual-screen-capture.js";
 
 // Contained browser traffic must not bypass the audited HTTPS CONNECT gate over UDP/QUIC.
 app.commandLine.appendSwitch(
@@ -174,14 +175,176 @@ function setCaptureOverlayVisibility(sender:WebContents,hidden:boolean):Promise<
   });
 }
 let captureShortcutState={registered:false,shortcut:'',reason:'Capture shortcut has not been registered yet'};
+let captureShortcutSuspended = false;
+let quickCaptureActive = false;
+const pendingQuickCaptures = new Map<string, {
+  window: BrowserWindow;
+  workspaceId: string;
+  display: Display;
+  image: NativeImage;
+  sourceId: string;
+  sourceName: string;
+}>();
 
-function registerCaptureShortcut(shortcut: string): boolean {
+function captureWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getAllWindows().find((item) => !item.isDestroyed() && ![...pendingQuickCaptures.values()].some((pending) => pending.window === item));
+}
+
+function quickCaptureNotice(status: 'completed' | 'failed' | 'canceled', message: string, captureId?: string): void {
+  captureWindow()?.webContents.send('waypoint:screen-capture-completed', { status, message, captureId });
+  if (status !== 'canceled' && Notification.isSupported()) new Notification({ title: 'Waypoint screen capture', body: message, silent: true }).show();
+}
+
+function saveQuickCapture(workspaceId: string, mode: CaptureMode, sourceId: string, sourceName: string, image: NativeImage) {
+  const size = image.getSize();
+  assertVisibleCapturePixels(image.toBitmap(), size.width, size.height);
+  const capture = store.createScreenCapture(workspaceId, {
+    title: `Quick capture · ${sourceName}`,
+    mode,
+    sourceId,
+    sourceName,
+    capturedAt: new Date().toISOString(),
+    width: size.width,
+    height: size.height,
+  }, image.toPNG());
+  clipboard.writeImage(image);
+  quickCaptureNotice('completed', 'Captured and copied to the clipboard.', capture.id);
+  return capture;
+}
+
+async function displayCapture(display: Display): Promise<{ image: NativeImage; sourceId: string; sourceName: string }> {
+  const width = Math.max(1, Math.round(display.bounds.width * display.scaleFactor)),
+    height = Math.max(1, Math.round(display.bounds.height * display.scaleFactor)),
+    sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width, height }, fetchWindowIcons: false }),
+    source = sources.find((item) => item.display_id === String(display.id)) ?? sources[0];
+  if (!source || source.thumbnail.isEmpty()) throw new Error('The display could not be captured.');
+  return { image: source.thumbnail, sourceId: source.id, sourceName: source.name || `Display ${display.id}` };
+}
+
+async function foregroundWindowTitle(): Promise<string> {
+  if (process.platform !== 'win32') throw new Error('Quick active-window capture is currently available on Windows.');
+  const script = "$sig='[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);'; Add-Type -MemberDefinition $sig -Name Native -Namespace Waypoint; $h=[Waypoint.Native]::GetForegroundWindow(); $b=New-Object System.Text.StringBuilder 1024; [void][Waypoint.Native]::GetWindowText($h,$b,$b.Capacity); [Console]::Write($b.ToString())";
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 2_000, windowsHide: true, maxBuffer: 8_192 });
+  const title = stdout.trim();
+  if (!title || title === 'Waypoint') throw new Error('No external active window is available to capture.');
+  return title;
+}
+
+async function activeWindowCapture(): Promise<{ image: NativeImage; sourceId: string; sourceName: string }> {
+  const title = await foregroundWindowTitle(),
+    sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 4096, height: 4096 }, fetchWindowIcons: false }),
+    normalized = title.toLocaleLowerCase(),
+    source = sources.find((item) => item.name.toLocaleLowerCase() === normalized)
+      ?? sources.find((item) => normalized.includes(item.name.toLocaleLowerCase()) || item.name.toLocaleLowerCase().includes(normalized));
+  if (!source || source.thumbnail.isEmpty()) throw new Error(`The active window “${title}” could not be matched. Try Guided mode.`);
+  return { image: source.thumbnail, sourceId: source.id, sourceName: source.name };
+}
+
+function quickCaptureOverlayHtml(): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;user-select:none}
+    body{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Cpath d='M24 3v42M3 24h42' stroke='white' stroke-width='3'/%3E%3Cpath d='M24 3v42M3 24h42' stroke='%231d2821' stroke-width='1'/%3E%3C/svg%3E") 24 24,crosshair}
+    #shade{position:fixed;inset:0;background:rgba(15,20,17,.28)}
+    #selection{display:none;position:fixed;border:2px solid white;outline:1px solid rgba(20,30,24,.72);box-shadow:0 0 0 100vmax rgba(8,12,10,.48);background:rgba(255,255,255,.04)}
+  </style></head><body><div id="shade"></div><div id="selection"></div><script>
+    const box=document.getElementById('selection'),shade=document.getElementById('shade');let start;
+    const draw=(x,y)=>{const left=Math.min(start.x,x),top=Math.min(start.y,y),width=Math.abs(x-start.x),height=Math.abs(y-start.y);box.style.cssText='display:block;left:'+left+'px;top:'+top+'px;width:'+width+'px;height:'+height+'px';return{x:left,y:top,width,height}};
+    addEventListener('pointerdown',event=>{if(event.button!==0)return;start={x:event.clientX,y:event.clientY};shade.style.display='none';draw(event.clientX,event.clientY)});
+    addEventListener('pointermove',event=>{if(start)draw(event.clientX,event.clientY)});
+    addEventListener('pointerup',event=>{if(!start)return;const bounds=draw(event.clientX,event.clientY);if(bounds.width>=4&&bounds.height>=4)window.quickCapture.select(bounds);else{start=undefined;box.style.display='none';shade.style.display='block'}});
+    addEventListener('keydown',event=>{if(event.key==='Escape')window.quickCapture.cancel()});
+    addEventListener('contextmenu',event=>{event.preventDefault();window.quickCapture.cancel()});
+  </script></body></html>`;
+}
+
+async function startQuickCapture(workspaceId: string, settings: CaptureSettings): Promise<void> {
+  if (quickCaptureActive) return;
+  quickCaptureActive = true;
+  try {
+    if (settings.mode === 'window') {
+      const capture = await activeWindowCapture();
+      saveQuickCapture(workspaceId, 'window', capture.sourceId, capture.sourceName, capture.image);
+      quickCaptureActive = false;
+      return;
+    }
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()), capture = await displayCapture(display);
+    if (settings.mode === 'display') {
+      saveQuickCapture(workspaceId, 'display', capture.sourceId, capture.sourceName, capture.image);
+      quickCaptureActive = false;
+      return;
+    }
+    const token = randomUUID(), overlay = new BrowserWindow({
+      x: display.bounds.x,
+      y: display.bounds.y,
+      width: display.bounds.width,
+      height: display.bounds.height,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      fullscreenable: false,
+      show: false,
+      webPreferences: {
+        preload: path.join(currentDirectory, 'quick-capture-preload.cjs'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        additionalArguments: [`--quick-capture-token=${token}`],
+      },
+    });
+    pendingQuickCaptures.set(token, { window: overlay, workspaceId, display, image: capture.image, sourceId: capture.sourceId, sourceName: capture.sourceName });
+    overlay.setAlwaysOnTop(true, 'screen-saver');
+    overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    overlay.on('closed', () => { pendingQuickCaptures.delete(token); quickCaptureActive = false; });
+    await overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(quickCaptureOverlayHtml())}`);
+    overlay.show();
+    overlay.focus();
+  } catch (error) {
+    quickCaptureActive = false;
+    quickCaptureNotice('failed', error instanceof Error ? error.message : 'Quick capture failed.');
+  }
+}
+
+ipcMain.on('waypoint:quick-capture-select', (event, input: unknown) => {
+  const value = input as Record<string, unknown>, token = typeof value?.token === 'string' ? value.token : '', pending = pendingQuickCaptures.get(token);
+  if (!pending || pending.window.webContents.id !== event.sender.id) return;
+  try {
+    const selection = value.bounds as { x: number; y: number; width: number; height: number },
+      crop = quickCaptureCropBounds(selection, pending.display.bounds, pending.image.getSize()),
+      image = pending.image.crop(crop);
+    saveQuickCapture(pending.workspaceId, 'region', pending.sourceId, `${pending.sourceName} region`, image);
+  } catch (error) {
+    quickCaptureNotice('failed', error instanceof Error ? error.message : 'Region capture failed.');
+  } finally {
+    pending.window.destroy();
+  }
+});
+
+ipcMain.on('waypoint:quick-capture-cancel', (event, input: unknown) => {
+  const token = typeof (input as Record<string, unknown>)?.token === 'string' ? String((input as Record<string, unknown>).token) : '', pending = pendingQuickCaptures.get(token);
+  if (!pending || pending.window.webContents.id !== event.sender.id) return;
+  quickCaptureNotice('canceled', 'Quick capture canceled.');
+  pending.window.destroy();
+});
+
+function registerCaptureShortcut(workspaceId: string, settings: CaptureSettings): boolean {
   if(captureShortcutState.shortcut)globalShortcut.unregister(captureShortcutState.shortcut);
-  const registered=globalShortcut.register(shortcut, () => {
-    const window = BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+  if (captureShortcutSuspended) {
+    captureShortcutState={registered:false,shortcut:settings.shortcut,reason:'Shortcut paused while recording a replacement'};
+    return false;
+  }
+  const registered=globalShortcut.register(settings.shortcut, () => {
+    if (settings.workflow === 'quick') {
+      void startQuickCapture(workspaceId, settings);
+      return;
+    }
+    const window = captureWindow();
     if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); window.webContents.send('waypoint:screen-capture-request') }
   });
-  captureShortcutState={registered,shortcut,reason:registered?'Global screenshot shortcut ready':'The shortcut is owned by macOS, Windows, or another application. Choose a different shortcut in Settings.'};
+  captureShortcutState={registered,shortcut:settings.shortcut,reason:registered?'Global screenshot shortcut ready':'The shortcut is owned by macOS, Windows, or another application. Choose a different shortcut in Settings.'};
   return registered;
 }
 let trustedRendererUrl: string | undefined;
@@ -725,12 +888,18 @@ function registerIpc(): void {
   });
   handle('waypoint:screen-capture-settings', (_event, input: unknown) => {
     const workspaceId = text((input as Record<string, unknown>)?.workspaceId, 'workspace id', 128);
-    const settings=store.screenCaptureSettings(workspaceId);registerCaptureShortcut(settings.shortcut);return settings;
+    const settings=store.screenCaptureSettings(workspaceId);registerCaptureShortcut(workspaceId,settings);return settings;
   });
   handle('waypoint:screen-capture-settings-update', (_event, input: unknown) => {
     const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, 'workspace id', 128), settings = validateCaptureSettings(value.settings as Parameters<typeof validateCaptureSettings>[0]);
-    const saved = store.setScreenCaptureSettings(workspaceId, settings), shortcutReady = registerCaptureShortcut(saved.shortcut);
+    const saved = store.setScreenCaptureSettings(workspaceId, settings), shortcutReady = registerCaptureShortcut(workspaceId,saved);
     return { ...saved, shortcutReady, shortcutReason: shortcutReady ? 'Global shortcut ready' : 'Shortcut is already used by another application' };
+  });
+  handle('waypoint:screen-capture-shortcut-recording', (_event, input: unknown) => {
+    const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace id',128),active=Boolean(value.active),settings=store.screenCaptureSettings(workspaceId);
+    captureShortcutSuspended=active;
+    if(active){if(captureShortcutState.shortcut)globalShortcut.unregister(captureShortcutState.shortcut);captureShortcutState={registered:false,shortcut:settings.shortcut,reason:'Shortcut paused while recording a replacement'};return captureShortcutState}
+    registerCaptureShortcut(workspaceId,settings);return captureShortcutState;
   });
   handle('waypoint:screen-capture-sources', async (event, input: unknown) => {
     const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId,'workspace id',128), mode = text(value.mode, 'capture mode', 16) as CaptureMode;
@@ -4057,7 +4226,7 @@ else {
         if(command==='browser.status'){const settings=store.toolGatewaySettings(workspaceId),surface=inAppBrowser.status(workspaceId);return{value:{mode:settings.browserProfileMode,profile:settings.browserProfileName,allowedDomains:settings.browserAllowedDomains,stopped:settings.stopped,surface},summary:'Read browser readiness and policy status'}}
         if(command==='browser.domains.update'){const current=store.toolGatewaySettings(workspaceId),domains=Array.isArray(input.domains)?input.domains.map((item)=>text(item,'browser domain',253)):[];const next=store.setToolGatewaySettings(workspaceId,{...current,browserAllowedDomains:domains});return{value:{allowedDomains:next.browserAllowedDomains},summary:'Updated browser public-domain policy'}}
         if(command==='screen_capture.status'){return{value:{settings:store.screenCaptureSettings(workspaceId),captures:store.listScreenCaptures(workspaceId).map(({id,title,mode,capturedAt,expiresAt,bytes})=>({id,title,mode,capturedAt,expiresAt,bytes})),readiness:captureReadiness(process.platform,process.platform==='darwin'?systemPreferences.getMediaAccessStatus('screen') as 'granted'|'denied'|'restricted'|'not-determined'|'unknown':'unknown')},summary:'Read manual local screenshot status'}}
-        if(command==='screen_capture.settings.update'){const current=store.screenCaptureSettings(workspaceId),next=store.setScreenCaptureSettings(workspaceId,validateCaptureSettings({mode:(input.mode??current.mode) as CaptureMode,shortcut:String(input.shortcut??current.shortcut),retentionDays:Number(input.retentionDays??current.retentionDays) as 7|30|90,maxCaptures:Number(input.maxCaptures??current.maxCaptures)}));registerCaptureShortcut(next.shortcut);return{value:next,summary:'Updated manual screenshot settings'}}
+        if(command==='screen_capture.settings.update'){const current=store.screenCaptureSettings(workspaceId),next=store.setScreenCaptureSettings(workspaceId,validateCaptureSettings({workflow:(input.workflow??current.workflow) as CaptureSettings['workflow'],mode:(input.mode??current.mode) as CaptureMode,shortcut:String(input.shortcut??current.shortcut),retentionDays:Number(input.retentionDays??current.retentionDays) as 7|30|90,maxCaptures:Number(input.maxCaptures??current.maxCaptures)}));registerCaptureShortcut(workspaceId,next);return{value:next,summary:'Updated manual screenshot settings'}}
         if(command==='screen_capture.open'){BrowserWindow.getAllWindows()[0]?.webContents.send('waypoint:screen-capture-request');return{value:{opened:true},summary:'Opened the manual screenshot picker; the user must choose a source'}}
         if (command === "chat.create") {
           const id = store.createChat(
@@ -4235,7 +4404,7 @@ else {
         registerIpc();
         createWindow();
         const initialWorkspace=store.listWorkspaces()[0];
-        registerCaptureShortcut(initialWorkspace?store.screenCaptureSettings(initialWorkspace.id).shortcut:process.platform==='win32'?'PrintScreen':'CommandOrControl+Shift+8');
+        if(initialWorkspace)registerCaptureShortcut(initialWorkspace.id,store.screenCaptureSettings(initialWorkspace.id));
         const timer = setInterval(() => {
           for (const workspace of store.listWorkspaces()) {
             if (

@@ -10,5 +10,5 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["electron/preload.ts"]
+  "include": ["electron/preload.ts", "electron/quick-capture-preload.ts"]
 }

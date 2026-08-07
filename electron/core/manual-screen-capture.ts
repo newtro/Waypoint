@@ -1,15 +1,11 @@
 import { createHash } from 'node:crypto'
 
 export const CAPTURE_MODES = ['region', 'window', 'display'] as const
-export const CAPTURE_SHORTCUTS = [
-  'PrintScreen',
-  'CommandOrControl+Shift+8',
-  'CommandOrControl+Shift+9',
-  'CommandOrControl+Alt+8',
-] as const
 export const defaultCaptureShortcut=(platform:NodeJS.Platform)=>platform==='win32'?'PrintScreen':'CommandOrControl+Shift+8'
+export const defaultCaptureWorkflow=(platform:NodeJS.Platform):CaptureWorkflow=>platform==='win32'?'quick':'guided'
 
 export type CaptureMode = (typeof CAPTURE_MODES)[number]
+export type CaptureWorkflow = 'guided' | 'quick'
 export type CaptureTool =
   | 'select'
   | 'crop'
@@ -40,10 +36,40 @@ export type CaptureLayer = {
 }
 
 export type CaptureSettings = {
+  workflow: CaptureWorkflow
   mode: CaptureMode
   shortcut: string
   retentionDays: 7 | 30 | 90
   maxCaptures: number
+}
+
+const CAPTURE_MODIFIERS = new Set(['CommandOrControl', 'Command', 'Control', 'Alt', 'Option', 'AltGr', 'Shift', 'Super'])
+const CAPTURE_KEYS = new Set([
+  'PrintScreen', 'Space', 'Tab', 'Backspace', 'Delete', 'Insert', 'Home', 'End',
+  'PageUp', 'PageDown', 'Up', 'Down', 'Left', 'Right', 'Escape', 'Enter',
+  'VolumeUp', 'VolumeDown', 'VolumeMute', 'MediaNextTrack', 'MediaPreviousTrack',
+  'MediaStop', 'MediaPlayPause',
+])
+
+export function normalizeCaptureShortcut(value: string): string {
+  const parts = value.split('+').map((part) => part.trim()).filter(Boolean)
+  if (!parts.length || parts.length > 5) throw new Error('screen_capture_shortcut_invalid')
+  const key = parts.at(-1)!
+  const modifiers = parts.slice(0, -1)
+  if (new Set(modifiers).size !== modifiers.length || modifiers.some((part) => !CAPTURE_MODIFIERS.has(part))) {
+    throw new Error('screen_capture_shortcut_invalid')
+  }
+  const normalizedKey = /^[a-z]$/i.test(key)
+    ? key.toUpperCase()
+    : /^\d$/.test(key) || /^F(?:[1-9]|1\d|2[0-4])$/.test(key)
+      ? key.toUpperCase()
+      : CAPTURE_KEYS.has(key)
+        ? key
+        : undefined
+  if (!normalizedKey || (!modifiers.length && normalizedKey !== 'PrintScreen' && !/^F\d+$/.test(normalizedKey))) {
+    throw new Error('screen_capture_shortcut_invalid')
+  }
+  return [...modifiers, normalizedKey].join('+')
 }
 
 export function captureVisibilityStrategy(mode: CaptureMode): { hideWindow: boolean; hideOverlay: boolean } {
@@ -59,14 +85,36 @@ const CAPTURE_TOOLS = new Set<CaptureTool>([
 
 export function validateCaptureSettings(value: CaptureSettings): CaptureSettings {
   if (
-    !CAPTURE_MODES.includes(value.mode)
-    || !CAPTURE_SHORTCUTS.includes(value.shortcut as (typeof CAPTURE_SHORTCUTS)[number])
+    !['guided', 'quick'].includes(value.workflow)
+    || !CAPTURE_MODES.includes(value.mode)
     || ![7, 30, 90].includes(value.retentionDays)
     || !Number.isSafeInteger(value.maxCaptures)
     || value.maxCaptures < 10
     || value.maxCaptures > 500
   ) throw new Error('screen_capture_settings_invalid')
-  return value
+  return { ...value, shortcut: normalizeCaptureShortcut(value.shortcut) }
+}
+
+export function quickCaptureCropBounds(
+  selection: { x: number; y: number; width: number; height: number },
+  displaySize: { width: number; height: number },
+  imageSize: { width: number; height: number },
+): { x: number; y: number; width: number; height: number } {
+  if (
+    ![selection.x, selection.y, selection.width, selection.height, displaySize.width, displaySize.height, imageSize.width, imageSize.height].every(Number.isFinite)
+    || selection.width < 4 || selection.height < 4
+    || displaySize.width < 1 || displaySize.height < 1
+    || imageSize.width < 1 || imageSize.height < 1
+  ) throw new Error('screen_capture_region_invalid')
+  const left = Math.max(0, Math.min(displaySize.width, selection.x)),
+    top = Math.max(0, Math.min(displaySize.height, selection.y)),
+    right = Math.max(left, Math.min(displaySize.width, selection.x + selection.width)),
+    bottom = Math.max(top, Math.min(displaySize.height, selection.y + selection.height)),
+    x = Math.min(imageSize.width - 1, Math.round(left * imageSize.width / displaySize.width)),
+    y = Math.min(imageSize.height - 1, Math.round(top * imageSize.height / displaySize.height)),
+    width = Math.max(1, Math.min(imageSize.width - x, Math.round((right - left) * imageSize.width / displaySize.width))),
+    height = Math.max(1, Math.min(imageSize.height - y, Math.round((bottom - top) * imageSize.height / displaySize.height)))
+  return { x, y, width, height }
 }
 
 function validatePoint(value: unknown, width: number, height: number): CapturePoint {
@@ -164,7 +212,7 @@ export function captureReadiness(
       available: true,
       permission: 'picker',
       state: 'ready',
-      reason: 'Waypoint uses Electron’s Windows desktop-capture backend and asks you to choose a window or display in its local capture sheet.',
+      reason: 'Guided capture opens Waypoint’s local source picker. Quick capture can grab a region, the active window, or the display under your cursor without opening Waypoint.',
     }
   }
   return {

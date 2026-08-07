@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 
 const styles = readFileSync(new URL('../../src/screen-capture.css', import.meta.url), 'utf8')
 const component = readFileSync(new URL('../../src/screen-capture-studio.tsx', import.meta.url), 'utf8')
+const settings = readFileSync(new URL('../../src/main.tsx', import.meta.url), 'utf8')
+const recorder = readFileSync(new URL('../../src/hotkey-recorder.tsx', import.meta.url), 'utf8')
 
 describe('screen capture visual workspace', () => {
   it('keeps the modal bounded and responsive at narrow and short viewports', () => {
@@ -49,5 +51,16 @@ describe('screen capture visual workspace', () => {
   it('retains explicit privacy and independent-copy redaction messaging', () => {
     expect(component).toContain('Nothing is uploaded or sent to a model.')
     expect(component).toContain('existing copies remain independent')
+  })
+
+  it('offers guided and quick workflows with a recordable Windows shortcut', () => {
+    expect(settings).toContain('aria-label="Shortcut behavior"')
+    expect(settings).toContain('Guided capture')
+    expect(settings).toContain('Quick capture')
+    expect(settings).toContain('Region · draw with crosshair')
+    expect(settings).toContain('<HotkeyRecorder')
+    expect(recorder).toContain("platform === 'win32' ? 'PrintScreen'")
+    expect(recorder).toContain("event.code.slice(5)")
+    expect(recorder).toContain("')!@#$%^&*('.indexOf(event.key)")
   })
 })
