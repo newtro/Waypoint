@@ -48,6 +48,11 @@ import { meetingWavSegments } from "./meeting-transcription.js";
 import { parseBrowserChatCommand } from "./browser-chat-command";
 import { ScreenCaptureStudio } from "./screen-capture-studio";
 import { confirmModal, promptModal, ModalDialogHost } from "./modal-dialogs";
+import {
+  knowledgeShortcutIcon,
+  primaryShortcutLabel,
+  primaryShortcutPressed,
+} from "./platform-shortcuts";
 type VoiceMode = "push_to_talk" | "hands_free";
 type VoiceState =
   "off" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
@@ -131,6 +136,9 @@ type Drawer =
   | undefined;
 
 export function App() {
+  const platform = window.waypoint.platform,
+    shortcutModifier = primaryShortcutLabel(platform),
+    knowledgeIcon = knowledgeShortcutIcon(platform);
   const [workspace, setWorkspace] = useState<WorkspaceSummary>(),
     [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [chats, setChats] = useState<Chat[]>([]),
@@ -1664,16 +1672,16 @@ export function App() {
         setDrawer(undefined);
         setSidebarOpen(false);
       }
-      if (event.metaKey && event.key.toLowerCase() === "n") {
+      if (primaryShortcutPressed(platform, event) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         void beginNewChat();
       }
-      if (event.metaKey && event.key.toLowerCase() === "k") {
+      if (primaryShortcutPressed(platform, event) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setDrawer("knowledge");
       }
       if (
-        event.metaKey &&
+        primaryShortcutPressed(platform, event) &&
         event.shiftKey &&
         event.key.toLowerCase() === "p" &&
         activityCapture?.policy.enabled &&
@@ -3316,7 +3324,7 @@ export function App() {
           <strong>Waypoint</strong>
         </div>
         <button className="new-chat" onClick={() => void beginNewChat()}>
-          <span>＋</span> New chat <kbd>⌘N</kbd>
+          <span>＋</span> New chat <kbd>{shortcutModifier} N</kbd>
         </button>
         <div className="history-tools">
           <label>
@@ -3411,7 +3419,7 @@ export function App() {
               setDrawer("knowledge");
             }}
           >
-            <span>⌘</span> Knowledge <kbd>⌘K</kbd>
+            <span>{knowledgeIcon}</span> Knowledge <kbd>{shortcutModifier} K</kbd>
           </button>
           <button onClick={() => void openRules()}>
             <span>◇</span> Graph &amp; rules
@@ -3673,7 +3681,7 @@ export function App() {
               aria-label="Open knowledge"
               onClick={() => setDrawer("knowledge")}
             >
-              Knowledge <span>⌘K</span>
+              Knowledge <span>{shortcutModifier} K</span>
             </button>
           </div>
         </header>

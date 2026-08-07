@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 let currentWorkspaceId: string | undefined;
 
 contextBridge.exposeInMainWorld('waypoint', {
+  platform: process.platform,
   onScreenCaptureRequest:(listener:()=>void)=>{const handler=()=>listener();ipcRenderer.on('waypoint:screen-capture-request',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-request',handler)},
   onScreenCaptureVisibility:(listener:(hidden:boolean)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{token:string;hidden:boolean})=>{listener(value.hidden);requestAnimationFrame(()=>requestAnimationFrame(()=>ipcRenderer.send('waypoint:screen-capture-visibility-ack',value)))};ipcRenderer.on('waypoint:screen-capture-visibility',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-visibility',handler)},
   screenCaptureReadiness:()=>ipcRenderer.invoke('waypoint:screen-capture-readiness'),

@@ -7,6 +7,7 @@ type ScreenCaptureView={id:string;title:string;mode:string;sourceName:string;cap
 declare global {
   interface Window {
     waypoint: {
+      platform: string;
       onScreenCaptureRequest(listener:()=>void):()=>void;
       onScreenCaptureVisibility(listener:(hidden:boolean)=>void):()=>void;
       screenCaptureReadiness():Promise<{platform:string;available:boolean;permission:string;state:string;reason:string;shortcut:{registered:boolean;shortcut:string;reason:string}}>;
