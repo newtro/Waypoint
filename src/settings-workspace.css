@@ -1,0 +1,76 @@
+.settings-page-body {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 920px);
+  justify-content: center;
+  align-items: start;
+  gap: clamp(28px, 5vw, 72px);
+  padding: 34px clamp(24px, 5vw, 72px) 80px;
+  scroll-behavior: smooth;
+}
+
+.settings-page-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid #e0e5e0;
+  border-radius: 13px;
+  background: #fbfcfa;
+  box-shadow: 0 5px 18px #2430290a;
+}
+
+.settings-page-nav strong {
+  padding: 9px 10px 7px;
+  color: #89918b;
+  font: 600 10px Manrope, sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.settings-page-nav button {
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #59625c;
+  text-align: left;
+  font-size: 11px;
+}
+
+.settings-page-nav button:hover { background: #edf1ed; color: #2f3832; }
+.settings-content { min-width: 0; }
+
+.settings-page-intro { margin: 3px 0 30px; }
+.settings-page-intro p { margin: 0 0 6px; color: var(--sage); font: 600 10px Manrope, sans-serif; letter-spacing: .09em; text-transform: uppercase; }
+.settings-page-intro h1 { margin: 0; color: #29302b; font: 600 clamp(26px, 3vw, 36px) Manrope, sans-serif; letter-spacing: -.035em; }
+.settings-page-intro span { display: block; max-width: 680px; margin-top: 9px; color: #747d77; font-size: 13px; line-height: 1.6; }
+
+.settings-page-body .settings-section {
+  scroll-margin-top: 22px;
+  margin: 0 0 18px;
+  padding: clamp(20px, 3vw, 28px);
+  border: 1px solid #dde3de;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 5px 22px #24302908;
+}
+
+.settings-page-body .settings-section > h3 {
+  margin-bottom: 14px;
+  color: #303833;
+  font: 600 15px Manrope, sans-serif;
+}
+
+.settings-page-body .settings-grid { gap: 12px; }
+.settings-page-body .provider-row { padding: 12px 0; }
+.settings-page-body .drawer-actions { margin-top: 16px; }
+
+@media (max-width: 980px) {
+  .settings-page-body { grid-template-columns: 1fr; gap: 20px; }
+  .settings-page-nav { position: static; flex-direction: row; overflow-x: auto; }
+  .settings-page-nav strong { display: none; }
+  .settings-page-nav button { flex: 0 0 auto; }
+}

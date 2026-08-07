@@ -19,6 +19,16 @@ import type { DiagnosticsReport } from "../electron/core/diagnostics";
 import { failureAdvice, type ExecutionRunView } from "./ai-workbench-ui";
 import { reconcileSelectedChatId, RefreshGate } from "./chat-selection";
 import { groupChatHistory, type HistorySort } from "./chat-history";
+import {
+  addMainTab,
+  chatTab,
+  closeMainTabs,
+  nextActiveMainTabId,
+  viewTab,
+  type MainTab,
+  type TabCloseAction,
+  type WorkspaceView,
+} from "./main-tabs";
 import waypointMark from "./assets/waypoint-mark.svg";
 import "./styles.css";
 import "./provider-settings.css";
@@ -29,6 +39,8 @@ import "./screen-capture.css";
 import "./composer-polish.css";
 import "./in-app-browser.css";
 import "./execution-timeline-polish.css";
+import "./main-tabs.css";
+import "./settings-workspace.css";
 import {
   BrowserPcmCapture,
   BrowserSpeechMonitor,
@@ -131,18 +143,20 @@ type ActivityCaptureStatus = Awaited<
 type ActivitySnapshot = Awaited<
   ReturnType<Window["waypoint"]["listActivitySnapshots"]>
 >[number];
-type Drawer =
-  | "briefing"
-  | "knowledge"
-  | "reflection"
-  | "rules"
-  | "meetings"
-  | "automations"
-  | "activity"
-  | "health"
-  | "settings"
-  | "browser"
-  | undefined;
+type Drawer = WorkspaceView | undefined;
+
+const workspaceViewTitles: Record<WorkspaceView, string> = {
+  briefing: "Briefing",
+  knowledge: "Knowledge",
+  reflection: "Reflection",
+  rules: "Graph & rules",
+  meetings: "Meetings",
+  automations: "Automations",
+  activity: "Activity",
+  health: "Health",
+  settings: "Settings",
+  browser: "In-App Browser",
+};
 
 export function App() {
   const platform = window.waypoint.platform,
@@ -183,6 +197,9 @@ export function App() {
     >({}),
     [documentImportBusy, setDocumentImportBusy] = useState(false);
   const [drawer, setDrawer] = useState<Drawer>(),
+    [mainTabs, setMainTabs] = useState<MainTab[]>([]),
+    [activeMainTabId, setActiveMainTabId] = useState<string>(),
+    [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number }>(),
     [screenCaptureOpen,setScreenCaptureOpen]=useState(false),
     [sidebarOpen, setSidebarOpen] = useState(false),
     [historyQuery, setHistoryQuery] = useState(""),
@@ -192,6 +209,7 @@ export function App() {
     [diagnostics, setDiagnostics] = useState<DiagnosticsReport>(),
     [checking, setChecking] = useState(false),
     [syncStatus, setSyncStatus] = useState<SanitizedSyncStatus>();
+  const tabsWorkspaceRef = useRef<string | undefined>(undefined);
   const [desktopSync, setDesktopSync] =
       useState<Awaited<ReturnType<Window["waypoint"]["desktopSyncStatus"]>>>(),
     [syncDevices, setSyncDevices] = useState<
@@ -388,7 +406,7 @@ export function App() {
   async function openReflection() {
     if (!workspace) return;
     setSidebarOpen(false);
-    setDrawer("reflection");
+    openViewTab("reflection");
     const runs = await window.waypoint.reflectionRuns(workspace.id);
     setReflectionRuns(runs);
     setReflectionSources(
@@ -647,7 +665,7 @@ export function App() {
         );
     }
     setSidebarOpen(false);
-    setDrawer("automations");
+    openViewTab("automations");
   }
   async function createTriggerFixture() {
     if (!workspace) return;
@@ -901,7 +919,7 @@ export function App() {
     );
     setTranscriptionCapability(capability);
     setSidebarOpen(false);
-    setDrawer("meetings");
+    openViewTab("meetings");
   }
   async function startMeeting() {
     if (!workspace || !meetingConsent)
@@ -1181,20 +1199,75 @@ export function App() {
     await window.waypoint.deleteMeeting(workspace.id, meetingId);
     setMeetings(await window.waypoint.listMeetings(workspace.id));
   }
+  function activateMainTab(tab: MainTab) {
+    setMainTabs((current) => addMainTab(current, tab));
+    setActiveMainTabId(tab.id);
+    setTabMenu(undefined);
+    setSidebarOpen(false);
+    if (tab.kind === "chat") {
+      setSelectedChatId(tab.chatId);
+      setDrawer(undefined);
+      window.setTimeout(() => composerRef.current?.focus(), 0);
+    } else {
+      setDrawer(tab.view);
+    }
+  }
+  function openChatTab(chatId: string) {
+    activateMainTab(chatTab(chatId));
+  }
+  function openViewTab(view: WorkspaceView) {
+    activateMainTab(viewTab(view));
+  }
+  function closeTab(targetId: string, action: TabCloseAction) {
+    const remaining = closeMainTabs(mainTabs, targetId, action),
+      nextId = nextActiveMainTabId(
+        mainTabs,
+        remaining,
+        targetId,
+        activeMainTabId,
+      ),
+      removed = mainTabs.filter(
+        (tab) => !remaining.some((candidate) => candidate.id === tab.id),
+      ),
+      removedRunningChat = removed.some(
+        (tab) =>
+          tab.kind === "chat" &&
+          runs.some(
+            (run) =>
+              run.chatId === tab.chatId &&
+              (run.status === "queued" || run.status === "running"),
+          ),
+      );
+    setMainTabs(remaining);
+    setActiveMainTabId(nextId);
+    setTabMenu(undefined);
+    if (removedRunningChat)
+      setNotice(
+        "The closed chat tab is still running. Reopen it from Conversations at any time.",
+      );
+    const next = remaining.find((tab) => tab.id === nextId);
+    if (next?.kind === "chat") {
+      setSelectedChatId(next.chatId);
+      setDrawer(undefined);
+    } else if (next?.kind === "view") {
+      setDrawer(next.view);
+    } else {
+      setDrawer(undefined);
+    }
+  }
   function followActivity(item: ActivityTimelineItem) {
     if (item.objectState !== "available" || !item.targetId || !item.targetKind)
       return;
     if (item.targetKind === "chat") {
-      setSelectedChatId(item.targetId);
-      setDrawer(undefined);
+      openChatTab(item.targetId);
       return;
     }
     if (item.targetKind === "rule") {
-      setDrawer("rules");
+      openViewTab("rules");
       return;
     }
     setActivityKnowledgeTarget(item.targetId);
-    setDrawer("knowledge");
+    openViewTab("knowledge");
   }
   async function refresh(next = workspace) {
     if (!next) return;
@@ -1228,7 +1301,17 @@ export function App() {
     ]);
     if (!refreshGate.current.isCurrent(token)) return;
     setChats(nextChats);
-    setSelectedChatId((current) => reconcileSelectedChatId(nextChats, current));
+    if (tabsWorkspaceRef.current !== next.id) {
+      const initialChatId = reconcileSelectedChatId(nextChats, undefined),
+        initialTabs = initialChatId ? [chatTab(initialChatId)] : [];
+      tabsWorkspaceRef.current = next.id;
+      setSelectedChatId(initialChatId);
+      setMainTabs(initialTabs);
+      setActiveMainTabId(initialTabs[0]?.id);
+      setDrawer(undefined);
+    } else {
+      setSelectedChatId((current) => reconcileSelectedChatId(nextChats, current));
+    }
     setDocuments(nextDocuments);
     setMemories(nextMemories);
     setSuggestions(nextSuggestions);
@@ -1279,9 +1362,13 @@ export function App() {
     }
   }
   async function selectWorkspace(next: WorkspaceSummary) {
+    tabsWorkspaceRef.current = undefined;
     setWorkspace(next);
     setSelectedChatId(undefined);
     setDrawer(undefined);
+    setMainTabs([]);
+    setActiveMainTabId(undefined);
+    setTabMenu(undefined);
     await refresh(next);
     const status = await window.waypoint.activityCaptureStatus(next.id);
     setActivityCapture(status);
@@ -1678,7 +1765,7 @@ export function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setDrawer(undefined);
+        setTabMenu(undefined);
         setSidebarOpen(false);
       }
       if (primaryShortcutPressed(platform, event) && event.key.toLowerCase() === "n") {
@@ -1687,7 +1774,7 @@ export function App() {
       }
       if (primaryShortcutPressed(platform, event) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setDrawer("knowledge");
+        openViewTab("knowledge");
       }
       if (
         primaryShortcutPressed(platform, event) &&
@@ -1800,7 +1887,7 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [drawer]);
   useEffect(() => {
-    if (!drawer && !sidebarOpen) return;
+    if (!sidebarOpen) return;
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -1832,7 +1919,7 @@ export function App() {
       overlay.removeEventListener("keydown", trap);
       previousFocusRef.current?.focus();
     };
-  }, [drawer, sidebarOpen]);
+  }, [sidebarOpen]);
   useEffect(() => {
     if (!workspaceDialog) return;
     workspaceDialogOpenerRef.current =
@@ -1913,9 +2000,7 @@ export function App() {
     try {
       const id = await window.waypoint.createChat(workspace.id, "New chat");
       await refresh();
-      setSelectedChatId(id);
-      setSidebarOpen(false);
-      window.setTimeout(() => composerRef.current?.focus(), 0);
+      openChatTab(id);
     } catch (reason) {
       showError(reason);
     }
@@ -2401,7 +2486,7 @@ export function App() {
       const browserAction = parseBrowserChatCommand(prompt);
       if (browserAction) {
         if (toolSettings?.browserProfileMode !== "existing")
-          setDrawer("browser");
+          openViewTab("browser");
         if (attachmentIds.length)
           throw new Error(
             "Browser commands do not consume chat attachments. Use /browser upload @e1 relative-file inside the trusted workspace.",
@@ -2781,6 +2866,7 @@ export function App() {
       return;
     try {
       await window.waypoint.deleteObject(workspace.id, kind, id);
+      if (kind === "chat") closeTab(`chat:${id}`, "close");
       await refresh();
     } catch (reason) {
       showError(reason);
@@ -2901,7 +2987,7 @@ export function App() {
         ),
       );
       setSidebarOpen(false);
-      setDrawer("briefing");
+      openViewTab("briefing");
     } catch (reason) {
       showError(reason);
     }
@@ -2937,7 +3023,7 @@ export function App() {
       setLearnedRules(rules);
       setKnowledgeGraph(graph);
       setSidebarOpen(false);
-      setDrawer("rules");
+      openViewTab("rules");
     } catch (reason) {
       showError(reason);
     }
@@ -3383,18 +3469,16 @@ export function App() {
                 )!;
                 return (
                   <div
-                    className={`conversation-row ${chat.id === selectedChatId ? "active" : ""}`}
+                    className={`conversation-row ${activeMainTabId === `chat:${chat.id}` ? "active" : ""}`}
                     key={chat.id}
                   >
                     <button
                       className="conversation-select"
                       aria-current={
-                        chat.id === selectedChatId ? "page" : undefined
+                        activeMainTabId === `chat:${chat.id}` ? "page" : undefined
                       }
                       onClick={() => {
-                        setSelectedChatId(chat.id);
-                        setSidebarOpen(false);
-                        setDrawer(undefined);
+                        openChatTab(chat.id);
                       }}
                     >
                       <span>{chat.title}</span>
@@ -3436,8 +3520,7 @@ export function App() {
           </button>
           <button
             onClick={() => {
-              setSidebarOpen(false);
-              setDrawer("knowledge");
+              openViewTab("knowledge");
             }}
           >
             <span>{knowledgeIcon}</span> Knowledge <kbd>{shortcutModifier} K</kbd>
@@ -3456,24 +3539,21 @@ export function App() {
           </button>
           <button
             onClick={() => {
-              setSidebarOpen(false);
-              setDrawer("activity");
+              openViewTab("activity");
             }}
           >
             <span>↗</span> Activity
           </button>
           <button
             onClick={() => {
-              setSidebarOpen(false);
-              setDrawer("health");
+              openViewTab("health");
             }}
           >
             <span>♡</span> Health
           </button>
           <button
             onClick={() => {
-              setSidebarOpen(false);
-              setDrawer("settings");
+              openViewTab("settings");
             }}
           >
             <span>⚙</span> Settings
@@ -3609,6 +3689,80 @@ export function App() {
       )}
 
       <main className="chat-main">
+        <nav className="main-tabs" aria-label="Open workspace tabs">
+          <div className="main-tabs-scroll">
+            {mainTabs.map((tab, index) => {
+              const title =
+                  tab.kind === "chat"
+                    ? chats.find((chat) => chat.id === tab.chatId)?.title ||
+                      "Conversation"
+                    : workspaceViewTitles[tab.view],
+                running =
+                  tab.kind === "chat" &&
+                  runs.some(
+                    (run) =>
+                      run.chatId === tab.chatId &&
+                      (run.status === "queued" || run.status === "running"),
+                  );
+              return (
+                <div
+                  className={`main-tab ${tab.id === activeMainTabId ? "active" : ""}`}
+                  key={tab.id}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setTabMenu({
+                      tabId: tab.id,
+                      x: Math.min(event.clientX, window.innerWidth - 220),
+                      y: Math.min(event.clientY, window.innerHeight - 190),
+                    });
+                  }}
+                >
+                  <button
+                    className="main-tab-select"
+                    aria-current={tab.id === activeMainTabId ? "page" : undefined}
+                    onClick={() => activateMainTab(tab)}
+                    title={title}
+                  >
+                    {running && <i className="main-tab-running" aria-label="Running" />}
+                    <span>{title}</span>
+                  </button>
+                  <button
+                    className="main-tab-close"
+                    aria-label={`Close ${title}`}
+                    title="Close tab"
+                    onClick={() => closeTab(tab.id, "close")}
+                  >
+                    ×
+                  </button>
+                  {index < mainTabs.length - 1 && <span className="sr-only">Tab</span>}
+                </div>
+              );
+            })}
+          </div>
+          {mainTabs.length > 0 && (
+            <button
+              className="main-tabs-menu-button"
+              aria-label="Tab actions"
+              title="Tab actions"
+              onClick={(event) => {
+                const box = event.currentTarget.getBoundingClientRect();
+                setTabMenu({
+                  tabId: activeMainTabId || mainTabs[0].id,
+                  x: Math.max(8, box.right - 208),
+                  y: box.bottom + 5,
+                });
+              }}
+            >
+              ⋯
+            </button>
+          )}
+        </nav>
+        {activeMainTabId ? (
+          <div
+            className="chat-tab-content"
+            aria-hidden={Boolean(drawer)}
+            inert={drawer ? true : undefined}
+          >
         <header className="chat-header">
           <button
             className="mobile-menu-inline icon-button"
@@ -3631,7 +3785,7 @@ export function App() {
             <div className="recording-global" role="status">
               <button
                 aria-label="Open active meeting recording"
-                onClick={() => setDrawer("meetings")}
+                onClick={() => openViewTab("meetings")}
               >
                 ● Recording {Math.floor(recordingSeconds / 60)}:
                 {String(recordingSeconds % 60).padStart(2, "0")}
@@ -3651,7 +3805,7 @@ export function App() {
             >
               <button
                 aria-label="Open whole-device activity capture controls"
-                onClick={() => setDrawer("activity")}
+                onClick={() => openViewTab("activity")}
               >
                 {activityCapture.readiness.available &&
                 !activityCapture.policy.paused
@@ -3693,14 +3847,14 @@ export function App() {
             <button
               className="knowledge-button"
               aria-label="Open Waypoint In-App Browser"
-              onClick={() => setDrawer("browser")}
+              onClick={() => openViewTab("browser")}
             >
               Browser
             </button>
             <button
               className="knowledge-button"
               aria-label="Open knowledge"
-              onClick={() => setDrawer("knowledge")}
+              onClick={() => openViewTab("knowledge")}
             >
               Knowledge <span>{shortcutModifier} K</span>
             </button>
@@ -4105,38 +4259,31 @@ export function App() {
             </div>
           </section>
         )}
+          </div>
+        ) : (
+          <section className="tab-empty-state">
+            <div className="compass">✦</div>
+            <h1>No tabs open</h1>
+            <p>Open a conversation or workspace tool from the sidebar.</p>
+            <button onClick={() => void beginNewChat()}>New chat</button>
+          </section>
+        )}
       </main>
 
       {drawer && (
-        <>
-          <button
-            className="drawer-scrim"
-            aria-label="Close panel"
-            onClick={() => setDrawer(undefined)}
-          />
           <aside
-            ref={overlayRef}
-            className={`right-drawer ${drawer === "browser" ? "browser-drawer" : ""}`}
-            role="dialog"
-            aria-modal="true"
+            className={`right-drawer main-tab-view ${drawer === "browser" ? "browser-drawer" : ""} ${drawer === "settings" ? "settings-view" : ""}`}
+            role="region"
             aria-labelledby="drawer-title"
           >
             <header>
               <div>
                 <p>{workspace.name}</p>
                 <h2 id="drawer-title">
-                  {drawer === "browser"
-                    ? "In-App Browser"
-                    : drawer[0].toUpperCase() + drawer.slice(1)}
+                  {workspaceViewTitles[drawer]}
                 </h2>
               </div>
-              <button
-                className="icon-button"
-                aria-label="Close panel"
-                onClick={() => setDrawer(undefined)}
-              >
-                ×
-              </button>
+              <span className="view-persistence-note">Workspace view</span>
             </header>
             {drawer === "browser" && (
               <div
@@ -4825,10 +4972,8 @@ export function App() {
                       className="graph-node"
                       key={node.id}
                       onClick={() => {
-                        if (node.kind === "chat") setSelectedChatId(node.id);
-                        setDrawer(
-                          node.kind === "chat" ? undefined : "knowledge",
-                        );
+                        if (node.kind === "chat") openChatTab(node.id);
+                        else openViewTab("knowledge");
                       }}
                     >
                       <span>{node.kind}</span>
@@ -5471,8 +5616,41 @@ export function App() {
               </div>
             )}
             {drawer === "settings" && (
-              <div className="drawer-body">
-                <section>
+              <div className="drawer-body settings-page-body">
+                <nav className="settings-page-nav" aria-label="Settings sections">
+                  <strong>Settings</strong>
+                  {[
+                    ["settings-capture", "Screen capture"],
+                    ["settings-tools", "AI tools"],
+                    ["settings-voice", "Voice chat"],
+                    ["settings-models", "Models"],
+                    ["settings-sync", "Device sync"],
+                    ["settings-backup", "Backup"],
+                    ["settings-providers", "Provider status"],
+                    ["settings-budgets", "Execution budgets"],
+                  ].map(([id, label]) => (
+                    <button
+                      key={id}
+                      onClick={() =>
+                        document.getElementById(id)?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        })
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </nav>
+                <div className="settings-content">
+                  <div className="settings-page-intro">
+                    <p>Waypoint preferences</p>
+                    <h1>Settings</h1>
+                    <span>
+                      Configure local tools, models, capture, voice, sync, and recovery without leaving your active work.
+                    </span>
+                  </div>
+                <section id="settings-capture" className="settings-section">
                   <h3>Screen capture</h3>
                   <p className="drawer-intro">Manual and local only. Waypoint asks you to choose a window or display each time; Region opens the chosen display in the crop editor. Captures are never sent to a model unless you explicitly add one to chat and ask an image-capable route.</p>
                   <div className="automation-boundary" role="status"><strong>{manualCaptureReadiness?.available?'Native capture ready':'Permission required'}</strong><span>{manualCaptureReadiness?.reason||'Checking platform capture readiness…'} {manualCaptureReadiness?.shortcut.reason}</span></div>
@@ -5484,7 +5662,7 @@ export function App() {
                   </div>}
                   <div className="drawer-actions"><button onClick={()=>setScreenCaptureOpen(true)}>Capture now</button><button disabled={!workspace||!manualCaptureSettings} onClick={()=>workspace&&manualCaptureSettings&&void window.waypoint.updateScreenCaptureSettings(workspace.id,manualCaptureSettings).then((saved)=>{setManualCaptureSettings(saved);setNotice(saved.shortcutReason)})}>Save capture settings</button></div>
                 </section>
-                <section>
+                <section id="settings-tools" className="settings-section">
                   <h3>AI Tool Gateway</h3>
                   <p className="drawer-intro">
                     Trusted local commands use the Autonomous Developer profile.
@@ -5999,7 +6177,7 @@ export function App() {
                     )}
                   </div>
                 </section>
-                <section>
+                <section id="settings-voice" className="settings-section">
                   <h3>Voice chat</h3>
                   <p className="drawer-intro">
                     Local voice engines share the same composer control and
@@ -6186,7 +6364,7 @@ export function App() {
                     )}
                   </div>
                 </section>
-                <section>
+                <section id="settings-models" className="settings-section">
                   <h3>OpenRouter & hosted models</h3>
                   <p className="drawer-intro">
                     Optional hosted routing. Codex and Claude subscriptions
@@ -6521,7 +6699,7 @@ export function App() {
                     </>
                   )}
                 </section>
-                <section>
+                <section id="settings-sync" className="settings-section">
                   <h3>Secure device sync</h3>
                   <p className="drawer-intro">
                     End-to-end encrypted directly through a desktop host or
@@ -6820,7 +6998,7 @@ export function App() {
                     </div>
                   )}
                 </section>
-                <section>
+                <section id="settings-backup" className="settings-section">
                   <h3>Backup & recovery</h3>
                   <p className="drawer-intro">
                     Backups are plaintext. Keep them in a protected location.
@@ -6855,7 +7033,7 @@ export function App() {
                     the drill data.
                   </p>
                 </section>
-                <section>
+                <section id="settings-providers" className="settings-section">
                   <h3>Provider status</h3>
                   {capabilities.map((item) => (
                     <p className="provider-row" key={item.name}>
@@ -6868,7 +7046,7 @@ export function App() {
                     </p>
                   ))}
                 </section>
-                <section>
+                <section id="settings-budgets" className="settings-section">
                   <h3>Recent execution budgets</h3>
                   <p className="drawer-intro">
                     Every local run records a fixed approval and resource
@@ -6900,6 +7078,7 @@ export function App() {
                     </p>
                   )}
                 </section>
+                </div>
               </div>
             )}
             {drawer === "automations" && (
@@ -7291,6 +7470,38 @@ export function App() {
               </div>
             )}
           </aside>
+      )}
+      {tabMenu && (
+        <>
+          <button
+            className="tab-menu-scrim"
+            aria-label="Close tab actions"
+            onClick={() => setTabMenu(undefined)}
+          />
+          <div
+            className="tab-context-menu"
+            role="menu"
+            aria-label="Tab actions"
+            style={{ left: tabMenu.x, top: tabMenu.y }}
+          >
+            <button role="menuitem" onClick={() => closeTab(tabMenu.tabId, "close")}>
+              Close
+            </button>
+            <button role="menuitem" onClick={() => closeTab(tabMenu.tabId, "close-others")}>
+              Close others
+            </button>
+            <button
+              role="menuitem"
+              disabled={mainTabs.findIndex((tab) => tab.id === tabMenu.tabId) === mainTabs.length - 1}
+              onClick={() => closeTab(tabMenu.tabId, "close-right")}
+            >
+              Close tabs to the right
+            </button>
+            <div className="tab-menu-divider" />
+            <button role="menuitem" onClick={() => closeTab(tabMenu.tabId, "close-all")}>
+              Close all
+            </button>
+          </div>
         </>
       )}
       {screenCaptureOpen&&workspace&&<ScreenCaptureStudio workspaceId={workspace.id} chatId={selectedChatId} defaultMode={manualCaptureSettings?.mode??'region'} onClose={()=>setScreenCaptureOpen(false)} onNotice={setNotice}/>}

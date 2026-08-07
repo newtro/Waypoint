@@ -1,0 +1,203 @@
+.main-tabs {
+  position: relative;
+  z-index: 45;
+  display: flex;
+  flex: 0 0 42px;
+  min-width: 0;
+  height: 42px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid #dfe4df;
+  background: #f2f4f1;
+}
+
+.main-tabs-scroll {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.main-tabs-scroll::-webkit-scrollbar { display: none; }
+.chat-tab-content { display: contents; }
+
+.main-tab {
+  display: flex;
+  align-items: center;
+  flex: 0 1 210px;
+  min-width: 112px;
+  max-width: 240px;
+  height: 35px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+  color: #68716b;
+}
+
+.main-tab:hover { background: #f9faf8; }
+
+.main-tab.active {
+  border-color: #d9dfda;
+  background: var(--paper);
+  color: #2f3732;
+  box-shadow: 0 -1px 4px #20302708;
+}
+
+.main-tab-select {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  padding: 0 4px 0 11px;
+  color: inherit;
+  text-align: left;
+  font: 500 11px Manrope, sans-serif;
+}
+
+.main-tab-select span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.main-tab-running {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 3px #c38c381a;
+  animation: pulse 1.5s infinite;
+}
+
+.main-tab-close,
+.main-tabs-menu-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 27px;
+  width: 27px;
+  height: 27px;
+  margin-right: 3px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #79817c;
+  font-size: 16px;
+}
+
+.main-tab:not(:hover):not(.active) .main-tab-close { opacity: 0; }
+.main-tab-close:hover,
+.main-tabs-menu-button:hover { background: #e5e9e5; color: #303733; }
+
+.main-tabs-menu-button {
+  flex: 0 0 31px;
+  width: 31px;
+  height: 30px;
+  margin: 0 0 0 5px;
+  font-size: 19px;
+}
+
+.right-drawer.main-tab-view,
+.right-drawer.main-tab-view.browser-drawer {
+  left: 280px;
+  right: 0;
+  top: 42px;
+  bottom: 0;
+  width: auto;
+  max-width: none;
+  z-index: 40;
+  border-left: 0;
+  box-shadow: none;
+  background: #f7f8f6;
+}
+
+.right-drawer.main-tab-view > header {
+  flex: 0 0 68px;
+  padding-inline: clamp(22px, 4vw, 54px);
+  background: #fbfcfae8;
+  backdrop-filter: blur(15px);
+}
+
+.right-drawer.main-tab-view.settings-view > header { display: none; }
+
+.view-persistence-note {
+  color: #8a918c;
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.tab-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 79;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.tab-context-menu {
+  position: fixed;
+  z-index: 80;
+  width: 208px;
+  padding: 6px;
+  border: 1px solid #d3d9d4;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 14px 38px #1d282120, 0 3px 9px #1d282114;
+}
+
+.tab-context-menu button {
+  display: block;
+  width: 100%;
+  height: 33px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #3f4842;
+  text-align: left;
+  font-size: 11px;
+}
+
+.tab-context-menu button:hover:not(:disabled) { background: #eef2ee; }
+.tab-context-menu button:disabled { color: #b2b8b3; cursor: default; }
+.tab-menu-divider { height: 1px; margin: 5px 4px; background: #e5e8e5; }
+
+.tab-empty-state {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #727a75;
+  text-align: center;
+}
+
+.tab-empty-state .compass {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--sage-soft);
+  color: var(--sage);
+}
+
+.tab-empty-state h1 { margin: 16px 0 5px; font: 600 24px Manrope, sans-serif; color: #343b36; }
+.tab-empty-state p { margin: 0 0 18px; font-size: 12px; }
+.tab-empty-state button { border: 0; border-radius: 9px; background: var(--sage); color: #fff; padding: 9px 14px; font-size: 11px; }
+
+@media (max-width: 800px) {
+  .main-tabs { padding-left: 48px; }
+  .right-drawer.main-tab-view,
+  .right-drawer.main-tab-view.browser-drawer { left: 0; }
+  .main-tab { min-width: 105px; }
+}
