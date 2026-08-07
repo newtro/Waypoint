@@ -2,6 +2,22 @@ import { contextBridge, ipcRenderer } from 'electron';
 let currentWorkspaceId: string | undefined;
 
 contextBridge.exposeInMainWorld('waypoint', {
+  onScreenCaptureRequest:(listener:()=>void)=>{const handler=()=>listener();ipcRenderer.on('waypoint:screen-capture-request',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-request',handler)},
+  screenCaptureReadiness:()=>ipcRenderer.invoke('waypoint:screen-capture-readiness'),
+  screenCaptureSettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-settings',{workspaceId}),
+  updateScreenCaptureSettings:(workspaceId:string,settings:unknown)=>ipcRenderer.invoke('waypoint:screen-capture-settings-update',{workspaceId,settings}),
+  screenCaptureSources:(workspaceId:string,mode:'region'|'window'|'display')=>ipcRenderer.invoke('waypoint:screen-capture-sources',{workspaceId,mode}),
+  cancelScreenCaptureSources:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-cancel-sources',{workspaceId}),
+  createScreenCapture:(workspaceId:string,token:string)=>ipcRenderer.invoke('waypoint:screen-capture-create',{workspaceId,token}),
+  importBrowserScreenCapture:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-import-browser',{workspaceId}),
+  listScreenCaptures:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-list',{workspaceId}),
+  readScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-read',{workspaceId,captureId}),
+  updateScreenCapture:(workspaceId:string,captureId:string,layers:unknown,flattenedBytes?:Uint8Array)=>ipcRenderer.invoke('waypoint:screen-capture-update',{workspaceId,captureId,layers,flattenedBytes}),
+  copyScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-copy',{workspaceId,captureId}),
+  saveScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-save',{workspaceId,captureId}),
+  addScreenCaptureToChat:(workspaceId:string,captureId:string,chatId:string)=>ipcRenderer.invoke('waypoint:screen-capture-add-chat',{workspaceId,captureId,chatId}),
+  addScreenCaptureToKnowledge:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-add-knowledge',{workspaceId,captureId}),
+  deleteScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-delete',{workspaceId,captureId}),
   bootstrap: () => ipcRenderer.invoke('waypoint:bootstrap'),
   openExternal:(url:string)=>ipcRenderer.invoke('waypoint:open-external',{url}),
   activityCaptureStatus:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-status',{workspaceId}),

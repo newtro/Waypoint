@@ -437,6 +437,14 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Do not expose an unauthenticated LAN HTTP listener. Implementation requires pinned authenticated transport, existing end-to-end workspace encryption, signed requests, replay/size/rate bounds, protected keys, and packaged Mac/Windows hostile-network validation.
 - No VM, DNS, Caddy, PostgreSQL, firewall, or hosted service change is authorized by this decision.
 
+# 2026-08-06 — Manual screen capture is explicit, local, and platform-specific
+
+- Manual Screen Capture + Markup is separate from Recall: no periodic capture, background recording, automatic OCR, provider transmission, or external sharing.
+- macOS defaults to `CommandOrControl+Shift+8`; Windows defaults to `PrintScreen` / PrtSc. Both are curated, configurable settings. Global registration fails visibly when the OS or another application owns the shortcut; Waypoint does not steal or simulate the key.
+- Electron's packaged desktop capture backend plus Waypoint's local source sheet is the implemented cross-platform seam. Region capture is a mandatory crop of a freshly selected display capture. Direct native picker/permission behavior on Windows remains a physical-Windows acceptance gate and is not claimed from macOS.
+- Source captures remain local workspace objects. Chat and Knowledge copies occur only through explicit actions and retain provenance. Those explicit copies are independent snapshots: flattening a later redaction changes the source and future copies, while existing Chat, Knowledge, saved-file, and backup copies must be deleted separately. Waypoint states this before flattening and does not risk data loss through a non-atomic retrospective rewrite.
+- Scrolling capture, pin-to-screen, screen recording/GIF, and polished background/export presets remain requested later slices; they are not dropped.
+
 # 2026-08-06 — Bounded zero-friction Meeting Intelligence
 
 - Reuse the already packaged, reviewed Fast Local Whisper tiny.en runtime for local post-meeting English transcription; do not introduce a second download, CLI, cloud service, or credential.

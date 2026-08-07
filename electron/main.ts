@@ -1,11 +1,16 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
+  desktopCapturer,
   dialog,
+  globalShortcut,
   ipcMain,
+  nativeImage,
   safeStorage,
   screen,
   shell,
+  systemPreferences,
 } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { fileURLToPath } from "node:url";
@@ -132,6 +137,7 @@ import {
 } from "./core/browser-discovery.js";
 import { InAppBrowserController } from "./core/in-app-browser.js";
 import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
+import { captureReadiness, validateCaptureSettings, type CaptureMode } from "./core/manual-screen-capture.js";
 
 // Contained browser traffic must not bypass the audited HTTPS CONNECT gate over UDP/QUIC.
 app.commandLine.appendSwitch(
@@ -148,6 +154,18 @@ let peerHostRuntime: PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
 const syncAbort = new AbortController();
 let trustedSenderId: number | undefined;
+const pendingManualCaptures = new Map<string, { workspaceId:string; senderId:number; sourceId: string; sourceName: string; mode: CaptureMode; expiresAt: number }>();
+let captureShortcutState={registered:false,shortcut:'',reason:'Capture shortcut has not been registered yet'};
+
+function registerCaptureShortcut(shortcut: string): boolean {
+  if(captureShortcutState.shortcut)globalShortcut.unregister(captureShortcutState.shortcut);
+  const registered=globalShortcut.register(shortcut, () => {
+    const window = BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+    if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); window.webContents.send('waypoint:screen-capture-request') }
+  });
+  captureShortcutState={registered,shortcut,reason:registered?'Global screenshot shortcut ready':'The shortcut is owned by macOS, Windows, or another application. Choose a different shortcut in Settings.'};
+  return registered;
+}
 let trustedRendererUrl: string | undefined;
 const embeddings = new LocalOllamaEmbeddings();
 const activeDocumentIndexes = new Set<string>();
@@ -681,6 +699,49 @@ async function collectDiagnostics(workspaceId: string) {
 }
 
 function registerIpc(): void {
+  handle('waypoint:screen-capture-readiness', () => {
+    const permission = process.platform === 'darwin'
+      ? systemPreferences.getMediaAccessStatus('screen') as 'granted'|'denied'|'restricted'|'not-determined'|'unknown'
+      : 'unknown';
+    return {...captureReadiness(process.platform, permission),shortcut:captureShortcutState};
+  });
+  handle('waypoint:screen-capture-settings', (_event, input: unknown) => {
+    const workspaceId = text((input as Record<string, unknown>)?.workspaceId, 'workspace id', 128);
+    const settings=store.screenCaptureSettings(workspaceId);registerCaptureShortcut(settings.shortcut);return settings;
+  });
+  handle('waypoint:screen-capture-settings-update', (_event, input: unknown) => {
+    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, 'workspace id', 128), settings = validateCaptureSettings(value.settings as Parameters<typeof validateCaptureSettings>[0]);
+    const saved = store.setScreenCaptureSettings(workspaceId, settings), shortcutReady = registerCaptureShortcut(saved.shortcut);
+    return { ...saved, shortcutReady, shortcutReason: shortcutReady ? 'Global shortcut ready' : 'Shortcut is already used by another application' };
+  });
+  handle('waypoint:screen-capture-sources', async (event, input: unknown) => {
+    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId,'workspace id',128), mode = text(value.mode, 'capture mode', 16) as CaptureMode;
+    store.screenCaptureSettings(workspaceId);
+    if (!['region','window','display'].includes(mode)) throw new Error('Invalid capture mode');
+    for (const [token, item] of pendingManualCaptures) if (item.expiresAt < Date.now()) pendingManualCaptures.delete(token);
+    const sources = await desktopCapturer.getSources({ types: mode === 'window' ? ['window'] : ['screen'], thumbnailSize: { width: 3840, height: 2160 }, fetchWindowIcons: true });
+    return sources.map((source) => {
+      const size = source.thumbnail.getSize(), token = randomUUID();
+      pendingManualCaptures.set(token, { workspaceId,senderId:event.sender.id,sourceId: source.id, sourceName: source.name, mode, expiresAt: Date.now() + 120_000 });
+      return { token, name: source.name, displayId: source.display_id, thumbnailDataUrl: source.thumbnail.resize({ width: Math.min(560, size.width) }).toDataURL(), width: size.width, height: size.height };
+    });
+  });
+  handle('waypoint:screen-capture-create', async (event, input: unknown) => {
+    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, 'workspace id', 128), token = text(value.token, 'capture token', 128), pending = pendingManualCaptures.get(token);
+    if (!pending || pending.expiresAt < Date.now()||pending.workspaceId!==workspaceId||pending.senderId!==event.sender.id) throw new Error('Capture selection expired or belongs to another workspace. Choose the source again.');
+    pendingManualCaptures.delete(token);
+    const window=BrowserWindow.fromWebContents(event.sender);window?.hide();try{await new Promise((resolve)=>setTimeout(resolve,180));const sources=await desktopCapturer.getSources({types:pending.mode==='window'?['window']:['screen'],thumbnailSize:{width:7680,height:4320},fetchWindowIcons:false}),source=sources.find((item)=>item.id===pending.sourceId);if(!source||source.thumbnail.isEmpty())throw new Error('The selected source is no longer available.');const png=source.thumbnail.toPNG(),size=source.thumbnail.getSize();return store.createScreenCapture(workspaceId, { title: `Screenshot · ${pending.sourceName}`, mode: pending.mode, sourceId: pending.sourceId, sourceName: pending.sourceName, capturedAt: new Date().toISOString(), width: size.width, height: size.height }, png)}finally{window?.show();window?.focus()}
+  });
+  handle('waypoint:screen-capture-cancel-sources',(event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>)?.workspaceId,'workspace id',128);for(const[token,pending]of pendingManualCaptures)if(pending.workspaceId===workspaceId&&pending.senderId===event.sender.id)pendingManualCaptures.delete(token);return{canceled:true}});
+  handle('waypoint:screen-capture-import-browser', async (_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>)?.workspaceId,'workspace id',128),capture=await inAppBrowser.capturePng(workspaceId);return store.createScreenCapture(workspaceId,{title:`Browser · ${capture.title}`.slice(0,120),mode:'browser',sourceId:createHash('sha256').update(capture.url).digest('hex'),sourceName:new URL(capture.url).hostname,capturedAt:new Date().toISOString(),width:capture.width,height:capture.height},capture.png)});
+  handle('waypoint:screen-capture-list', (_event, input: unknown) => store.listScreenCaptures(text((input as Record<string, unknown>)?.workspaceId, 'workspace id', 128)));
+  handle('waypoint:screen-capture-read', (_event, input: unknown) => { const value=input as Record<string,unknown>;return store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128)) });
+  handle('waypoint:screen-capture-update', (_event, input: unknown) => { const value=input as Record<string,unknown>;return store.updateScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),value.layers,value.flattenedBytes instanceof Uint8Array?value.flattenedBytes:undefined) });
+  handle('waypoint:screen-capture-copy', (_event, input: unknown) => { const value=input as Record<string,unknown>,capture=store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128));clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(capture.dataBase64,'base64')));return{copied:true} });
+  handle('waypoint:screen-capture-save', async (_event, input: unknown) => { const value=input as Record<string,unknown>,capture=store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128)),result=await dialog.showSaveDialog({title:'Save screenshot',defaultPath:'Waypoint screenshot.png',filters:[{name:'PNG image',extensions:['png']}],properties:['createDirectory','showOverwriteConfirmation']});if(result.canceled||!result.filePath)return{canceled:true};writeFileSync(result.filePath,Buffer.from(capture.dataBase64,'base64'),{mode:0o600});return{canceled:false} });
+  handle('waypoint:screen-capture-add-chat', (_event, input: unknown) => {const value=input as Record<string,unknown>;return{attachmentId:store.addScreenCaptureToChat(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),text(value.chatId,'chat id',128))}});
+  handle('waypoint:screen-capture-add-knowledge', (_event, input: unknown) => {const value=input as Record<string,unknown>;return store.addScreenCaptureToKnowledge(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128))});
+  handle('waypoint:screen-capture-delete', (_event, input: unknown) => {const value=input as Record<string,unknown>;store.deleteScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128));return{deleted:true}});
   const assertBrowserWorkspace = (event: IpcMainInvokeEvent, workspaceId: string) => {
     if (toolWindowWorkspaces.get(event.sender.id) !== workspaceId)
       throw new Error("browser_workspace_scope_denied");
@@ -4037,6 +4098,9 @@ else {
           };
         if(command==='browser.status'){const settings=store.toolGatewaySettings(workspaceId),surface=inAppBrowser.status(workspaceId);return{value:{mode:settings.browserProfileMode,profile:settings.browserProfileName,allowedDomains:settings.browserAllowedDomains,stopped:settings.stopped,surface},summary:'Read browser readiness and policy status'}}
         if(command==='browser.domains.update'){const current=store.toolGatewaySettings(workspaceId),domains=Array.isArray(input.domains)?input.domains.map((item)=>text(item,'browser domain',253)):[];const next=store.setToolGatewaySettings(workspaceId,{...current,browserAllowedDomains:domains});return{value:{allowedDomains:next.browserAllowedDomains},summary:'Updated browser public-domain policy'}}
+        if(command==='screen_capture.status'){return{value:{settings:store.screenCaptureSettings(workspaceId),captures:store.listScreenCaptures(workspaceId).map(({id,title,mode,capturedAt,expiresAt,bytes})=>({id,title,mode,capturedAt,expiresAt,bytes})),readiness:captureReadiness(process.platform,process.platform==='darwin'?systemPreferences.getMediaAccessStatus('screen') as 'granted'|'denied'|'restricted'|'not-determined'|'unknown':'unknown')},summary:'Read manual local screenshot status'}}
+        if(command==='screen_capture.settings.update'){const current=store.screenCaptureSettings(workspaceId),next=store.setScreenCaptureSettings(workspaceId,validateCaptureSettings({mode:(input.mode??current.mode) as CaptureMode,shortcut:String(input.shortcut??current.shortcut),retentionDays:Number(input.retentionDays??current.retentionDays) as 7|30|90,maxCaptures:Number(input.maxCaptures??current.maxCaptures)}));registerCaptureShortcut(next.shortcut);return{value:next,summary:'Updated manual screenshot settings'}}
+        if(command==='screen_capture.open'){BrowserWindow.getAllWindows()[0]?.webContents.send('waypoint:screen-capture-request');return{value:{opened:true},summary:'Opened the manual screenshot picker; the user must choose a source'}}
         if (command === "chat.create") {
           const id = store.createChat(
             workspaceId,
@@ -4212,6 +4276,8 @@ else {
         syncService = service;
         registerIpc();
         createWindow();
+        const initialWorkspace=store.listWorkspaces()[0];
+        registerCaptureShortcut(initialWorkspace?store.screenCaptureSettings(initialWorkspace.id).shortcut:process.platform==='win32'?'PrintScreen':'CommandOrControl+Shift+8');
         const timer = setInterval(() => {
           for (const workspace of store.listWorkspaces()) {
             if (
@@ -4259,6 +4325,7 @@ else {
     if (shutdownStarted) return;
     event.preventDefault();
     shutdownStarted = true;
+    globalShortcut.unregisterAll();
     syncAbort.abort();
     for(const active of activeAutoTitles.values())active.cancel();
     const browserShutdown = Promise.all(

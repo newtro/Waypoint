@@ -212,6 +212,7 @@ export class InAppBrowserController {
           open: false,
         };
   }
+  async capturePng(workspaceId:string){const entry=this.entries.get(workspaceId);if(!entry)throw new Error('browser_surface_closed');const image=await entry.view.webContents.capturePage();return{png:image.toPNG(),width:image.getSize().width,height:image.getSize().height,url:entry.view.webContents.getURL(),title:entry.view.webContents.getTitle()||'Browser screenshot'}}
   async action(workspaceId: string, action: BrowserAction,workspaceRoot:string|undefined,signal:AbortSignal) {
     if (signal.aborted) throw new DOMException("Canceled", "AbortError");
     const entry = this.entries.get(workspaceId);

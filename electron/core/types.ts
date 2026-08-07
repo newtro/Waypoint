@@ -1,4 +1,4 @@
-export type ObjectKind = 'document' | 'chat' | 'message' | 'memory';
+export type ObjectKind = 'document' | 'chat' | 'message' | 'memory' | 'screen_capture';
 
 export interface SourceRef {
   objectId: string;
@@ -32,7 +32,7 @@ export interface AttachmentMetadata {
   id: string;
   workspaceId: string;
   ownerId: string;
-  ownerKind: 'document' | 'chat' | 'message' | 'memory' | 'activity_snapshot';
+  ownerKind: 'document' | 'chat' | 'message' | 'memory' | 'activity_snapshot' | 'screen_capture';
   name: string;
   mediaType: string;
   sha256: string;

@@ -25,6 +25,7 @@ import "./provider-settings.css";
 import "./auto-chat-title.css";
 import "./chat-header-actions.css";
 import "./voice-mode.css";
+import "./screen-capture.css";
 import {
   BrowserPcmCapture,
   BrowserSpeechMonitor,
@@ -44,6 +45,7 @@ import { shouldFollowChat } from "./chat-scroll";
 import { ChatMarkdown } from "./chat-markdown";
 import { meetingWavSegments } from "./meeting-transcription.js";
 import { parseBrowserChatCommand } from "./browser-chat-command";
+import { ScreenCaptureStudio } from "./screen-capture-studio";
 type VoiceMode = "push_to_talk" | "hands_free";
 type VoiceState =
   "off" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
@@ -164,6 +166,7 @@ export function App() {
     >({}),
     [documentImportBusy, setDocumentImportBusy] = useState(false);
   const [drawer, setDrawer] = useState<Drawer>(),
+    [screenCaptureOpen,setScreenCaptureOpen]=useState(false),
     [sidebarOpen, setSidebarOpen] = useState(false),
     [historyQuery, setHistoryQuery] = useState(""),
     [historySort, setHistorySort] = useState<HistorySort>("recent"),
@@ -197,6 +200,8 @@ export function App() {
     [activityKnowledgeTarget, setActivityKnowledgeTarget] = useState<string>();
   const [activityCapture, setActivityCapture] =
       useState<ActivityCaptureStatus>(),
+    [manualCaptureSettings,setManualCaptureSettings]=useState<Awaited<ReturnType<Window['waypoint']['screenCaptureSettings']>>>(),
+    [manualCaptureReadiness,setManualCaptureReadiness]=useState<Awaited<ReturnType<Window['waypoint']['screenCaptureReadiness']>>>(),
     [activitySnapshots, setActivitySnapshots] = useState<ActivitySnapshot[]>(
       [],
     ),
@@ -1221,6 +1226,8 @@ export function App() {
       }),
     [workspace],
   );
+  useEffect(()=>window.waypoint.onScreenCaptureRequest(()=>setScreenCaptureOpen(true)),[])
+  useEffect(()=>{if(!workspace)return;void Promise.all([window.waypoint.screenCaptureSettings(workspace.id),window.waypoint.screenCaptureReadiness()]).then(([settings,readiness])=>{setManualCaptureSettings(settings);setManualCaptureReadiness(readiness)})},[workspace])
   useEffect(() => {
     if (drawer !== "browser" || !workspace) return;
     const slot = inAppBrowserSlotRef.current;
@@ -3482,6 +3489,13 @@ export function App() {
             role="group"
             aria-label="Chat actions"
           >
+            <button
+              className="knowledge-button"
+              aria-label="Capture screenshot"
+              onClick={() => setScreenCaptureOpen(true)}
+            >
+              Capture
+            </button>
             {selectedChat && (
               <button
                 className="knowledge-button"
@@ -5184,6 +5198,18 @@ export function App() {
             )}
             {drawer === "settings" && (
               <div className="drawer-body">
+                <section>
+                  <h3>Screen capture</h3>
+                  <p className="drawer-intro">Manual and local only. Waypoint asks you to choose a window or display each time; Region opens the chosen display in the crop editor. Captures are never sent to a model unless you explicitly add one to chat and ask an image-capable route.</p>
+                  <div className="automation-boundary" role="status"><strong>{manualCaptureReadiness?.available?'Native capture ready':'Permission required'}</strong><span>{manualCaptureReadiness?.reason||'Checking platform capture readiness…'} {manualCaptureReadiness?.shortcut.reason}</span></div>
+                  {manualCaptureSettings&&<div className="settings-grid" aria-label="Manual screen capture settings">
+                    <label>Default capture mode<select value={manualCaptureSettings.mode} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,mode:event.target.value as typeof manualCaptureSettings.mode})}><option value="region">Region (crop after capture)</option><option value="window">Window</option><option value="display">Display</option></select></label>
+                    <label>Global shortcut<select value={manualCaptureSettings.shortcut} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,shortcut:event.target.value})}>{manualCaptureReadiness?.platform==='Windows'?<><option value="PrintScreen">Print Screen / PrtSc (default)</option><option value="CommandOrControl+Shift+8">Ctrl + Shift + 8</option><option value="CommandOrControl+Shift+9">Ctrl + Shift + 9</option><option value="CommandOrControl+Alt+8">Ctrl + Alt + 8</option></>:<>{manualCaptureSettings.shortcut==='PrintScreen'&&<option value="PrintScreen">Current Windows setting · Print Screen</option>}<option value="CommandOrControl+Shift+8">⌘ + Shift + 8</option><option value="CommandOrControl+Shift+9">⌘ + Shift + 9</option><option value="CommandOrControl+Alt+8">⌘ + Option + 8</option></>}</select></label>
+                    <label>Local retention<select value={manualCaptureSettings.retentionDays} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,retentionDays:Number(event.target.value) as 7|30|90})}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label>
+                    <label>Storage limit<select value={manualCaptureSettings.maxCaptures} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,maxCaptures:Number(event.target.value)})}><option value="50">50 captures</option><option value="100">100 captures</option><option value="250">250 captures</option><option value="500">500 captures</option></select></label>
+                  </div>}
+                  <div className="drawer-actions"><button onClick={()=>setScreenCaptureOpen(true)}>Capture now</button><button disabled={!workspace||!manualCaptureSettings} onClick={()=>workspace&&manualCaptureSettings&&void window.waypoint.updateScreenCaptureSettings(workspace.id,manualCaptureSettings).then((saved)=>{setManualCaptureSettings(saved);setNotice(saved.shortcutReason)})}>Save capture settings</button></div>
+                </section>
                 <section>
                   <h3>AI Tool Gateway</h3>
                   <p className="drawer-intro">
@@ -6972,6 +6998,7 @@ export function App() {
           </aside>
         </>
       )}
+      {screenCaptureOpen&&workspace&&<ScreenCaptureStudio workspaceId={workspace.id} chatId={selectedChatId} defaultMode={manualCaptureSettings?.mode??'region'} onClose={()=>setScreenCaptureOpen(false)} onNotice={setNotice}/>}
     </div>
   );
 }

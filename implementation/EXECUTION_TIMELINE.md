@@ -310,3 +310,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Focused 38/38 and full 501/501 tests passed; lint had no errors; type/build/package closure passed.
 - Normal-profile packaged app completed a real Claude `fable` title and updated sidebar/header.
 - Independent review/repair closed privacy minimization, Stop/shutdown lifetime, sync provenance/manual precedence, and observable attempt outcomes. Final verdict: 0 Blocker / 0 High.
+
+# P11 Manual Screen Capture + Markup (2026-08-06)
+
+- Froze the explicit manual-only acceptance gate in `implementation/P11_MANUAL_SCREEN_CAPTURE_PLAN.md`; no Recall capture, OCR runtime, provider upload, background recording, or external sharing entered scope.
+- Built schema 33 capture/settings/derivative provenance, bounded local PNG storage, search/backup/restore/retention/deletion, explicit Chat/Knowledge copies, Electron source capture, browser import, global shortcut, capture sheet, quick actions, and layered editor.
+- Initial independent review returned 0 blocker / 7 high / 5 medium. Repairs bound selections to workspace/sender, recaptured only after hiding Waypoint, made Windows posture truthful, completed crop/move/resize/undo/export behavior, made redaction's independent-copy boundary explicit, added deletion tombstones/startup retention/atomic Knowledge cleanup, and surfaced shortcut conflicts. Re-review found two highs; the fast post-capture action preview was added and the unsafe pre-flatten derivative deletion was replaced with truthful independent-copy semantics.
+- Terminal automated/package gate: 116 suites / 509 tests, TypeScript clean, lint 0 errors, Vite build, macOS arm64 package/runtime closure, and final re-review 0 blocker / 0 high. The normal-profile packaged app opened Capture through the global shortcut while another app was focused, enumerated both real displays, and showed the OS Screen Recording consent prompt. Consented region edit/save awaits the user's Allow action; Windows native picker/PrtSc remains hardware-contingent.
