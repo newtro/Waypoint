@@ -13,6 +13,8 @@ Before using a future Windows package with important data:
 3. Confirm restart persistence, export/restore, attachment handling, semantic-index deletion, and CLI cancellation.
 4. Repeat the two-peer and stale-delete matrix before enabling sync.
 
+For a hands-on evaluation through the installed UI, copy the [Windows packaged-app acceptance prompt](WINDOWS_PACKAGED_APP_ACCEPTANCE_PROMPT.md) into Waypoint and record the actual pass, fail, and unavailable results.
+
 Windows code signing and the production publishing/update channel are deferred.
 
 ## Build from source on Windows
