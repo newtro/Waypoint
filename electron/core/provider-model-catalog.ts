@@ -19,12 +19,27 @@ export function parseCodexModelCatalog(raw: string): LocalProviderModel[] {
   return result;
 }
 
+export const CURATED_CODEX_MODELS: LocalProviderModel[] = [
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol — flagship' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra — balanced' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna — fast' },
+  { id: 'gpt-5.5', label: 'GPT-5.5 — previous generation' },
+];
+
+export const CURATED_CLAUDE_MODELS: LocalProviderModel[] = [
+  { id: 'claude-fable-5', label: 'Claude Fable 5 — most capable' },
+  { id: 'claude-opus-5', label: 'Claude Opus 5 — flagship' },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5 — balanced' },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 — fastest' },
+];
+
 export async function installedCliModelCatalog(capabilities: CliCapability[], runner: Runner = run): Promise<LocalProviderModelCatalog[]> {
   const codex = capabilities.find((item) => item.name === 'codex'), claude = capabilities.find((item) => item.name === 'claude');
-  let codexModels: LocalProviderModel[] = [], codexReason = 'Use the signed-in Codex CLI default. Its account-scoped model catalog is unavailable.';
-  if (codex?.available && codex.compatible !== false && codex.executable) try { codexModels = parseCodexModelCatalog(await runner(codex.executable, ['debug', 'models'])); if (codexModels.length) codexReason = 'Selectable models reported by this installed signed-in Codex CLI.'; } catch { /* default remains truthful */ }
+  let codexModels: LocalProviderModel[] = [], codexReason = 'Current Codex models bundled with this Waypoint release; the installed CLI did not report its account-scoped catalog.';
+  if (codex?.available && codex.compatible !== false && codex.executable) try { codexModels = parseCodexModelCatalog(await runner(codex.executable, ['debug', 'models'])); if (codexModels.length) codexReason = 'Selectable models reported by this installed signed-in Codex CLI.'; } catch { /* curated fallback remains */ }
+  if (!codexModels.length) codexModels = CURATED_CODEX_MODELS;
   return [
     { provider: 'codex', version: codex?.version, source: 'installed-cli', models: [{ id: '', label: 'Codex default (CLI selected)' }, ...codexModels], reason: codexReason },
-    { provider: 'claude', version: claude?.version, source: 'installed-cli', models: [{ id: '', label: 'Claude default (CLI selected)' }], reason: 'Claude Code exposes a selectable default locally but no account-scoped model catalog without a live request; Waypoint does not guess aliases.' },
+    { provider: 'claude', version: claude?.version, source: 'installed-cli', models: [{ id: '', label: 'Claude default (CLI selected)' }, ...CURATED_CLAUDE_MODELS], reason: 'Current Claude models bundled with this Waypoint release; the default follows the signed-in Claude CLI configuration.' },
   ];
 }

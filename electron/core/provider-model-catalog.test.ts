@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
+  CURATED_CLAUDE_MODELS,
+  CURATED_CODEX_MODELS,
   installedCliModelCatalog,
   parseCodexModelCatalog,
 } from "./provider-model-catalog.js";
@@ -63,7 +65,35 @@ describe("installed CLI model catalog", () => {
     ]);
     expect(catalogs[1].models).toEqual([
       { id: "", label: "Claude default (CLI selected)" },
+      ...CURATED_CLAUDE_MODELS,
     ]);
+  });
+  it("falls back to the curated current model list when the Codex CLI reports no catalog", async () => {
+    const catalogs = await installedCliModelCatalog(
+      [
+        {
+          name: "codex",
+          available: true,
+          compatible: true,
+          executable: "/safe/codex",
+          version: "0.146.0",
+        },
+        { name: "claude", available: false },
+      ],
+      async () => {
+        throw new Error("debug models unsupported");
+      },
+    );
+    expect(catalogs[0].models).toEqual([
+      { id: "", label: "Codex default (CLI selected)" },
+      ...CURATED_CODEX_MODELS,
+    ]);
+    expect(catalogs[0].reason).toContain("Current Codex models");
+    expect(catalogs[1].models[0]).toEqual({
+      id: "",
+      label: "Claude default (CLI selected)",
+    });
+    expect(catalogs[1].models.length).toBe(1 + CURATED_CLAUDE_MODELS.length);
   });
   it("preserves an unknown selected model visibly rather than replacing it", () => {
     expect(
@@ -80,7 +110,7 @@ describe("installed CLI model catalog", () => {
       "utf8",
     ).replace(/\s+/g," ");
     expect(source).toContain(
-      '<select name="model" aria-label={`${chatCli} model`}',
+      '<select className="model-select" name="model" aria-label={`${chatCli} model`}',
     );
     expect(source).toContain('aria-label="Codex model preference"');
     expect(source).toContain('aria-label="Claude model preference"');

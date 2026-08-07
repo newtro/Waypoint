@@ -38,7 +38,7 @@ describe('screen capture visual workspace', () => {
     expect(component).toContain('role="dialog" aria-modal="true" aria-label="Screenshot annotation editor"')
     expect(component).toContain('tabIndex={0} aria-label="Screenshot annotation canvas"')
     expect(component).toContain('onKeyDown={keyCanvas}')
-    expect(component).toContain('onClick={addCentered}')
+    expect(component).toContain('onClick={()=>void addCentered()}')
     expect(component).toContain('aria-label="Selected annotation layer"')
     expect(component).toContain('Hold Shift with arrow keys to resize')
     for (const label of ['Discard changes', 'Save layers', 'Done · flatten']) expect(component).toContain(`>${label}<`)

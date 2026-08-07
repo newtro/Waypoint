@@ -47,6 +47,7 @@ import { ChatMarkdown } from "./chat-markdown";
 import { meetingWavSegments } from "./meeting-transcription.js";
 import { parseBrowserChatCommand } from "./browser-chat-command";
 import { ScreenCaptureStudio } from "./screen-capture-studio";
+import { confirmModal, promptModal, ModalDialogHost } from "./modal-dialogs";
 type VoiceMode = "push_to_talk" | "hands_free";
 type VoiceState =
   "off" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
@@ -349,6 +350,17 @@ export function App() {
   function showError(reason: unknown) {
     setError(reason instanceof Error ? reason.message : String(reason));
   }
+  useEffect(() => {
+    if (!error && !notice) return;
+    const timer = window.setTimeout(
+      () => {
+        setError("");
+        setNotice("");
+      },
+      error ? 10_000 : 6_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [error, notice]);
   async function selectReflectionRun(runId: string) {
     if (!workspace) return;
     setSelectedReflectionRunId(runId);
@@ -408,10 +420,13 @@ export function App() {
     let body: string | undefined;
     if (action === "edit") {
       body =
-        window.prompt(
-          "Edit the proposed revision before accepting",
-          item.proposedBody,
-        ) ?? undefined;
+        (await promptModal({
+          title: "Edit proposed revision",
+          message: "Edit the proposed revision before accepting.",
+          defaultValue: item.proposedBody,
+          multiline: true,
+          okLabel: "Accept revision",
+        })) ?? undefined;
       if (body === undefined) return;
     }
     await window.waypoint.resolveReflection(
@@ -619,13 +634,21 @@ export function App() {
   }
   async function createTriggerFixture() {
     if (!workspace) return;
-    const eventType = window
-      .prompt("Local fixture event type", "document.imported")
-      ?.trim();
+    const eventType = (
+      await promptModal({
+        title: "Local fixture event type",
+        defaultValue: "document.imported",
+        okLabel: "Continue",
+      })
+    )?.trim();
     if (!eventType) return;
-    const title = window
-      .prompt("Synthetic fixture title", "Local webhook simulation")
-      ?.trim();
+    const title = (
+      await promptModal({
+        title: "Synthetic fixture title",
+        defaultValue: "Local webhook simulation",
+        okLabel: "Create fixture",
+      })
+    )?.trim();
     if (!title) return;
     await window.waypoint.createLocalWebhookFixture(
       workspace.id,
@@ -676,9 +699,13 @@ export function App() {
   async function deleteTriggerEvent(eventId: string) {
     if (
       !workspace ||
-      !window.confirm(
-        "Permanently delete this local fixture event, its suggested rule, and all dry-run history?",
-      )
+      !(await confirmModal({
+        title: "Delete fixture event?",
+        message:
+          "Permanently delete this local fixture event, its suggested rule, and all dry-run history?",
+        okLabel: "Permanently delete",
+        danger: true,
+      }))
     )
       return;
     await window.waypoint.deleteLocalTriggerEvent(workspace.id, eventId);
@@ -686,9 +713,13 @@ export function App() {
   }
   async function createWebhookChannel() {
     if (!workspace) return;
-    const label = window
-      .prompt("Inbound webhook channel name", "Private inbound")
-      ?.trim();
+    const label = (
+      await promptModal({
+        title: "Inbound webhook channel name",
+        defaultValue: "Private inbound",
+        okLabel: "Create channel",
+      })
+    )?.trim();
     if (!label) return;
     const result = await window.waypoint.createWebhookChannel(
         workspace.id,
@@ -711,9 +742,13 @@ export function App() {
   async function rotateWebhookChannel(channelId: string) {
     if (
       !workspace ||
-      !window.confirm(
-        "Rotate this signing secret now? The previous sender configuration will stop immediately.",
-      )
+      !(await confirmModal({
+        title: "Rotate signing secret?",
+        message:
+          "Rotate this signing secret now? The previous sender configuration will stop immediately.",
+        okLabel: "Rotate now",
+        danger: true,
+      }))
     )
       return;
     const result = await window.waypoint.rotateWebhookChannel(
@@ -747,7 +782,12 @@ export function App() {
   async function deleteWebhookEvent(eventId: string) {
     if (
       !workspace ||
-      !window.confirm("Permanently delete this quarantined inbound event?")
+      !(await confirmModal({
+        title: "Delete inbound event?",
+        message: "Permanently delete this quarantined inbound event?",
+        okLabel: "Permanently delete",
+        danger: true,
+      }))
     )
       return;
     await window.waypoint.deleteWebhookEvent(workspace.id, eventId);
@@ -755,9 +795,13 @@ export function App() {
   }
   async function createPlaybook() {
     if (!workspace) return;
-    const title = window
-      .prompt("Fixture playbook title", "Morning fixture review")
-      ?.trim();
+    const title = (
+      await promptModal({
+        title: "Fixture playbook title",
+        defaultValue: "Morning fixture review",
+        okLabel: "Create playbook",
+      })
+    )?.trim();
     if (!title) return;
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     await window.waypoint.createFixturePlaybook(
@@ -814,9 +858,13 @@ export function App() {
   async function deletePlaybook(id: string) {
     if (
       !workspace ||
-      !window.confirm(
-        "Permanently delete this fixture playbook and its local run history?",
-      )
+      !(await confirmModal({
+        title: "Delete fixture playbook?",
+        message:
+          "Permanently delete this fixture playbook and its local run history?",
+        okLabel: "Permanently delete",
+        danger: true,
+      }))
     )
       return;
     await window.waypoint.deleteFixturePlaybook(workspace.id, id);
@@ -841,7 +889,13 @@ export function App() {
   async function startMeeting() {
     if (!workspace || !meetingConsent)
       throw new Error("Acknowledge recording consent for this session first");
-    const title = window.prompt("Meeting title", "Meeting notes")?.trim();
+    const title = (
+      await promptModal({
+        title: "Meeting title",
+        defaultValue: "Meeting notes",
+        okLabel: "Start recording",
+      })
+    )?.trim();
     if (!title) {
       setMeetingConsent(false);
       return;
@@ -1092,9 +1146,13 @@ export function App() {
   async function removeMeeting(meetingId: string) {
     if (
       !workspace ||
-      !window.confirm(
-        "Permanently delete this local recording, transcript, and source-owned memory?",
-      )
+      !(await confirmModal({
+        title: "Delete meeting recording?",
+        message:
+          "Permanently delete this local recording, transcript, and source-owned memory?",
+        okLabel: "Permanently delete",
+        danger: true,
+      }))
     )
       return;
     if (meetingTranscriptionRun?.meetingId === meetingId)
@@ -1286,7 +1344,59 @@ export function App() {
       .then(setAttachments)
       .catch(showError);
   }, [workspace, selectedChatId, chats]);
-  useEffect(()=>{if(!workspace||!selectedChatId)return;const chat=chats.find((item)=>item.id===selectedChatId);if(!chat||chat.titleStatus!=='eligible'||!chat.messages.some((item)=>item.role==='user'&&item.body.trim().length>=3)||!chat.messages.some((item)=>item.role==='assistant'&&item.body.trim().length>=3))return;let disposed=false,timer:number|undefined;void window.waypoint.ensureChatTitle(workspace.id,chat.id).then(({started})=>{if(!started||disposed)return;let attempts=0;timer=window.setInterval(()=>{attempts++;void refresh().catch(showError);if(attempts>=40&&timer)window.clearInterval(timer)},750)}).catch(()=>undefined);return()=>{disposed=true;if(timer)window.clearInterval(timer)}},[workspace,selectedChatId,chats]);
+  const autoTitleRefreshRef = useRef(refresh);
+  autoTitleRefreshRef.current = refresh;
+  const autoTitleChat = chats.find((item) => item.id === selectedChatId),
+    autoTitleChatId = autoTitleChat?.id,
+    autoTitleStatus = autoTitleChat?.titleStatus,
+    autoTitleReady = Boolean(
+      autoTitleChat?.messages.some(
+        (item) => item.role === "user" && item.body.trim().length >= 3,
+      ) &&
+        autoTitleChat.messages.some(
+          (item) => item.role === "assistant" && item.body.trim().length >= 3,
+        ),
+    ),
+    autoTitleWorkspaceId = workspace?.id;
+  useEffect(() => {
+    if (!autoTitleWorkspaceId || !autoTitleChatId) return;
+    const shouldStart = autoTitleStatus === "eligible" && autoTitleReady,
+      shouldPoll = autoTitleStatus === "running";
+    if (!shouldStart && !shouldPoll) return;
+    let disposed = false,
+      timer: number | undefined,
+      attempts = 0;
+    const poll = () => {
+        if (disposed) return;
+        attempts += 1;
+        void autoTitleRefreshRef.current().catch(showError);
+        if (attempts >= 40 && timer) window.clearInterval(timer);
+      },
+      beginPolling = () => {
+        if (disposed) return;
+        poll();
+        timer = window.setInterval(poll, 750);
+      };
+    if (shouldPoll) beginPolling();
+    else
+      void window.waypoint
+        .ensureChatTitle(autoTitleWorkspaceId, autoTitleChatId)
+        .then(({ started }) => {
+          if (started) beginPolling();
+          else if (!disposed)
+            void autoTitleRefreshRef.current().catch(showError);
+        })
+        .catch(() => undefined);
+    return () => {
+      disposed = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [
+    autoTitleWorkspaceId,
+    autoTitleChatId,
+    autoTitleStatus,
+    autoTitleReady,
+  ]);
   useEffect(() => {
     const available = capabilities.find(
       (item) => item.available && item.compatible !== false,
@@ -2581,16 +2691,24 @@ export function App() {
       );
       return;
     }
-    const type = window
-      .prompt("Task type: analyze, summarize, or critique", "critique")
-      ?.trim() as "analyze" | "summarize" | "critique" | undefined;
+    const type = (
+      await promptModal({
+        title: "Child task type",
+        message: "Task type: analyze, summarize, or critique.",
+        defaultValue: "critique",
+        okLabel: "Continue",
+      })
+    )?.trim() as "analyze" | "summarize" | "critique" | undefined;
     if (!type) return;
-    const instruction = window
-      .prompt(
-        "Bounded child instruction",
-        "Critique the prior answer for correctness and missing risks.",
-      )
-      ?.trim();
+    const instruction = (
+      await promptModal({
+        title: "Bounded child instruction",
+        defaultValue:
+          "Critique the prior answer for correctness and missing risks.",
+        multiline: true,
+        okLabel: "Start child task",
+      })
+    )?.trim();
     if (!instruction) return;
     const source = selectedChat.messages.find(
       (item) => item.id === String(parent.sourceMessageId),
@@ -2624,9 +2742,12 @@ export function App() {
   async function remove(kind: "document" | "chat" | "memory", id: string) {
     if (
       !workspace ||
-      !window.confirm(
-        `Delete this ${kind} and its owned local data? This cannot be undone.`,
-      )
+      !(await confirmModal({
+        title: `Delete this ${kind}?`,
+        message: `Delete this ${kind} and its owned local data? This cannot be undone.`,
+        okLabel: "Permanently delete",
+        danger: true,
+      }))
     )
       return;
     try {
@@ -2648,9 +2769,18 @@ export function App() {
   }
   async function editDocument(item: Document) {
     if (!workspace) return;
-    const title = window.prompt("Note title", item.title);
+    const title = await promptModal({
+      title: "Note title",
+      defaultValue: item.title,
+      okLabel: "Continue",
+    });
     if (title === null) return;
-    const body = window.prompt("Note text", item.body);
+    const body = await promptModal({
+      title: "Note text",
+      defaultValue: item.body,
+      multiline: true,
+      okLabel: "Save note",
+    });
     if (body === null) return;
     try {
       await window.waypoint.updateDocument(workspace.id, item.id, title, body);
@@ -2686,9 +2816,18 @@ export function App() {
     let title = item.title,
       body = item.body;
     if (edit) {
-      const nextTitle = window.prompt("Suggestion title", title);
+      const nextTitle = await promptModal({
+        title: "Suggestion title",
+        defaultValue: title,
+        okLabel: "Continue",
+      });
       if (nextTitle === null) return;
-      const nextBody = window.prompt("Suggestion text", body);
+      const nextBody = await promptModal({
+        title: "Suggestion text",
+        defaultValue: body,
+        multiline: true,
+        okLabel: "Save suggestion",
+      });
       if (nextBody === null) return;
       title = nextTitle;
       body = nextBody;
@@ -2859,6 +2998,15 @@ export function App() {
   }
   async function exportWorkspace() {
     if (!workspace) return;
+    if (
+      !(await confirmModal({
+        title: "Waypoint backups are plaintext",
+        message:
+          "Choose a protected location. Deleting content in Waypoint does not delete backup copies.",
+        okLabel: "Create plaintext backup",
+      }))
+    )
+      return;
     try {
       const result = await window.waypoint.exportWorkspace(workspace.id);
       if (!result.canceled)
@@ -2908,6 +3056,15 @@ export function App() {
   }
   async function initializeSync() {
     if (!workspace) return;
+    if (
+      !(await confirmModal({
+        title: "Set up this device as the first sync owner?",
+        message:
+          "This creates local protected keys. Next, host directly on this device or explicitly configure the optional hosted relay.",
+        okLabel: "Create protected sync identity",
+      }))
+    )
+      return;
     try {
       const result = await window.waypoint.initializeDesktopSync(workspace.id);
       if (result.bootstrap) {
@@ -2934,7 +3091,12 @@ export function App() {
     }
   }
   async function joinSync() {
-    const token = window.prompt("Paste the one-use Waypoint enrollment token");
+    const token = await promptModal({
+      title: "Join workspace sync",
+      message: "Paste the one-use Waypoint enrollment token.",
+      placeholder: "Enrollment token",
+      okLabel: "Request enrollment",
+    });
     if (!token) return;
     try {
       const result = await window.waypoint.submitSyncEnrollment(token);
@@ -2961,6 +3123,15 @@ export function App() {
   }
   async function approvePeer(requestId: string) {
     if (!workspace) return;
+    if (
+      !(await confirmModal({
+        title: "Approve this device for workspace sync?",
+        message:
+          "The device will receive a wrapped copy of the workspace key and request a fresh encrypted workspace snapshot after enrollment.",
+        okLabel: "Approve device",
+      }))
+    )
+      return;
     try {
       const result = await window.waypoint.approveSyncEnrollment(
         workspace.id,
@@ -2976,6 +3147,16 @@ export function App() {
   }
   async function revokePeer(deviceId: string) {
     if (!workspace) return;
+    if (
+      !(await confirmModal({
+        title: "Revoke this device?",
+        message:
+          "The device will lose relay access immediately. Waypoint will rotate the workspace key for remaining devices.",
+        okLabel: "Revoke and rotate",
+        danger: true,
+      }))
+    )
+      return;
     try {
       const result = await window.waypoint.revokeSyncDevice(
         workspace.id,
@@ -2993,6 +3174,15 @@ export function App() {
   }
   async function toggleDeviceWorker() {
     if (!workspace || !deviceControl) return;
+    if (
+      !(await confirmModal({
+        title: "Change trusted device execution policy?",
+        message:
+          "Worker enablement, failover, capability, preference, and execution limits are security-critical. Jobs remain limited to the capabilities shown in Waypoint.",
+        okLabel: "Apply device policy",
+      }))
+    )
+      return;
     try {
       const result = await window.waypoint.updateDeviceControl(workspace.id, {
         ...deviceControl.policy,
@@ -3030,6 +3220,7 @@ export function App() {
   if (!workspace)
     return (
       <main className="onboarding">
+        <ModalDialogHost />
         <img className="brand-mark" src={waypointMark} alt="Waypoint" />
         <p className="kicker">Private by default</p>
         <h1>
@@ -3098,6 +3289,7 @@ export function App() {
     );
   return (
     <div className="app-frame">
+      <ModalDialogHost />
       <button
         className="mobile-menu icon-button"
         aria-label="Open conversations"
@@ -3185,7 +3377,7 @@ export function App() {
                       className="conversation-rename"
                       aria-label={`Rename ${chat.title}`}
                       title="Rename conversation"
-                      onClick={()=>{if(!workspace)return;const title=window.prompt('Rename conversation',chat.title);if(title?.trim())void window.waypoint.renameChat(workspace.id,chat.id,title).then(()=>refresh()).catch(showError)}}
+                      onClick={()=>{if(!workspace)return;void promptModal({title:'Rename conversation',defaultValue:chat.title,okLabel:'Rename'}).then((title)=>{if(title?.trim())return window.waypoint.renameChat(workspace.id,chat.id,title).then(()=>refresh())}).catch(showError)}}
                     >
                       ✎
                     </button>
@@ -6295,9 +6487,19 @@ export function App() {
                           <button
                             onClick={() =>
                               workspace &&
-                              void window.waypoint
-                                .startDesktopSyncHost(workspace.id)
-                                .then(() => refresh())
+                              void confirmModal({
+                                title: "Host encrypted peer sync on this device?",
+                                message:
+                                  "Waypoint will listen on your local network. Enrolled peers can connect while this app is awake and running. Public webhooks and offline relay delivery still require the optional hosted relay.",
+                                okLabel: "Host on this device",
+                              })
+                                .then((confirmed) =>
+                                  confirmed
+                                    ? window.waypoint
+                                        .startDesktopSyncHost(workspace.id)
+                                        .then(() => refresh())
+                                    : undefined,
+                                )
                                 .catch(showError)
                             }
                           >
@@ -6462,12 +6664,23 @@ export function App() {
                                   className="quiet-button"
                                   onClick={() =>
                                     workspace &&
-                                    window.confirm(
-                                      "Permanently delete this command history and its sync record?",
-                                    ) &&
-                                    void window.waypoint
-                                      .deleteDeviceCommand(workspace.id, job.id)
-                                      .then(() => refresh())
+                                    void confirmModal({
+                                      title: "Delete command history?",
+                                      message:
+                                        "Permanently delete this command history and its sync record?",
+                                      okLabel: "Permanently delete",
+                                      danger: true,
+                                    })
+                                      .then((confirmed) =>
+                                        confirmed
+                                          ? window.waypoint
+                                              .deleteDeviceCommand(
+                                                workspace.id,
+                                                job.id,
+                                              )
+                                              .then(() => refresh())
+                                          : undefined,
+                                      )
                                       .catch(showError)
                                   }
                                 >

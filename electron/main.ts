@@ -49,6 +49,7 @@ import {
   validateOneChildDelegation,
 } from "./core/execution-lifecycle.js";
 import { finalizeExecution } from "./core/execution-finalization.js";
+import { withCurrentDateTime } from "./core/prompt-context.js";
 import { readBackup, writeAtomicBackup } from "./core/backup.js";
 import { runBackupAdministration } from "./core/backup-administration-runner.js";
 import { extractDocumentOffMain } from "./core/document-extraction-runner.js";
@@ -1553,7 +1554,7 @@ function registerIpc(): void {
         workspaceId,
         role,
         model: route.model!,
-        prompt,
+        prompt: withCurrentDateTime(prompt),
         apiKey,
         signal: controller.signal,
         requestCapMicros: settings.perRequestCapMicros ?? 100_000,
@@ -2226,20 +2227,10 @@ function registerIpc(): void {
   );
   handle("waypoint:desktop-sync-host-start", async (_event, input: unknown) => {
     const workspaceId = text(
-        (input as Record<string, unknown>).workspaceId,
-        "workspace ID",
-        64,
-      ),
-      confirmation = await dialog.showMessageBox({
-        type: "warning",
-        buttons: ["Host on this device", "Cancel"],
-        defaultId: 1,
-        cancelId: 1,
-        message: "Host encrypted peer sync on this device?",
-        detail:
-          "Waypoint will listen on your local network. Enrolled peers can connect while this app is awake and running. Public webhooks and offline relay delivery still require the optional hosted relay.",
-      });
-    if (confirmation.response !== 0) return { canceled: true };
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
     return {
       canceled: false,
       ...(await syncService.startPeerHost(workspaceId)),
@@ -2258,16 +2249,6 @@ function registerIpc(): void {
     );
     if (!store.listWorkspaces().some((item) => item.id === workspaceId))
       throw new Error("Workspace not found");
-    const confirmation = await dialog.showMessageBox({
-      type: "warning",
-      buttons: ["Create protected sync identity", "Cancel"],
-      defaultId: 1,
-      cancelId: 1,
-      message: "Set up this device as the first sync owner?",
-      detail:
-        "This creates local protected keys. Next, host directly on this device or explicitly configure the optional hosted relay.",
-    });
-    if (confirmation.response !== 0) return { canceled: true };
     const bootstrap = syncService.initializeOwner(workspaceId);
     store.configureSyncDevice(workspaceId, bootstrap.deviceId);
     recordSyncActivityBestEffort(store, workspaceId, "device.initialized");
@@ -2317,17 +2298,7 @@ function registerIpc(): void {
   handle("waypoint:desktop-sync-approve", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
-      requestId = text(value.requestId, "request ID", 64),
-      confirmation = await dialog.showMessageBox({
-        type: "warning",
-        buttons: ["Approve device", "Cancel"],
-        defaultId: 1,
-        cancelId: 1,
-        message: "Approve this device for workspace sync?",
-        detail:
-          "The device will receive a wrapped copy of the workspace key and request a fresh encrypted workspace snapshot after enrollment.",
-      });
-    if (confirmation.response !== 0) return { canceled: true };
+      requestId = text(value.requestId, "request ID", 64);
     const result = await syncService.approveEnrollment(workspaceId, requestId);
     recordSyncActivityBestEffort(store, workspaceId, "device.approved");
     return { canceled: false, ...result };
@@ -2340,17 +2311,7 @@ function registerIpc(): void {
   handle("waypoint:desktop-sync-revoke", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
-      deviceId = text(value.deviceId, "device ID", 64),
-      confirmation = await dialog.showMessageBox({
-        type: "warning",
-        buttons: ["Revoke and rotate", "Cancel"],
-        defaultId: 1,
-        cancelId: 1,
-        message: "Revoke this device?",
-        detail:
-          "The device will lose relay access immediately. Waypoint will rotate the workspace key for remaining devices.",
-      });
-    if (confirmation.response !== 0) return { canceled: true };
+      deviceId = text(value.deviceId, "device ID", 64);
     await syncService.revoke(workspaceId, deviceId);
     const rotation = await syncService.rotate(workspaceId);
     recordSyncActivityBestEffort(store, workspaceId, "device.revoked");
@@ -2431,19 +2392,8 @@ function registerIpc(): void {
         ...(value.policy as Record<string, unknown>),
         version: 1,
       };
-    if (JSON.stringify(next) !== JSON.stringify(current)) {
-      const confirmation = await dialog.showMessageBox({
-        type: "warning",
-        buttons: ["Apply device policy", "Cancel"],
-        defaultId: 1,
-        cancelId: 1,
-        message: "Change trusted device execution policy?",
-        detail:
-          "Worker enablement, failover, capability, preference, and execution limits are security-critical. Jobs remain limited to the capabilities shown in Waypoint.",
-      });
-      if (confirmation.response !== 0)
-        return { canceled: true, policy: current };
-    }
+    if (JSON.stringify(next) === JSON.stringify(current))
+      return { canceled: false, policy: current };
     return {
       canceled: false,
       policy: store.setDeviceControlPolicy(workspaceId, next as never),
@@ -3381,6 +3331,7 @@ function registerIpc(): void {
         throw new Error("Prompt and attached text exceed the execution limit");
       prompt += context;
     }
+    prompt = withCurrentDateTime(prompt);
     const budget = createExecutionBudget({
       kind: parentExecutionId ? "child" : "root",
       profile,
@@ -3710,17 +3661,6 @@ function registerIpc(): void {
       "workspace ID",
       64,
     );
-    const warning = await dialog.showMessageBox({
-      type: "warning",
-      buttons: ["Create plaintext backup", "Cancel"],
-      defaultId: 1,
-      cancelId: 1,
-      title: "Backup privacy",
-      message: "Waypoint backups are plaintext.",
-      detail:
-        "Choose a protected location. Deleting content in Waypoint does not delete backup copies.",
-    });
-    if (warning.response !== 0) return { canceled: true };
     const chosen = await dialog.showSaveDialog({
       title: "Back up Waypoint workspace",
       defaultPath: "waypoint-backup.json",
