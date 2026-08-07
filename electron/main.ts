@@ -12,7 +12,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { IpcMainInvokeEvent } from "electron";
+import type { IpcMainInvokeEvent, WebContents } from "electron";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
@@ -137,7 +137,7 @@ import {
 } from "./core/browser-discovery.js";
 import { InAppBrowserController } from "./core/in-app-browser.js";
 import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
-import { captureReadiness, validateCaptureSettings, type CaptureMode } from "./core/manual-screen-capture.js";
+import { assertVisibleCapturePixels, captureReadiness, captureVisibilityStrategy, validateCaptureSettings, type CaptureMode } from "./core/manual-screen-capture.js";
 
 // Contained browser traffic must not bypass the audited HTTPS CONNECT gate over UDP/QUIC.
 app.commandLine.appendSwitch(
@@ -154,7 +154,24 @@ let peerHostRuntime: PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
 const syncAbort = new AbortController();
 let trustedSenderId: number | undefined;
-const pendingManualCaptures = new Map<string, { workspaceId:string; senderId:number; sourceId: string; sourceName: string; mode: CaptureMode; expiresAt: number }>();
+const pendingManualCaptures = new Map<string, { workspaceId:string; senderId:number; sourceId: string; sourceName: string; mode: CaptureMode; width:number; height:number; expiresAt: number }>();
+const pendingCaptureVisibilityAcks = new Map<string, { senderId:number; hidden:boolean; resolve:()=>void; timer:ReturnType<typeof setTimeout> }>();
+
+ipcMain.on('waypoint:screen-capture-visibility-ack',(event,input:unknown)=>{
+  const value=input as Record<string,unknown>,token=typeof value?.token==='string'?value.token:'',hidden=value?.hidden;
+  const pending=pendingCaptureVisibilityAcks.get(token);
+  if(!pending||pending.senderId!==event.sender.id||pending.hidden!==hidden)return;
+  clearTimeout(pending.timer);pendingCaptureVisibilityAcks.delete(token);pending.resolve();
+});
+
+function setCaptureOverlayVisibility(sender:WebContents,hidden:boolean):Promise<void>{
+  const token=randomUUID();
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{pendingCaptureVisibilityAcks.delete(token);reject(new Error('Capture interface did not become ready. Try again.'))},2_000);
+    pendingCaptureVisibilityAcks.set(token,{senderId:sender.id,hidden,resolve,timer});
+    sender.send('waypoint:screen-capture-visibility',{token,hidden});
+  });
+}
 let captureShortcutState={registered:false,shortcut:'',reason:'Capture shortcut has not been registered yet'};
 
 function registerCaptureShortcut(shortcut: string): boolean {
@@ -722,7 +739,7 @@ function registerIpc(): void {
     const sources = await desktopCapturer.getSources({ types: mode === 'window' ? ['window'] : ['screen'], thumbnailSize: { width: 3840, height: 2160 }, fetchWindowIcons: true });
     return sources.map((source) => {
       const size = source.thumbnail.getSize(), token = randomUUID();
-      pendingManualCaptures.set(token, { workspaceId,senderId:event.sender.id,sourceId: source.id, sourceName: source.name, mode, expiresAt: Date.now() + 120_000 });
+      pendingManualCaptures.set(token, { workspaceId,senderId:event.sender.id,sourceId: source.id, sourceName: source.name, mode, width:size.width, height:size.height, expiresAt: Date.now() + 120_000 });
       return { token, name: source.name, displayId: source.display_id, thumbnailDataUrl: source.thumbnail.resize({ width: Math.min(560, size.width) }).toDataURL(), width: size.width, height: size.height };
     });
   });
@@ -730,7 +747,8 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, 'workspace id', 128), token = text(value.token, 'capture token', 128), pending = pendingManualCaptures.get(token);
     if (!pending || pending.expiresAt < Date.now()||pending.workspaceId!==workspaceId||pending.senderId!==event.sender.id) throw new Error('Capture selection expired or belongs to another workspace. Choose the source again.');
     pendingManualCaptures.delete(token);
-    const window=BrowserWindow.fromWebContents(event.sender);window?.hide();try{await new Promise((resolve)=>setTimeout(resolve,180));const sources=await desktopCapturer.getSources({types:pending.mode==='window'?['window']:['screen'],thumbnailSize:{width:7680,height:4320},fetchWindowIcons:false}),source=sources.find((item)=>item.id===pending.sourceId);if(!source||source.thumbnail.isEmpty())throw new Error('The selected source is no longer available.');const png=source.thumbnail.toPNG(),size=source.thumbnail.getSize();return store.createScreenCapture(workspaceId, { title: `Screenshot · ${pending.sourceName}`, mode: pending.mode, sourceId: pending.sourceId, sourceName: pending.sourceName, capturedAt: new Date().toISOString(), width: size.width, height: size.height }, png)}finally{window?.show();window?.focus()}
+    const window=BrowserWindow.fromWebContents(event.sender),visibility=captureVisibilityStrategy(pending.mode);
+    try{if(visibility.hideWindow){window?.hide();await new Promise((resolve)=>setTimeout(resolve,180))}else if(visibility.hideOverlay)await setCaptureOverlayVisibility(event.sender,true);const sources=await desktopCapturer.getSources({types:pending.mode==='window'?['window']:['screen'],thumbnailSize:{width:pending.width,height:pending.height},fetchWindowIcons:false}),source=sources.find((item)=>item.id===pending.sourceId);if(!source||source.thumbnail.isEmpty())throw new Error('The selected source is no longer available. Choose it again.');const size=source.thumbnail.getSize();try{assertVisibleCapturePixels(source.thumbnail.toBitmap(),size.width,size.height)}catch(error){if(error instanceof Error&&error.message==='screen_capture_no_visible_pixels')throw new Error('Capture returned no visible pixels. Check Screen Recording permission, make sure the selected window is visible, then try again.',{cause:error});throw error}const png=source.thumbnail.toPNG();return store.createScreenCapture(workspaceId, { title: `Screenshot · ${pending.sourceName}`, mode: pending.mode, sourceId: pending.sourceId, sourceName: pending.sourceName, capturedAt: new Date().toISOString(), width: size.width, height: size.height }, png)}finally{if(visibility.hideWindow){window?.show();window?.focus()}else if(visibility.hideOverlay)await setCaptureOverlayVisibility(event.sender,false).catch(()=>undefined)}
   });
   handle('waypoint:screen-capture-cancel-sources',(event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>)?.workspaceId,'workspace id',128);for(const[token,pending]of pendingManualCaptures)if(pending.workspaceId===workspaceId&&pending.senderId===event.sender.id)pendingManualCaptures.delete(token);return{canceled:true}});
   handle('waypoint:screen-capture-import-browser', async (_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>)?.workspaceId,'workspace id',128),capture=await inAppBrowser.capturePng(workspaceId);return store.createScreenCapture(workspaceId,{title:`Browser · ${capture.title}`.slice(0,120),mode:'browser',sourceId:createHash('sha256').update(capture.url).digest('hex'),sourceName:new URL(capture.url).hostname,capturedAt:new Date().toISOString(),width:capture.width,height:capture.height},capture.png)});

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   captureDigest,
   captureReadiness,
+  assertVisibleCapturePixels,
+  captureVisibilityStrategy,
   defaultCaptureShortcut,
   validateCaptureLayers,
   validateCaptureSettings,
@@ -60,5 +62,19 @@ describe('manual screen capture boundary', () => {
     expect(captureReadiness('linux', 'unknown').available).toBe(false)
     expect(defaultCaptureShortcut('win32')).toBe('PrintScreen')
     expect(defaultCaptureShortcut('darwin')).toBe('CommandOrControl+Shift+8')
+  })
+
+  it('rejects the exact all-black native frame signature without rejecting dark content', () => {
+    expect(() => assertVisibleCapturePixels(new Uint8Array(4 * 4 * 4), 4, 4)).toThrow('screen_capture_no_visible_pixels')
+    const dark = new Uint8Array(4 * 4 * 4)
+    dark[dark.byteLength - 2] = 1
+    expect(() => assertVisibleCapturePixels(dark, 4, 4)).not.toThrow()
+    expect(() => assertVisibleCapturePixels(new Uint8Array(12), 4, 4)).toThrow('screen_capture_pixel_buffer_invalid')
+  })
+
+  it('keeps a selected window capturable while removing only the Waypoint overlay', () => {
+    expect(captureVisibilityStrategy('window')).toEqual({ hideWindow: false, hideOverlay: true })
+    expect(captureVisibilityStrategy('region')).toEqual({ hideWindow: true, hideOverlay: false })
+    expect(captureVisibilityStrategy('display')).toEqual({ hideWindow: true, hideOverlay: false })
   })
 })

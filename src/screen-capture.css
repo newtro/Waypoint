@@ -19,6 +19,8 @@
   color: var(--capture-ink);
 }
 
+.capture-overlay.capture-preparing { opacity: 0; cursor: wait; }
+
 .capture-studio,
 .capture-editor {
   width: min(1060px, 100%);

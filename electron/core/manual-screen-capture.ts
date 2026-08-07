@@ -46,6 +46,12 @@ export type CaptureSettings = {
   maxCaptures: number
 }
 
+export function captureVisibilityStrategy(mode: CaptureMode): { hideWindow: boolean; hideOverlay: boolean } {
+  return mode === 'window'
+    ? { hideWindow: false, hideOverlay: true }
+    : { hideWindow: true, hideOverlay: false }
+}
+
 const CAPTURE_TOOLS = new Set<CaptureTool>([
   'select', 'crop', 'arrow', 'line', 'rectangle', 'ellipse', 'text', 'step',
   'highlight', 'freehand', 'blur', 'pixelate', 'redact',
@@ -120,6 +126,21 @@ export function validateCaptureLayers(value: unknown, width: number, height: num
 export function captureDigest(bytes: Uint8Array): string {
   if (bytes.byteLength < 16 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('screen_capture_bytes_invalid')
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+export function assertVisibleCapturePixels(bitmap: Uint8Array, width: number, height: number): void {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || bitmap.byteLength !== width * height * 4) {
+    throw new Error('screen_capture_pixel_buffer_invalid')
+  }
+  for (let offset = 0; offset < bitmap.byteLength; offset += 4) {
+    // Electron nativeImage bitmaps are BGRA. Reject only the exact known
+    // failure signature: every color channel is zero. One real non-black pixel
+    // is sufficient, so legitimate nearly-black screenshots remain valid.
+    if (bitmap[offset] !== 0 || bitmap[offset + 1] !== 0 || bitmap[offset + 2] !== 0) {
+      return
+    }
+  }
+  throw new Error('screen_capture_no_visible_pixels')
 }
 
 export function captureReadiness(
