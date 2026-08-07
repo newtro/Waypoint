@@ -2628,9 +2628,7 @@ export function App() {
                 ? `${toolEvents.length} structured event${toolEvents.length === 1 ? "" : "s"}`
                 : "No provider tool events exposed"}
             </small>
-            <span className="execution-chevron" aria-hidden="true">
-              ⌄
-            </span>
+            <span className="execution-chevron" aria-hidden="true" />
           </summary>
           <div className="execution-timeline-body">
             {!!toolEvents.length && (
