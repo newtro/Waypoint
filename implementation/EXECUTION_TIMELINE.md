@@ -231,6 +231,12 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Initial adversarial review returned NO-SHIP (1 blocker/5 high). The repair denied AI-origin inherited process execution, made tool dispatch fail closed, added dominant POSIX process-tree cancellation, reassembled output before redaction, workspace-scoped progress, terminal exception receipts, per-workspace concurrency, strict timeouts, and Claude tool-result normalization.
 - Fresh re-review returned SHIP (0 blocker/0 high; 3 medium/1 low). Full gate passed 74 files/344 tests, lint, build, dependency/SBOM checks, macOS package/runtime closure, isolated native launch, and diff check. Evidence: `implementation/P6B_TOOL_GATEWAY_EVIDENCE.md`.
 
+## P6B — Browser Completion (2026-08-06)
+
+- Added embedded In-App Browser, chat tool execution/provenance, Brave-first installed-browser/profile selection, atomic private profile snapshots, cancellation/global-stop race handling, and truthful Firefox/secure-input boundaries.
+- Build, focused 29/29, full 113 files/495 tests, macOS package closure, and real packaged normal-profile open/hide/snapshot/restart acceptance passed. Contained page-script suppression and installed-profile layout were runtime-probed. Evidence: `implementation/P6B_BROWSER_COMPLETION_EVIDENCE.md`.
+- Independent review initially found 3 Highs. Repaired embedded direct-network containment, valid installed-profile layout plus fixed packaged transport lockdown, and signal-raced cancellation including initial open. Definitive re-review: CLEAN (0 blocker/0 high).
+
 ## P6C — Tool Failure Learning / Prevention (2026-08-03)
 
 - User authorized the local P6C vertical slice. Acceptance is frozen in `implementation/P6C_TOOL_FAILURE_LEARNING_PLAN.md`; no hosted provider, external account/service, browser, peer execution, unrestricted AI terminal, or deployment authority is implied.

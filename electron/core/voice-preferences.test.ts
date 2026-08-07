@@ -1,6 +1,105 @@
-import{mkdtempSync,readFileSync}from'node:fs';import os from'node:os';import path from'node:path';import{DatabaseSync}from'node:sqlite';import{describe,expect,it}from'vitest';import{runMigrations,schemaVersion}from'./migrations.js';import{WorkspaceStore}from'./store.js'
-describe('voice preference and UI contract',()=>{
- it('persists bounded workspace-local preferences and preserves defaults',()=>{const root=mkdtempSync(path.join(os.tmpdir(),'waypoint-voice-pref-')),database=path.join(root,'waypoint.sqlite'),store=new WorkspaceStore(database),workspace=store.createWorkspace('Voice',root);expect(store.voicePreferences(workspace.id)).toEqual({mode:'push_to_talk',microphoneId:'',outputVoice:'system',engine:'fast_local'});store.setVoicePreferences(workspace.id,{mode:'hands_free',microphoneId:'fixture-device',outputVoice:'system',engine:'full_duplex_experimental'});store.close();const reopened=new WorkspaceStore(database);expect(reopened.voicePreferences(workspace.id)).toEqual({mode:'hands_free',microphoneId:'fixture-device',outputVoice:'system',engine:'full_duplex_experimental'});expect(()=>reopened.setVoicePreferences(workspace.id,{mode:'always_on',microphoneId:'',outputVoice:'system'})).toThrow('invalid');reopened.close()})
- it('migrates a real v25 preference without changing mode or device and excludes device voice state from workspace archives',()=>{const db=new DatabaseSync(':memory:');db.exec("CREATE TABLE schema_versions(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL);INSERT INTO schema_versions VALUES(25,'2026-01-01T00:00:00.000Z');CREATE TABLE voice_preferences(workspace_id TEXT PRIMARY KEY,mode TEXT NOT NULL,microphone_id TEXT NOT NULL,output_voice TEXT NOT NULL,updated_at TEXT NOT NULL);INSERT INTO voice_preferences VALUES('w','hands_free','device-a','system','2026-01-01T00:00:00.000Z')");runMigrations(db,schemaVersion(db),[{version:26,apply:(database)=>database.exec("ALTER TABLE voice_preferences ADD COLUMN engine TEXT NOT NULL DEFAULT 'fast_local' CHECK(engine IN ('fast_local','full_duplex_experimental'));CREATE TABLE voice_engine_metrics(workspace_id TEXT,engine TEXT,first_audio_ms INTEGER,interruption_ms INTEGER,turn_end_ms INTEGER,fixture INTEGER,measured_at TEXT,PRIMARY KEY(workspace_id,engine))")}]);expect(db.prepare('SELECT mode,microphone_id microphoneId,engine FROM voice_preferences').get()).toEqual({mode:'hands_free',microphoneId:'device-a',engine:'fast_local'});db.close();const storeSource=readFileSync(new URL('./store.ts',import.meta.url),'utf8'),tables=storeSource.match(/const tables = \[([^;]+)\];/)?.[1]??'';expect(tables).not.toContain('voice_preferences');expect(tables).not.toContain('voice_engine_metrics');expect(storeSource).not.toContain("this.syncJournal.enqueue(workspaceId,engine")})
- it('keeps configuration in Settings, restores it, isolates the capture target, and renders one accessible composer control',()=>{const source=readFileSync(new URL('../../src/main.tsx',import.meta.url),'utf8');expect(source).not.toContain('Voice chat controls');expect(source).toContain('window.waypoint.voicePreferences(next.id)');expect(source).toContain('voiceCaptureTargetRef.current=target;setError');expect(source).toContain('voiceTurnRef.current++;voiceCaptureTargetRef.current=undefined');expect(source).toContain("selectedChat.id!==target.chatId");expect(source).toContain('const voiceTurn=voiceSubmissionRef.current');expect(source.indexOf('const voiceTurn=voiceSubmissionRef.current')).toBeLessThan(source.indexOf("if(cli==='openrouter'&&attachmentIds.length)"));expect(source).toContain("setVoiceState('off');setVoicePartial('')");expect(source).toContain('aria-label="Default voice mode"');expect(source).toContain("voiceMode==='hands_free'?(voiceSessionActive?'End hands-free voice session':'Start hands-free voice session'):'Hold to talk'");expect(source.match(/className={`voice-control/g)).toHaveLength(1)})
-})
+import { mkdtempSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it } from "vitest";
+import { runMigrations, schemaVersion } from "./migrations.js";
+import { WorkspaceStore } from "./store.js";
+describe("voice preference and UI contract", () => {
+  it("persists bounded workspace-local preferences and preserves defaults", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "waypoint-voice-pref-")),
+      database = path.join(root, "waypoint.sqlite"),
+      store = new WorkspaceStore(database),
+      workspace = store.createWorkspace("Voice", root);
+    expect(store.voicePreferences(workspace.id)).toEqual({
+      mode: "push_to_talk",
+      microphoneId: "",
+      outputVoice: "system",
+      engine: "fast_local",
+    });
+    store.setVoicePreferences(workspace.id, {
+      mode: "hands_free",
+      microphoneId: "fixture-device",
+      outputVoice: "system",
+      engine: "full_duplex_experimental",
+    });
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(reopened.voicePreferences(workspace.id)).toEqual({
+      mode: "hands_free",
+      microphoneId: "fixture-device",
+      outputVoice: "system",
+      engine: "full_duplex_experimental",
+    });
+    expect(() =>
+      reopened.setVoicePreferences(workspace.id, {
+        mode: "always_on",
+        microphoneId: "",
+        outputVoice: "system",
+      }),
+    ).toThrow("invalid");
+    reopened.close();
+  });
+  it("migrates a real v25 preference without changing mode or device and excludes device voice state from workspace archives", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(
+      "CREATE TABLE schema_versions(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL);INSERT INTO schema_versions VALUES(25,'2026-01-01T00:00:00.000Z');CREATE TABLE voice_preferences(workspace_id TEXT PRIMARY KEY,mode TEXT NOT NULL,microphone_id TEXT NOT NULL,output_voice TEXT NOT NULL,updated_at TEXT NOT NULL);INSERT INTO voice_preferences VALUES('w','hands_free','device-a','system','2026-01-01T00:00:00.000Z')",
+    );
+    runMigrations(db, schemaVersion(db), [
+      {
+        version: 26,
+        apply: (database) =>
+          database.exec(
+            "ALTER TABLE voice_preferences ADD COLUMN engine TEXT NOT NULL DEFAULT 'fast_local' CHECK(engine IN ('fast_local','full_duplex_experimental'));CREATE TABLE voice_engine_metrics(workspace_id TEXT,engine TEXT,first_audio_ms INTEGER,interruption_ms INTEGER,turn_end_ms INTEGER,fixture INTEGER,measured_at TEXT,PRIMARY KEY(workspace_id,engine))",
+          ),
+      },
+    ]);
+    expect(
+      db
+        .prepare(
+          "SELECT mode,microphone_id microphoneId,engine FROM voice_preferences",
+        )
+        .get(),
+    ).toEqual({
+      mode: "hands_free",
+      microphoneId: "device-a",
+      engine: "fast_local",
+    });
+    db.close();
+    const storeSource = readFileSync(
+        new URL("./store.ts", import.meta.url),
+        "utf8",
+      ),
+      tables = storeSource.match(/const tables = \[([^;]+)\];/)?.[1] ?? "";
+    expect(tables).not.toContain("voice_preferences");
+    expect(tables).not.toContain("voice_engine_metrics");
+    expect(storeSource).not.toContain(
+      "this.syncJournal.enqueue(workspaceId,engine",
+    );
+  });
+  it("keeps configuration in Settings, restores it, isolates the capture target, and renders one accessible composer control", () => {
+    const source = readFileSync(
+      new URL("../../src/main.tsx", import.meta.url),
+      "utf8",
+    ),compact=source.replace(/\s+/g,'').replaceAll('"',"'");
+    expect(source).not.toContain("Voice chat controls");
+    expect(compact).toContain("window.waypoint.voicePreferences(next.id)");
+    expect(compact).toContain("voiceCaptureTargetRef.current=target;setError");
+    expect(compact).toContain(
+      "voiceTurnRef.current++;voiceCaptureTargetRef.current=undefined",
+    );
+    expect(compact).toContain("selectedChat.id!==target.chatId");
+    expect(compact).toContain("constvoiceTurn=voiceSubmissionRef.current");
+    expect(
+      compact.indexOf("constvoiceTurn=voiceSubmissionRef.current"),
+    ).toBeLessThan(
+      compact.indexOf("if(cli==='openrouter'&&attachmentIds.length)"),
+    );
+    expect(compact).toContain("setVoiceState('off');setVoicePartial('')");
+    expect(source).toContain('aria-label="Default voice mode"');
+    expect(compact).toContain("voiceMode==='hands_free'");
+    expect(compact).toContain("voiceSessionActive?'Endhands-freevoicesession':'Starthands-freevoicesession'");
+    expect(compact).toContain(":'Holdtotalk'");
+    expect(source.match(/className={`voice-control/g)).toHaveLength(1);
+  });
+});

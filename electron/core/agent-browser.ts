@@ -1,21 +1,402 @@
-import{createHash}from'node:crypto'
-import{lookup}from'node:dns/promises'
-import{createServer}from'node:http'
-import{lstatSync,readFileSync,readdirSync,readlinkSync,realpathSync,statSync}from'node:fs'
-import{connect,isIP}from'node:net'
-import path from'node:path'
-import{EXPECTED_AGENT_BROWSER_CLOSURES}from'../generated-agent-browser-trust.js'
+import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { createServer } from "node:http";
+import {
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { connect, isIP } from "node:net";
+import path from "node:path";
+import { EXPECTED_AGENT_BROWSER_CLOSURES } from "../generated-agent-browser-trust.js";
 
-export const AGENT_BROWSER_VERSION='0.33.2'
-export type BrowserProfileMode='existing'|'isolated'
-export type BrowserAction={command:'open';url:string}|{command:'snapshot';interactive?:boolean}|{command:'click';ref:string}|{command:'type';ref:string;text:string;sensitive:false}|{command:'select';ref:string;value:string}|{command:'upload';ref:string;files:string[]}|{command:'screenshot';name?:string}|{command:'wait';milliseconds:number}|{command:'close'}
-type ClosureEntry={file:string;type:'file';bytes:number;sha256:string}|{file:string;type:'symlink';target:string}
-type ClosureManifest={version:1;agentBrowserVersion:string;playwrightVersion:string;platform:string;arch:string;browserExecutable:string;entries:ClosureEntry[];closureSha256:string}
-const DOMAIN=/^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
-export function domainAllowed(host:string,domains:string[]){host=host.toLowerCase();return domains.some((rule)=>{rule=rule.toLowerCase();return rule.startsWith('*.')?(host===rule.slice(2)||host.endsWith(`.${rule.slice(2)}`)):host===rule})}
-export function publicAddress(address:string){if(isIP(address)===4){const parts=address.split('.').map(Number),[a,b]=parts;return!(a===0||a===10||a===100&&b>=64&&b<=127||a===127||a===169&&b===254||a===172&&b>=16&&b<=31||a===192&&b===0||a===192&&b===168||a===198&&[18,19,51].includes(b)||a===203&&b===0||a>=224)}if(isIP(address)===6){const value=address.toLowerCase();return value!=='::'&&value!=='::1'&&!value.startsWith('::ffff:')&&!value.startsWith('64:ff9b:')&&!value.startsWith('fc')&&!value.startsWith('fd')&&!/^fe[89ab]/.test(value)&&!value.startsWith('ff')&&!value.startsWith('2001:db8')&&!value.startsWith('2001:2')&&!value.startsWith('2001:10')&&!value.startsWith('2001:0')}return false}
-export async function resolvePublicBrowserDomains(domains:string[]){if(!domains.length||domains.length>30||domains.some((item)=>!DOMAIN.test(item)||isIP(item)!==0||item.toLowerCase()==='localhost'||item.toLowerCase().endsWith('.local')))throw new Error('browser_domain_invalid');const resolved:Array<{domain:string;address:string}>=[];for(const domain of domains){const addresses=await lookup(domain,{all:true,verbatim:true});if(!addresses.length||addresses.some((item)=>!publicAddress(item.address)))throw new Error('browser_private_network_denied');resolved.push({domain:domain.toLowerCase(),address:addresses[0].address})}return resolved}
-export async function createBrowserNetworkGate(domains:string[],resolver=resolvePublicBrowserDomains,connectSocket:typeof connect=connect){await resolver(domains);const sockets=new Set<{destroy():unknown}>(),server=createServer((_request,response)=>{response.writeHead(403);response.end('HTTPS only')});server.on('connect',async(request,client,head)=>{sockets.add(client);client.once('close',()=>sockets.delete(client));try{const separator=request.url?.lastIndexOf(':')??-1,host=(request.url??'').slice(0,separator).toLowerCase(),port=Number((request.url??'').slice(separator+1));if(!domainAllowed(host,domains)||port!==443)throw new Error('browser_proxy_denied');const resolved=await resolver([host]),upstream=connectSocket({host:resolved[0].address,port});sockets.add(upstream);upstream.once('close',()=>sockets.delete(upstream));upstream.once('connect',()=>{client.write('HTTP/1.1 200 Connection Established\r\n\r\n');if(head.length)upstream.write(head);client.pipe(upstream);upstream.pipe(client)});upstream.once('error',()=>client.destroy())}catch{client.write('HTTP/1.1 403 Forbidden\r\n\r\n');client.destroy()}});await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',()=>resolve())});const address=server.address();if(!address||typeof address==='string')throw new Error('browser_proxy_unavailable');return{url:`http://127.0.0.1:${address.port}`,close:async()=>{for(const socket of sockets)socket.destroy();await Promise.race([new Promise<void>((resolve)=>server.close(()=>resolve())),new Promise<void>((resolve)=>setTimeout(resolve,1_000))])}}}
-export function browserArguments(input:{action:BrowserAction;mode:BrowserProfileMode;profileName?:string;session:string;allowedDomains:string[];proxyUrl:string;browserExecutable:string;screenshotDir?:string;workspaceRoot?:string;uploadAuthorized?:boolean}){if(!/^[-_A-Za-z0-9]{1,80}$/.test(input.session)||!input.allowedDomains.length||input.allowedDomains.length>30||input.allowedDomains.some((item)=>!DOMAIN.test(item))||!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(input.proxyUrl))throw new Error('browser_policy_invalid');if(input.mode!=='isolated')throw new Error('browser_existing_profile_unavailable');const common=['--session',input.session,'--executable-path',input.browserExecutable,'--content-boundaries','--max-output','65536','--allowed-domains',input.allowedDomains.join(','),'--proxy',input.proxyUrl,'--headed','--json'],action=input.action,ref=(value:string)=>{if(!/^@e\d{1,6}$/.test(value))throw new Error('browser_ref_invalid');return value},safeText=(value:string,max=4096)=>{if(typeof value!=='string'||!value||value.length>max||/[\0\r\n]/.test(value)||/(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie)\s*[:=]/i.test(value))throw new Error('browser_text_invalid');return value};switch(action.command){case'open':{let url:URL;try{url=new URL(action.url)}catch{throw new Error('browser_url_invalid')}if(url.protocol!=='https:'||url.username||url.password||!domainAllowed(url.hostname,input.allowedDomains))throw new Error('browser_url_denied');return[...common,'open',url.toString()]}case'snapshot':return[...common,'snapshot',...(action.interactive?['-i']:[])];case'click':return[...common,'click',ref(action.ref)];case'type':if(action.sensitive!==false)throw new Error('browser_secure_input_unavailable');return[...common,'type',ref(action.ref),safeText(action.text)];case'select':return[...common,'select',ref(action.ref),safeText(action.value,500)];case'upload':{if(!input.uploadAuthorized||!input.workspaceRoot||!action.files.length||action.files.length>5)throw new Error('browser_upload_requires_user');const root=realpathSync(input.workspaceRoot),files=action.files.map((file)=>{const resolved=realpathSync(path.resolve(root,file)),relative=path.relative(root,resolved),details=statSync(resolved),name=path.basename(resolved);if(relative.startsWith('..')||path.isAbsolute(relative)||!details.isFile()||details.size>25*1024*1024||/(?:^|\.)(?:env|pem|key|p12|pfx|sqlite|db)$/i.test(name)||!/[.](?:txt|md|pdf|docx|png|jpe?g)$/i.test(name))throw new Error('browser_upload_invalid');return resolved});return[...common,'upload',ref(action.ref),...files]}case'screenshot':{if(!input.screenshotDir)throw new Error('browser_screenshot_invalid');const name=action.name??`capture-${Date.now()}.png`;if(!/^[A-Za-z0-9_-]{1,80}\.png$/.test(name))throw new Error('browser_screenshot_invalid');return[...common,'screenshot',path.join(input.screenshotDir,name)]}case'wait':if(!Number.isSafeInteger(action.milliseconds)||action.milliseconds<0||action.milliseconds>30_000)throw new Error('browser_wait_invalid');return[...common,'wait',String(action.milliseconds)];case'close':return[...common,'close'];default:throw new Error('browser_action_invalid')}}
-export function browserClosureEntryNames(root:string){const names=new Set<string>();function walk(directory:string){for(const item of readdirSync(directory,{withFileTypes:true})){const target=path.join(directory,item.name),relative=path.relative(root,target);if(relative==='manifest.json')continue;const details=lstatSync(target);if(details.isSymbolicLink()||details.isFile())names.add(relative);else if(details.isDirectory())walk(target);else throw new Error('browser_integrity_failed')}}walk(root);return names}
-export function verifyBrowserClosure(root:string){const canonical=realpathSync(root),manifest=JSON.parse(readFileSync(path.join(canonical,'manifest.json'),'utf8'))as ClosureManifest,expected=EXPECTED_AGENT_BROWSER_CLOSURES[`${manifest.platform}-${manifest.arch}`];if(manifest.version!==1||manifest.agentBrowserVersion!==AGENT_BROWSER_VERSION||manifest.platform!==process.platform||manifest.arch!==process.arch||!expected||manifest.closureSha256!==expected.closureSha256||manifest.browserExecutable!==expected.browserExecutable||!Array.isArray(manifest.entries)||manifest.entries.length<2)throw new Error('browser_manifest_invalid');const closure=createHash('sha256'),entryNames=new Set<string>();for(const entry of manifest.entries){if(path.isAbsolute(entry.file)||entry.file.split(/[\\/]/).includes('..')||entryNames.has(entry.file))throw new Error('browser_integrity_failed');const target=path.join(canonical,entry.file),details=lstatSync(target);if(entry.type==='symlink'){if(!details.isSymbolicLink()||readlinkSync(target)!==entry.target){throw new Error('browser_integrity_failed')}const resolved=realpathSync(target),relative=path.relative(canonical,resolved);if(relative.startsWith('..')||path.isAbsolute(relative))throw new Error('browser_integrity_failed')}else{const resolved=realpathSync(target),relative=path.relative(canonical,resolved);if(details.isSymbolicLink()||relative.startsWith('..')||path.isAbsolute(relative)||relative!==entry.file||details.size!==entry.bytes||createHash('sha256').update(readFileSync(target)).digest('hex')!==entry.sha256)throw new Error('browser_integrity_failed')}entryNames.add(entry.file)}const actualEntries=browserClosureEntryNames(canonical);if(actualEntries.size!==entryNames.size||[...actualEntries].some((entry)=>!entryNames.has(entry)))throw new Error('browser_integrity_failed');closure.update(JSON.stringify(manifest.entries));if(closure.digest('hex')!==manifest.closureSha256)throw new Error('browser_integrity_failed');const agentRelative=process.platform==='win32'?'agent-browser.exe':'agent-browser';if(!entryNames.has(agentRelative)||!entryNames.has(manifest.browserExecutable))throw new Error('browser_integrity_failed');const agent=realpathSync(path.join(canonical,agentRelative)),browser=realpathSync(path.join(canonical,manifest.browserExecutable));statSync(agent);statSync(browser);return{agentBrowserExecutable:agent,browserExecutable:browser,manifest}}
+export const AGENT_BROWSER_VERSION = "0.33.2";
+export type BrowserProfileMode = "existing" | "isolated";
+export type BrowserAction =
+  | { command: "open"; url: string }
+  | { command: "snapshot"; interactive?: boolean }
+  | { command: "click"; ref: string }
+  | { command: "type"; ref: string; text: string; sensitive: false }
+  | { command: "select"; ref: string; value: string }
+  | { command: "upload"; ref: string; files: string[] }
+  | { command: "screenshot"; name?: string }
+  | { command: "wait"; milliseconds: number }
+  | { command: "close" };
+type ClosureEntry =
+  | { file: string; type: "file"; bytes: number; sha256: string }
+  | { file: string; type: "symlink"; target: string };
+type ClosureManifest = {
+  version: 1;
+  agentBrowserVersion: string;
+  playwrightVersion: string;
+  platform: string;
+  arch: string;
+  browserExecutable: string;
+  networkLockdownScript?: string;
+  entries: ClosureEntry[];
+  closureSha256: string;
+};
+const DOMAIN =
+  /^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+export function domainAllowed(host: string, domains: string[]) {
+  host = host.toLowerCase();
+  return domains.some((rule) => {
+    rule = rule.toLowerCase();
+    return rule.startsWith("*.")
+      ? host === rule.slice(2) || host.endsWith(`.${rule.slice(2)}`)
+      : host === rule;
+  });
+}
+export function publicAddress(address: string) {
+  if (isIP(address) === 4) {
+    const parts = address.split(".").map(Number),
+      [a, b] = parts;
+    return !(
+      a === 0 ||
+      a === 10 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && [18, 19, 51].includes(b)) ||
+      (a === 203 && b === 0) ||
+      a >= 224
+    );
+  }
+  if (isIP(address) === 6) {
+    const value = address.toLowerCase();
+    return (
+      value !== "::" &&
+      value !== "::1" &&
+      !value.startsWith("::ffff:") &&
+      !value.startsWith("64:ff9b:") &&
+      !value.startsWith("fc") &&
+      !value.startsWith("fd") &&
+      !/^fe[89ab]/.test(value) &&
+      !value.startsWith("ff") &&
+      !value.startsWith("2001:db8") &&
+      !value.startsWith("2001:2") &&
+      !value.startsWith("2001:10") &&
+      !value.startsWith("2001:0")
+    );
+  }
+  return false;
+}
+export async function resolvePublicBrowserDomains(domains: string[]) {
+  if (
+    !domains.length ||
+    domains.length > 30 ||
+    domains.some(
+      (item) =>
+        !DOMAIN.test(item) ||
+        isIP(item) !== 0 ||
+        item.toLowerCase() === "localhost" ||
+        item.toLowerCase().endsWith(".local"),
+    )
+  )
+    throw new Error("browser_domain_invalid");
+  const resolved: Array<{ domain: string; address: string }> = [];
+  for (const domain of domains) {
+    const addresses = await lookup(domain, { all: true, verbatim: true });
+    if (
+      !addresses.length ||
+      addresses.some((item) => !publicAddress(item.address))
+    )
+      throw new Error("browser_private_network_denied");
+    resolved.push({
+      domain: domain.toLowerCase(),
+      address: addresses[0].address,
+    });
+  }
+  return resolved;
+}
+export async function createBrowserNetworkGate(
+  domains: string[],
+  resolver = resolvePublicBrowserDomains,
+  connectSocket: typeof connect = connect,
+) {
+  await resolver(domains);
+  const sockets = new Set<{ destroy(): unknown }>(),
+    server = createServer((_request, response) => {
+      response.writeHead(403);
+      response.end("HTTPS only");
+    });
+  server.on("connect", async (request, client, head) => {
+    sockets.add(client);
+    client.once("close", () => sockets.delete(client));
+    try {
+      const separator = request.url?.lastIndexOf(":") ?? -1,
+        host = (request.url ?? "").slice(0, separator).toLowerCase(),
+        port = Number((request.url ?? "").slice(separator + 1));
+      if (!domainAllowed(host, domains) || port !== 443)
+        throw new Error("browser_proxy_denied");
+      const resolved = await resolver([host]),
+        upstream = connectSocket({ host: resolved[0].address, port });
+      sockets.add(upstream);
+      upstream.once("close", () => sockets.delete(upstream));
+      upstream.once("connect", () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) upstream.write(head);
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+      upstream.once("error", () => client.destroy());
+    } catch {
+      client.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      client.destroy();
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("browser_proxy_unavailable");
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await Promise.race([
+        new Promise<void>((resolve) => server.close(() => resolve())),
+        new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+    },
+  };
+}
+export function browserArguments(input: {
+  action: BrowserAction;
+  mode: BrowserProfileMode;
+  profileName?: string;
+  session: string;
+  allowedDomains: string[];
+  proxyUrl: string;
+  browserExecutable: string;
+  networkLockdownScript?: string;
+  screenshotDir?: string;
+  workspaceRoot?: string;
+  uploadAuthorized?: boolean;
+}) {
+  if (
+    !/^[-_A-Za-z0-9]{1,80}$/.test(input.session) ||
+    !input.allowedDomains.length ||
+    input.allowedDomains.length > 30 ||
+    input.allowedDomains.some((item) => !DOMAIN.test(item)) ||
+    !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(input.proxyUrl)
+  )
+    throw new Error("browser_policy_invalid");
+  if (input.mode === "existing" && (!input.profileName || !path.isAbsolute(input.profileName) || !input.networkLockdownScript || !path.isAbsolute(input.networkLockdownScript)))
+    throw new Error("browser_profile_snapshot_unavailable");
+  const common = [
+      "--session",
+      input.session,
+      "--executable-path",
+      input.browserExecutable,
+      "--content-boundaries",
+      "--max-output",
+      "65536",
+      "--proxy",
+      input.proxyUrl,
+      "--headed",
+      "--json",
+      ...(input.mode === "isolated" ? ["--allowed-domains", input.allowedDomains.join(",")] : ["--profile", input.profileName!, "--init-script", input.networkLockdownScript!]),
+    ],
+    action = input.action,
+    ref = (value: string) => {
+      if (!/^@e\d{1,6}$/.test(value)) throw new Error("browser_ref_invalid");
+      return value;
+    },
+    safeText = (value: string, max = 4096) => {
+      if (
+        typeof value !== "string" ||
+        !value ||
+        value.length > max ||
+        /[\0\r\n]/.test(value) ||
+        /(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie)\s*[:=]/i.test(
+          value,
+        )
+      )
+        throw new Error("browser_text_invalid");
+      return value;
+    };
+  switch (action.command) {
+    case "open": {
+      let url: URL;
+      try {
+        url = new URL(action.url);
+      } catch {
+        throw new Error("browser_url_invalid");
+      }
+      if (
+        url.protocol !== "https:" ||
+        url.username ||
+        url.password ||
+        !domainAllowed(url.hostname, input.allowedDomains)
+      )
+        throw new Error("browser_url_denied");
+      return [...common, "open", url.toString()];
+    }
+    case "snapshot":
+      return [...common, "snapshot", ...(action.interactive ? ["-i"] : [])];
+    case "click":
+      return [...common, "click", ref(action.ref)];
+    case "type":
+      if (action.sensitive !== false)
+        throw new Error("browser_secure_input_unavailable");
+      return [...common, "type", ref(action.ref), safeText(action.text)];
+    case "select":
+      return [
+        ...common,
+        "select",
+        ref(action.ref),
+        safeText(action.value, 500),
+      ];
+    case "upload": {
+      if (
+        !input.uploadAuthorized ||
+        !input.workspaceRoot ||
+        !action.files.length ||
+        action.files.length > 5
+      )
+        throw new Error("browser_upload_requires_user");
+      const root = realpathSync(input.workspaceRoot),
+        files = action.files.map((file) => {
+          const resolved = realpathSync(path.resolve(root, file)),
+            relative = path.relative(root, resolved),
+            details = statSync(resolved),
+            name = path.basename(resolved);
+          if (
+            relative.startsWith("..") ||
+            path.isAbsolute(relative) ||
+            !details.isFile() ||
+            details.size > 25 * 1024 * 1024 ||
+            /(?:^|\.)(?:env|pem|key|p12|pfx|sqlite|db)$/i.test(name) ||
+            !/[.](?:txt|md|pdf|docx|png|jpe?g)$/i.test(name)
+          )
+            throw new Error("browser_upload_invalid");
+          return resolved;
+        });
+      return [...common, "upload", ref(action.ref), ...files];
+    }
+    case "screenshot": {
+      if (!input.screenshotDir) throw new Error("browser_screenshot_invalid");
+      const name = action.name ?? `capture-${Date.now()}.png`;
+      if (!/^[A-Za-z0-9_-]{1,80}\.png$/.test(name))
+        throw new Error("browser_screenshot_invalid");
+      return [...common, "screenshot", path.join(input.screenshotDir, name)];
+    }
+    case "wait":
+      if (
+        !Number.isSafeInteger(action.milliseconds) ||
+        action.milliseconds < 0 ||
+        action.milliseconds > 30_000
+      )
+        throw new Error("browser_wait_invalid");
+      return [...common, "wait", String(action.milliseconds)];
+    case "close":
+      return [...common, "close"];
+    default:
+      throw new Error("browser_action_invalid");
+  }
+}
+export function browserClosureEntryNames(root: string) {
+  const names = new Set<string>();
+  function walk(directory: string) {
+    for (const item of readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, item.name),
+        relative = path.relative(root, target);
+      if (relative === "manifest.json") continue;
+      const details = lstatSync(target);
+      if (details.isSymbolicLink() || details.isFile()) names.add(relative);
+      else if (details.isDirectory()) walk(target);
+      else throw new Error("browser_integrity_failed");
+    }
+  }
+  walk(root);
+  return names;
+}
+export function verifyBrowserClosure(root: string) {
+  const canonical = realpathSync(root),
+    manifest = JSON.parse(
+      readFileSync(path.join(canonical, "manifest.json"), "utf8"),
+    ) as ClosureManifest,
+    expected =
+      EXPECTED_AGENT_BROWSER_CLOSURES[`${manifest.platform}-${manifest.arch}`];
+  if (
+    manifest.version !== 1 ||
+    manifest.agentBrowserVersion !== AGENT_BROWSER_VERSION ||
+    manifest.platform !== process.platform ||
+    manifest.arch !== process.arch ||
+    !expected ||
+    manifest.closureSha256 !== expected.closureSha256 ||
+    manifest.browserExecutable !== expected.browserExecutable ||
+    !Array.isArray(manifest.entries) ||
+    manifest.entries.length < 2
+  )
+    throw new Error("browser_manifest_invalid");
+  const closure = createHash("sha256"),
+    entryNames = new Set<string>();
+  for (const entry of manifest.entries) {
+    if (
+      path.isAbsolute(entry.file) ||
+      entry.file.split(/[\\/]/).includes("..") ||
+      entryNames.has(entry.file)
+    )
+      throw new Error("browser_integrity_failed");
+    const target = path.join(canonical, entry.file),
+      details = lstatSync(target);
+    if (entry.type === "symlink") {
+      if (!details.isSymbolicLink() || readlinkSync(target) !== entry.target) {
+        throw new Error("browser_integrity_failed");
+      }
+      const resolved = realpathSync(target),
+        relative = path.relative(canonical, resolved);
+      if (relative.startsWith("..") || path.isAbsolute(relative))
+        throw new Error("browser_integrity_failed");
+    } else {
+      const resolved = realpathSync(target),
+        relative = path.relative(canonical, resolved);
+      if (
+        details.isSymbolicLink() ||
+        relative.startsWith("..") ||
+        path.isAbsolute(relative) ||
+        relative !== entry.file ||
+        details.size !== entry.bytes ||
+        createHash("sha256").update(readFileSync(target)).digest("hex") !==
+          entry.sha256
+      )
+        throw new Error("browser_integrity_failed");
+    }
+    entryNames.add(entry.file);
+  }
+  const actualEntries = browserClosureEntryNames(canonical);
+  if (
+    actualEntries.size !== entryNames.size ||
+    [...actualEntries].some((entry) => !entryNames.has(entry))
+  )
+    throw new Error("browser_integrity_failed");
+  closure.update(JSON.stringify(manifest.entries));
+  if (closure.digest("hex") !== manifest.closureSha256)
+    throw new Error("browser_integrity_failed");
+  const agentRelative =
+    process.platform === "win32" ? "agent-browser.exe" : "agent-browser";
+  if (
+    !entryNames.has(agentRelative) ||
+    !entryNames.has(manifest.browserExecutable)
+  )
+    throw new Error("browser_integrity_failed");
+  const agent = realpathSync(path.join(canonical, agentRelative)),
+    browser = realpathSync(path.join(canonical, manifest.browserExecutable));
+  statSync(agent);
+  statSync(browser);
+  return {
+    agentBrowserExecutable: agent,
+    browserExecutable: browser,
+    manifest,
+  };
+}

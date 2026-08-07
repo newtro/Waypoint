@@ -1,7 +1,42 @@
-import{readFileSync}from'node:fs'
-import{describe,expect,it}from'vitest'
-describe('zero-friction voice product closure',()=>{
- it('packages complete Fast Local TTS and STT assets for both macOS and Windows',()=>{const config=readFileSync(new URL('../../electron-builder.yml',import.meta.url),'utf8'),top=config.indexOf('extraResources:'),mac=config.indexOf('mac:'),main=readFileSync(new URL('../main.ts',import.meta.url),'utf8'),lock=readFileSync(new URL('../../package-lock.json',import.meta.url),'utf8');expect(top).toBeGreaterThan(0);expect(top).toBeLessThan(mac);expect(config).toContain('vendor/voice/fast-local-staging');expect(main).toContain('FastLocalTranscriptionProcessAdapter');expect(main).toContain("path.join(fastAssetsRoot,'whisper-tiny.en')");expect(lock).toContain('sherpa-onnx-win-x64')})
- it('stops stale renderer playback and emits terminal cancellation on replacement/global stop',()=>{const main=readFileSync(new URL('../main.ts',import.meta.url),'utf8');expect(main).toContain("event.sender.send('waypoint:voice-audio-stop',{workspaceId:previous.workspaceId");expect(main).toContain("owner.notify('canceled')")})
- it('keeps engine configuration in Settings and exposes truthful managed-pack state',()=>{const ui=readFileSync(new URL('../../src/main.tsx',import.meta.url),'utf8');expect(ui).toContain('Experimental voice pack installation progress');expect(ui).toContain('Install voice pack · unavailable until manifest approval');expect(ui).toContain('Fixture diagnostics');expect(ui.match(/className={`voice-control/g)).toHaveLength(1)})
-})
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+describe("zero-friction voice product closure", () => {
+  it("packages complete Fast Local TTS and STT assets for both macOS and Windows", () => {
+    const config = readFileSync(
+        new URL("../../electron-builder.yml", import.meta.url),
+        "utf8",
+      ),
+      top = config.indexOf("extraResources:"),
+      mac = config.indexOf("mac:"),
+      main = readFileSync(new URL("../main.ts", import.meta.url), "utf8").replace(/\s+/g,'').replaceAll('"',"'"),
+      lock = readFileSync(
+        new URL("../../package-lock.json", import.meta.url),
+        "utf8",
+      );
+    expect(top).toBeGreaterThan(0);
+    expect(top).toBeLessThan(mac);
+    expect(config).toContain("vendor/voice/fast-local-staging");
+    expect(main).toContain("FastLocalTranscriptionProcessAdapter");
+    expect(main).toContain("path.join(fastAssetsRoot,'whisper-tiny.en')");
+    expect(lock).toContain("sherpa-onnx-win-x64");
+  });
+  it("stops stale renderer playback and emits terminal cancellation on replacement/global stop", () => {
+    const main = readFileSync(new URL("../main.ts", import.meta.url), "utf8").replace(/\s+/g,'').replaceAll('"',"'");
+    expect(main).toContain(
+      "event.sender.send('waypoint:voice-audio-stop',{workspaceId:previous.workspaceId",
+    );
+    expect(main).toContain("owner.notify('canceled')");
+  });
+  it("keeps engine configuration in Settings and exposes truthful managed-pack state", () => {
+    const ui = readFileSync(
+      new URL("../../src/main.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(ui).toContain("Experimental voice pack installation progress");
+    expect(ui.replace(/\s+/g, " ")).toContain(
+      "Install voice pack · unavailable until manifest approval",
+    );
+    expect(ui).toContain("Fixture diagnostics");
+    expect(ui.match(/className={`voice-control/g)).toHaveLength(1);
+  });
+});

@@ -372,6 +372,16 @@ declare global {
       removeWebSearchKey():Promise<{keyConfigured:boolean}>;
       updateWebTools(workspaceId:string,value:{webFetchEnabled:boolean;webSearchEnabled:boolean}):Promise<{webFetchEnabled:boolean;webSearchEnabled:boolean}>;
       toolGatewaySettings(workspaceId:string):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string;browserAllowedDomains:string[];webFetchEnabled:boolean;webSearchEnabled:boolean;updatedAt:string}>;
+      browserDiscovery():Promise<Array<{id:'brave'|'chrome'|'edge'|'firefox';label:string;family:'chromium'|'firefox';installed:boolean;selectable:boolean;profiles:Array<{id:string;label:string}>;reason:string}>>;
+      importBrowserProfile(workspaceId:string,browserId:string,profileId:string):Promise<{settings:Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>;profile:{browserId:string;profileId:string;bytes:number;files:number;warning:string}}>;
+      removeBrowserProfile(workspaceId:string):Promise<{removed:true;settings:Awaited<ReturnType<Window['waypoint']['toolGatewaySettings']>>}>;
+      inAppBrowserStatus(workspaceId:string):Promise<{workspaceId:string;url:string;title:string;loading:boolean;error?:string;canGoBack:boolean;canGoForward:boolean;profile:'Waypoint isolated';open:boolean}>;
+      openInAppBrowser(workspaceId:string,url:string,bounds:{x:number;y:number;width:number;height:number}):Promise<Awaited<ReturnType<Window['waypoint']['inAppBrowserStatus']>>>;
+      updateInAppBrowserBounds(workspaceId:string,bounds:{x:number;y:number;width:number;height:number}):Promise<{updated:true}>;
+      navigateInAppBrowser(workspaceId:string,command:'back'|'forward'|'reload'|'stop'):Promise<Awaited<ReturnType<Window['waypoint']['inAppBrowserStatus']>>>;
+      closeInAppBrowser(workspaceId:string):Promise<{closed:true}>;clearInAppBrowser(workspaceId:string):Promise<{cleared:true}>;
+      hideInAppBrowser(workspaceId:string):Promise<{hidden:true}>;
+      onInAppBrowserState(listener:(event:Awaited<ReturnType<Window['waypoint']['inAppBrowserStatus']>>)=>void):()=>void;
       clearToolGatewayBrowserData(workspaceId:string):Promise<{cleared:boolean}>;
       updateToolGatewaySettings(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string;browserAllowedDomains:string[]}):Promise<{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string;browserAllowedDomains:string[];webFetchEnabled:boolean;webSearchEnabled:boolean;updatedAt:string}>;
       crossWorkspaceRollupSettings(workspaceId:string):Promise<{personalWorkspaceId:string;personalWorkspaceName:string;standingEnabled:boolean;updatedAt:string;grants:Array<{sourceWorkspaceId:string;sourceWorkspaceName:string;family:'commitments'|'meetings'|'briefing_status';enabled:boolean;createdAt:string;updatedAt:string}>;availableSources:Array<{id:string;name:string}>}>;
@@ -404,7 +414,7 @@ declare global {
       updateOpenRouterSettings(value:{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}):Promise<{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}>;
       runOpenRouterChat(value:{workspaceId:string;chatId:string;sourceMessageId:string;prompt:string;role:'strategic'|'everyday';attachmentIds:string[]}):Promise<{runId?:string;status?:'running';model?:string;fallbackProvider?:'codex'|'claude';reason?:string}>;
       cancelOpenRouterRun(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
-      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'workspace.search'|'workspace.write_file'|'terminal.run'|'local_cli.run'|'agent_browser.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
+      executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'workspace.search'|'workspace.write_file'|'terminal.run'|'local_cli.run'|'web.search'|'web.fetch'|'agent_browser.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
       cancelTool(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
       onToolProgress(listener:(event:unknown)=>void):()=>void;
     };
