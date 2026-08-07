@@ -303,3 +303,10 @@ Windows-native build/package/launch, filesystem, update-path, and child-process 
 - Replaced the remaining live macOS-only STT path with a packaged, isolated sherpa Whisper tiny.en worker shared by macOS and Windows package definitions. Full gate passed 99 suites / 455 tests, lint/build, dependency audit, native arm64 package, real packaged TTS/STT initialization, sub-one-second synthesis, and diff hygiene.
 - Final independent whole-program review: PASS / SHIP, 0 blocker / 0 high / 0 medium / 2 low. Windows runtime/audio hardware and consented acoustic echo/barge-in remain explicit release validations.
 - Verified 684 ms development and 744 ms packaged first audio, hard worker cancellation, 452 tests, lint/build/package/runtime closure, and zero audit vulnerabilities. Windows and consented acoustic validation remain explicit device gates.
+# Automatic chat titles (2026-08-06)
+
+- Defined a focused gate for non-blocking, privacy-minimized, durable automatic titles with manual override.
+- Built the Claude lightweight → activated/cap-safe OpenRouter nano → deterministic local route and schema 32 lifecycle.
+- Focused 38/38 and full 501/501 tests passed; lint had no errors; type/build/package closure passed.
+- Normal-profile packaged app completed a real Claude `fable` title and updated sidebar/header.
+- Independent review/repair closed privacy minimization, Stop/shutdown lifetime, sync provenance/manual precedence, and observable attempt outcomes. Final verdict: 0 Blocker / 0 High.

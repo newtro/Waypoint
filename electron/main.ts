@@ -25,7 +25,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { WorkspaceStore } from "./core/store.js";
+import { autoTitleMayStart,minimalTitlePrompt, resolveAutomaticTitle } from "./core/auto-chat-title.js";
+import { canonicalExecutionText } from "./core/execution-output.js";
 import { LocalOllamaEmbeddings } from "./core/ollama.js";
 import {
   CHUNKING_POLICIES,
@@ -161,6 +165,23 @@ const openRouterClient = new OpenRouterClient(new FetchOpenRouterTransport()),
     string,
     { workspaceId: string; controller: AbortController }
   >();
+const activeAutoTitles=new Map<string,{workspaceId:string;cancel:()=>void}>(),activeAutoTitleTasks=new Set<Promise<void>>(),execFileAsync=promisify(execFile);
+function startAutomaticChatTitle(workspaceId:string,chatId:string,user:string):void{const task=generateAutomaticChatTitle(workspaceId,chatId,user);activeAutoTitleTasks.add(task);void task.finally(()=>activeAutoTitleTasks.delete(task))}
+
+async function generateAutomaticChatTitle(workspaceId:string,chatId:string,user:string):Promise<void>{
+  if(!autoTitleMayStart(store.toolGatewaySettings(workspaceId).stopped)||activeAutoTitles.has(chatId)||!store.claimAutoTitle(workspaceId,chatId))return;
+  const prompt=minimalTitlePrompt(user),controller=new AbortController();let userCanceled=false;
+  activeAutoTitles.set(chatId,{workspaceId,cancel:()=>{userCanceled=true;controller.abort()}});const deadline=setTimeout(()=>controller.abort(),9_000);
+  try{
+    const claude=await detectCli('claude'),root=store.listWorkspaces().find((item)=>item.id===workspaceId)?.localPath;
+    let claudeLane:(()=>Promise<{text:string;model:string}>)|undefined;
+    if(claude.available&&claude.compatible!==false&&claude.executable&&root)try{const help=await execFileAsync(claude.executable,['--help'],{timeout:2_000,maxBuffer:512_000,encoding:'utf8'});if(/--model[\s\S]{0,240}'fable'/.test(String(help.stdout)))claudeLane=async()=>{const titleWorkbench=new CliWorkbench(),events:Array<Record<string,unknown>>=[],running=await titleWorkbench.start(`title-${chatId}`,{cli:'claude',prompt,workspaceRoot:root,profile:{id:'auto-title-v1',name:'Auto title — no tools',roots:[root],filesystem:'read-only',network:'provider-only',tools:[],maxDurationMs:6_000,maxConcurrency:1,approval:'always',peerEligible:false,secretNames:[]},model:'fable',timeoutMs:6_000,maxOutputBytes:16_384,executable:claude.executable!,version:claude.version},(event)=>events.push(event));controller.signal.addEventListener('abort',()=>running.cancel(),{once:true});const terminal=await running.completion;if(terminal.status!=='completed')throw new Error(`claude_title_${terminal.status}`);return{text:canonicalExecutionText('claude',events,256),model:'fable'}}}catch{/* Installed CLI does not truthfully advertise the lightweight alias. */}
+    let openrouterLane:(()=>Promise<{text:string;model:string}>)|undefined;
+    try{const settings=store.openRouterSettings(),usage=store.providerUsage(),key=providerVault.getKey(),bounded={...settings,perRequestCapMicros:10_000};if(openRouterCapability(bounded,true,usage.summary).available)openrouterLane=async()=>{const model='openai/gpt-4.1-nano',release=openRouterBudget.reserve(bounded,usage.summary);try{const result=await openRouterClient.run({workspaceId,role:'everyday',model,prompt,apiKey:key,signal:controller.signal,requestCapMicros:10_000});store.saveProviderUsage(result.receipt);return{text:result.text,model}}catch(error){const receipt=(error as {receipt?:ProviderUsageReceipt}).receipt;if(receipt)store.saveProviderUsage(receipt);throw error}finally{release()}}}catch{/* Protected key/provider/cap unavailable. */}
+    const result=await resolveAutomaticTitle({user,signal:controller.signal,claude:claudeLane,openrouter:openrouterLane,observe:(lane,outcome)=>store.recordAutoTitleAttempt(workspaceId,chatId,lane,outcome)});
+    if(!userCanceled)store.completeAutoTitle(workspaceId,chatId,result.title,result.lane,result.model,result.reason);
+  }finally{clearTimeout(deadline);store.releaseAutoTitle(workspaceId,chatId);activeAutoTitles.delete(chatId)}
+}
 let voiceRuntime: VoiceRuntimeRegistry,
   voicePacks: VoicePackManager,
   fastVoiceSpeech: FastLocalSpeechProcessAdapter,
@@ -1723,6 +1744,7 @@ function registerIpc(): void {
           );
       }
       if (next.stopped) {
+        for(const active of activeAutoTitles.values())if(active.workspaceId===workspaceId)active.cancel();
         const reflectionRun = activeReflectionRuns.get(workspaceId);
         if (reflectionRun) {
           killedReflectionWorkspaces.add(workspaceId);
@@ -1891,6 +1913,7 @@ function registerIpc(): void {
       store.setActivityCapturePolicy(workspaceId, { ...capture, paused: true });
     if (peerHostRuntime.status().workspaceId === workspaceId)
       await peerHostRuntime.stop();
+    for(const active of activeAutoTitles.values())if(active.workspaceId===workspaceId)active.cancel();
     const workspace = store.deleteWorkspace(workspaceId);
     try {
       syncVault.remove(workspaceId);
@@ -2535,6 +2558,7 @@ function registerIpc(): void {
       objectId = text(value.objectId, "object ID", 64);
     if (!["document", "chat", "memory"].includes(kind))
       throw new Error("Invalid deletable object kind");
+    if(kind==='chat'){const active=activeAutoTitles.get(objectId);if(active?.workspaceId===workspaceId)active.cancel()}
     deleteWithExecutionCancellation(
       store,
       workbench,
@@ -3072,6 +3096,8 @@ function registerIpc(): void {
       text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
     ),
   );
+  handle("waypoint:ensure-chat-title", (_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64);if(!autoTitleMayStart(store.toolGatewaySettings(workspaceId).stopped))return{started:false};const candidate=store.autoTitleCandidate(workspaceId,chatId);if(!candidate)return{started:false};startAutomaticChatTitle(workspaceId,chatId,candidate.user);return{started:true}});
+  handle("waypoint:rename-chat",(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64);store.renameChat(workspaceId,chatId,text(value.title,'chat title',72));const active=activeAutoTitles.get(chatId);if(active&&active.workspaceId===workspaceId)active.cancel();return{ok:true}});
   handle("waypoint:cli-capabilities", async () =>
     Promise.all([detectCli("codex"), detectCli("claude")]),
   );
@@ -4234,6 +4260,7 @@ else {
     event.preventDefault();
     shutdownStarted = true;
     syncAbort.abort();
+    for(const active of activeAutoTitles.values())active.cancel();
     const browserShutdown = Promise.all(
       (store?.listWorkspaces() ?? []).map((workspace) =>
         toolGateway.stopAndCloseBrowser(
@@ -4246,6 +4273,7 @@ else {
       workbench.shutdown(),
       browserShutdown,
       peerHostRuntime?.stop(),
+      Promise.allSettled([...activeAutoTitleTasks]),
     ]).finally(() => {
       store?.close();
       app.exit(0);

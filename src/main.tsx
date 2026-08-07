@@ -22,6 +22,7 @@ import { groupChatHistory, type HistorySort } from "./chat-history";
 import waypointMark from "./assets/waypoint-mark.svg";
 import "./styles.css";
 import "./provider-settings.css";
+import "./auto-chat-title.css";
 import "./chat-header-actions.css";
 import "./voice-mode.css";
 import {
@@ -1280,6 +1281,7 @@ export function App() {
       .then(setAttachments)
       .catch(showError);
   }, [workspace, selectedChatId, chats]);
+  useEffect(()=>{if(!workspace||!selectedChatId)return;const chat=chats.find((item)=>item.id===selectedChatId);if(!chat||chat.titleStatus!=='eligible'||!chat.messages.some((item)=>item.role==='user'&&item.body.trim().length>=3)||!chat.messages.some((item)=>item.role==='assistant'&&item.body.trim().length>=3))return;let disposed=false,timer:number|undefined;void window.waypoint.ensureChatTitle(workspace.id,chat.id).then(({started})=>{if(!started||disposed)return;let attempts=0;timer=window.setInterval(()=>{attempts++;void refresh().catch(showError);if(attempts>=40&&timer)window.clearInterval(timer)},750)}).catch(()=>undefined);return()=>{disposed=true;if(timer)window.clearInterval(timer)}},[workspace,selectedChatId,chats]);
   useEffect(() => {
     const available = capabilities.find(
       (item) => item.available && item.compatible !== false,
@@ -3209,6 +3211,14 @@ export function App() {
                       </small>
                     </button>
                     <button
+                      className="conversation-rename"
+                      aria-label={`Rename ${chat.title}`}
+                      title="Rename conversation"
+                      onClick={()=>{if(!workspace)return;const title=window.prompt('Rename conversation',chat.title);if(title?.trim())void window.waypoint.renameChat(workspace.id,chat.id,title).then(()=>refresh()).catch(showError)}}
+                    >
+                      ✎
+                    </button>
+                    <button
                       className="conversation-delete"
                       aria-label={`Delete ${chat.title}`}
                       onClick={() => void remove("chat", chat.id)}
@@ -3417,6 +3427,7 @@ export function App() {
           </button>
           <div>
             <strong>{selectedChat?.title || "New conversation"}</strong>
+            {selectedChat?.titleStatus==='running'&&<small aria-live="polite">Naming chat…</small>}
             <small>
               {chatCli} ·{" "}
               {chatCli === "openrouter"

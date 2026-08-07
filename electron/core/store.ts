@@ -226,6 +226,8 @@ export class WorkspaceStore {
     runMigrations(this.db,schemaVersion(this.db),[{version:29,apply:(database)=>{const columns=database.prepare('PRAGMA table_info(tool_gateway_settings)').all()as Array<{name:string}>;if(!columns.some((item)=>item.name==='browser_allowed_domains_json'))database.exec("ALTER TABLE tool_gateway_settings ADD COLUMN browser_allowed_domains_json TEXT NOT NULL DEFAULT '[]'")}}]);
     runMigrations(this.db,schemaVersion(this.db),[{version:30,apply:(database)=>{const columns=database.prepare('PRAGMA table_info(tool_gateway_settings)').all()as Array<{name:string}>;if(!columns.some((item)=>item.name==='web_fetch_enabled'))database.exec("ALTER TABLE tool_gateway_settings ADD COLUMN web_fetch_enabled INTEGER NOT NULL DEFAULT 0 CHECK(web_fetch_enabled IN (0,1))");if(!columns.some((item)=>item.name==='web_search_enabled'))database.exec("ALTER TABLE tool_gateway_settings ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAULT 0 CHECK(web_search_enabled IN (0,1))")}}]);
     runMigrations(this.db,schemaVersion(this.db),[{version:31,apply:(database)=>database.exec("CREATE TABLE IF NOT EXISTS cross_workspace_rollup_settings(personal_workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,standing_enabled INTEGER NOT NULL DEFAULT 0 CHECK(standing_enabled IN (0,1)),updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS cross_workspace_rollup_grants(personal_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,source_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,family TEXT NOT NULL CHECK(family IN ('commitments','meetings','briefing_status')),enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(personal_workspace_id,source_workspace_id,family),CHECK(personal_workspace_id<>source_workspace_id))") }]);
+    runMigrations(this.db,schemaVersion(this.db),[{version:32,apply:(database)=>{const columns=database.prepare('PRAGMA table_info(chats)').all()as Array<{name:string}>;if(!columns.some((item)=>item.name==='title_origin'))database.exec("ALTER TABLE chats ADD COLUMN title_origin TEXT NOT NULL DEFAULT 'manual' CHECK(title_origin IN ('placeholder','automatic','manual'))");if(!columns.some((item)=>item.name==='title_status'))database.exec("ALTER TABLE chats ADD COLUMN title_status TEXT NOT NULL DEFAULT 'complete' CHECK(title_status IN ('eligible','running','complete'))");database.exec("UPDATE chats SET title_origin='placeholder',title_status='eligible' WHERE title='New chat'")}}]);
+    this.db.prepare("UPDATE chats SET title_status='eligible' WHERE title_origin='placeholder' AND title_status='running'").run();
     this.db.exec("CREATE TRIGGER IF NOT EXISTS reflection_run_queued_on_insert AFTER INSERT ON reflection_runs BEGIN UPDATE reflection_runs SET status='queued' WHERE id=NEW.id; END;CREATE TRIGGER IF NOT EXISTS reflection_run_stale_with_proposal AFTER UPDATE OF status ON reflection_proposals WHEN NEW.status='stale' BEGIN UPDATE reflection_runs SET status='stale',updated_at=datetime('now') WHERE id=NEW.run_id; END");
     this.db.prepare("UPDATE reflection_runs SET status='failed',omissions_json=?,updated_at=? WHERE status IN ('queued','reviewing')").run(JSON.stringify(['Interrupted by application restart before a terminal CLI result.']),now());
     for (const workspace of this.db.prepare('SELECT id,local_path localPath FROM workspaces').all() as Array<{ id: string; localPath: string }>) {
@@ -492,7 +494,8 @@ export class WorkspaceStore {
     if(kind==='rollup_policy'){if(objectId!==workspaceId||!Array.isArray(payload.grants)||payload.grants.length>150||typeof payload.standingEnabled!=='boolean'||!canonicalIso(updatedAt))throw new Error('Inbound roll-up policy is invalid');const grants=(payload.grants as unknown[]).map((value)=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Inbound roll-up grant is invalid');const item=value as Record<string,unknown>,sourceWorkspaceId=String(item.sourceWorkspaceId),family=String(item.family);if(sourceWorkspaceId===workspaceId||!['commitments','meetings','briefing_status'].includes(family))throw new Error('Inbound roll-up grant is invalid');return{sourceWorkspaceId,family:family as 'commitments'|'meetings'|'briefing_status',enabled:item.enabled===true}});if(grants.some((item)=>!this.db.prepare('SELECT 1 FROM workspaces WHERE id=?').get(item.sourceWorkspaceId)))throw new Error('Inbound roll-up source is unavailable');this.setCrossWorkspaceRollupSettings(workspaceId,{standingEnabled:payload.standingEnabled,grants},false);return}
     this.assertInboundIdentityAvailable(workspaceId, id);
     if (kind === 'chat') {
-      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at').run(id, workspaceId, String(payload.title), createdAt, updatedAt);
+      const origin=['placeholder','automatic','manual'].includes(String(payload.titleOrigin))?String(payload.titleOrigin):'manual',status=origin==='placeholder'&&payload.titleStatus==='eligible'?'eligible':'complete';
+      this.db.prepare("INSERT INTO chats(id,workspace_id,title,created_at,updated_at,title_origin,title_status) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=CASE WHEN chats.title_origin='manual' AND excluded.title_origin!='manual' THEN chats.title ELSE excluded.title END,updated_at=CASE WHEN chats.title_origin='manual' AND excluded.title_origin!='manual' THEN chats.updated_at ELSE excluded.updated_at END,title_origin=CASE WHEN chats.title_origin='manual' AND excluded.title_origin!='manual' THEN chats.title_origin ELSE excluded.title_origin END,title_status=CASE WHEN chats.title_origin='manual' AND excluded.title_origin!='manual' THEN chats.title_status ELSE excluded.title_status END").run(id, workspaceId, String(payload.title), createdAt, updatedAt,origin,status);
       return;
     }
     if (kind === 'message') {
@@ -774,6 +777,8 @@ export class WorkspaceStore {
     id: string;
     title: string;
     updatedAt: string;
+    titleOrigin: 'placeholder'|'automatic'|'manual';
+    titleStatus: 'eligible'|'running'|'complete';
     messages: Array<{
       id: string;
       role: string;
@@ -781,10 +786,12 @@ export class WorkspaceStore {
       createdAt: string;
     }>;
   }> {
-    const chats = this.db.prepare('SELECT id,title,updated_at updatedAt FROM chats WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as Array<{
+    const chats = this.db.prepare('SELECT id,title,updated_at updatedAt,title_origin titleOrigin,title_status titleStatus FROM chats WHERE workspace_id=? ORDER BY updated_at DESC').all(workspaceId) as Array<{
       id: string;
       title: string;
       updatedAt: string;
+      titleOrigin: 'placeholder'|'automatic'|'manual';
+      titleStatus: 'eligible'|'running'|'complete';
     }>;
     return chats.map((chat) => ({
       ...chat,
@@ -1214,10 +1221,12 @@ export class WorkspaceStore {
     const id = randomUUID(),
       timestamp = now();
     this.transaction(() => {
-      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, title.trim() || 'New chat', timestamp, timestamp);
+      const normalized=title.trim() || 'New chat',placeholder=normalized==='New chat';
+      this.db.prepare('INSERT INTO chats(id,workspace_id,title,created_at,updated_at,title_origin,title_status) VALUES (?,?,?,?,?,?,?)').run(id, workspaceId, normalized, timestamp, timestamp,placeholder?'placeholder':'manual',placeholder?'eligible':'complete');
       this.syncJournal.enqueue(workspaceId, id, 'chat', 'upsert', {
         id,
         title: title.trim() || 'New chat',
+        titleOrigin: placeholder?'placeholder':'manual',titleStatus:placeholder?'eligible':'complete',
         createdAt: timestamp,
         updatedAt: timestamp,
       });
@@ -1226,13 +1235,20 @@ export class WorkspaceStore {
     return id;
   }
 
+  autoTitleCandidate(workspaceId:string,chatId:string):{user:string;assistant:string}|undefined{const chat=this.db.prepare("SELECT title_origin origin,title_status status FROM chats WHERE id=? AND workspace_id=?").get(chatId,workspaceId)as{origin:string;status:string}|undefined;if(!chat||chat.origin!=='placeholder'||chat.status!=='eligible')return;const messages=this.db.prepare("SELECT role,body FROM messages WHERE chat_id=? AND role IN ('user','assistant') ORDER BY created_at,rowid").all(chatId)as Array<{role:string;body:string}>,user=messages.find((item)=>item.role==='user'&&item.body.trim().length>=3),assistant=messages.find((item)=>item.role==='assistant'&&item.body.trim().length>=3);return user&&assistant?{user:user.body,assistant:assistant.body}:undefined}
+  claimAutoTitle(workspaceId:string,chatId:string):boolean{return Boolean(this.db.prepare("UPDATE chats SET title_status='running' WHERE id=? AND workspace_id=? AND title_origin='placeholder' AND title_status='eligible'").run(chatId,workspaceId).changes)}
+  releaseAutoTitle(workspaceId:string,chatId:string):void{this.db.prepare("UPDATE chats SET title_status='eligible' WHERE id=? AND workspace_id=? AND title_origin='placeholder' AND title_status='running'").run(chatId,workspaceId)}
+  completeAutoTitle(workspaceId:string,chatId:string,title:string,lane:'claude'|'openrouter'|'local',model:string,reason:string):boolean{const clean=title.trim().slice(0,72);if(!clean)return false;return this.transaction(()=>{const timestamp=now(),changed=this.db.prepare("UPDATE chats SET title=?,title_origin='automatic',title_status='complete',updated_at=? WHERE id=? AND workspace_id=? AND title_origin='placeholder' AND title_status='running'").run(clean,timestamp,chatId,workspaceId);if(!changed.changes)return false;this.syncJournal.enqueue(workspaceId,chatId,'chat','upsert',{id:chatId,title:clean,titleOrigin:'automatic',titleStatus:'complete',updatedAt:timestamp});this.db.prepare("UPDATE search_fts SET title=? WHERE workspace_id=? AND object_kind='message' AND object_id IN (SELECT id FROM messages WHERE chat_id=?)").run(clean,workspaceId,chatId);this.activity(workspaceId,'ai','chat.title.generated',chatId,'chat',{lane,model,reason});return true})}
+  recordAutoTitleAttempt(workspaceId:string,chatId:string,lane:'claude'|'openrouter'|'local',outcome:'selected'|'failed'|'unavailable'):void{if(this.db.prepare('SELECT 1 FROM chats WHERE id=? AND workspace_id=?').get(chatId,workspaceId))this.activity(workspaceId,'ai','chat.title.attempted',chatId,'chat',{lane,outcome})}
+  renameChat(workspaceId:string,chatId:string,title:string):void{const clean=title.trim().slice(0,72);if(!clean)throw new Error('Chat title is required');const timestamp=now(),changed=this.db.prepare("UPDATE chats SET title=?,title_origin='manual',title_status='complete',updated_at=? WHERE id=? AND workspace_id=?").run(clean,timestamp,chatId,workspaceId);if(!changed.changes)throw new Error('Chat not found in workspace');this.syncJournal.enqueue(workspaceId,chatId,'chat','upsert',{id:chatId,title:clean,titleOrigin:'manual',titleStatus:'complete',updatedAt:timestamp});this.db.prepare("UPDATE search_fts SET title=? WHERE workspace_id=? AND object_kind='message' AND object_id IN (SELECT id FROM messages WHERE chat_id=?)").run(clean,workspaceId,chatId);this.activity(workspaceId,'content','chat.renamed',chatId,'chat',{origin:'manual'})}
+
   captureChat(workspaceId: string, title: string, body: string): string {
     const id = randomUUID(),
       messageId = randomUUID(),
       timestamp = now(),
       normalizedTitle = title.trim() || 'New chat';
     this.transaction(() => {
-      this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspaceId, normalizedTitle, timestamp, timestamp);
+      this.db.prepare("INSERT INTO chats(id,workspace_id,title,created_at,updated_at,title_origin,title_status) VALUES (?,?,?,?,?,'manual','complete')").run(id, workspaceId, normalizedTitle, timestamp, timestamp);
       this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').run(messageId, id, 'user', body, timestamp);
       this.syncJournal.enqueue(workspaceId, id, 'chat', 'upsert', {
         id,
@@ -2155,7 +2171,7 @@ export class WorkspaceStore {
         for (const rowValue of archive.objects.chats ?? []) {
           const row = rowValue as Record<string, unknown>,
             id = idMap.get(String(row.id))!;
-          this.db.prepare('INSERT INTO chats VALUES (?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.created_at), String(row.updated_at));
+          this.db.prepare('INSERT INTO chats(id,workspace_id,title,created_at,updated_at,title_origin,title_status) VALUES (?,?,?,?,?,?,?)').run(id, workspace.id, String(row.title), String(row.created_at), String(row.updated_at),['placeholder','automatic','manual'].includes(String(row.title_origin))?String(row.title_origin):'manual',String(row.title_status)==='eligible'?'eligible':'complete');
           for (const messageValue of archive.objects.messages ?? []) {
             const message = messageValue as Record<string, unknown>;
             if (String(message.chat_id) !== String(row.id)) continue;

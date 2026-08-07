@@ -1,0 +1,20 @@
+.conversation-list .conversation-select {
+  padding-right: 55px;
+}
+
+.conversation-list .conversation-rename {
+  position: absolute;
+  right: 29px;
+  top: 10px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  text-align: center;
+  opacity: 0;
+  color: #858c87;
+}
+
+.conversation-row:hover .conversation-rename,
+.conversation-rename:focus-visible {
+  opacity: 1;
+}

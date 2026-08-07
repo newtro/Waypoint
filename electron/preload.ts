@@ -200,6 +200,8 @@ contextBridge.exposeInMainWorld('waypoint', {
       playbookId,
     }),
   listChats: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-chats', { workspaceId }),
+  ensureChatTitle:(workspaceId:string,chatId:string)=>ipcRenderer.invoke('waypoint:ensure-chat-title',{workspaceId,chatId}),
+  renameChat:(workspaceId:string,chatId:string,title:string)=>ipcRenderer.invoke('waypoint:rename-chat',{workspaceId,chatId,title}),
   cliCapabilities: () => ipcRenderer.invoke('waypoint:cli-capabilities'),
   proposeChatRoute:(workspaceId:string,chatId:string,preferred:'codex'|'claude',securityProfileId:string,attachmentIds:string[]=[],allowFallback=false)=>ipcRenderer.invoke('waypoint:propose-chat-route',{workspaceId,chatId,preferred,securityProfileId,attachmentIds,allowFallback}),
   listSecurityProfiles: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-security-profiles', { workspaceId }),
