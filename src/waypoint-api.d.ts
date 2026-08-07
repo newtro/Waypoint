@@ -10,6 +10,10 @@ declare global {
       platform: string;
       onScreenCaptureRequest(listener:()=>void):()=>void;
       onScreenCaptureCompleted(listener:(value:{status:'completed'|'failed'|'canceled';message:string;captureId?:string})=>void):()=>void;
+      onWebhookEventsImported(listener:(value:{workspaceId:string;imported:number})=>void):()=>void;
+      onAutomationProposalCreated(listener:(value:{workspaceId:string;chatId?:string;proposalId:string})=>void):()=>void;
+      onAutomationRunUpdated(listener:(value:{workspaceId:string;runId:string})=>void):()=>void;
+      onMeetingTranscriptionProgress(listener:(value:{workspaceId:string;meetingId:string;runId:string;phase:'preparing'|'transcribing';completed:number;total?:number})=>void):()=>void;
       onScreenCaptureVisibility(listener:(hidden:boolean)=>void):()=>void;
       screenCaptureReadiness():Promise<{platform:string;available:boolean;permission:string;state:string;reason:string;shortcut:{registered:boolean;shortcut:string;reason:string}}>;
       screenCaptureSettings(workspaceId:string):Promise<{workflow:'guided'|'quick';mode:'region'|'window'|'display';shortcut:string;retentionDays:7|30|90;maxCaptures:number}>;
@@ -114,15 +118,21 @@ declare global {
       dispatchDeviceCommand(workspaceId:string,targetDeviceId:string,instruction:string,idempotencyKey:string):Promise<{id:string}>;
       cancelDeviceCommand(workspaceId:string,jobId:string):Promise<{canceled:boolean}>;
       deleteDeviceCommand(workspaceId:string,jobId:string):Promise<{deleted:true}>;
-      webhookChannels(workspaceId:string):Promise<{channels:Array<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;secretVersion:number;status:'active'|'revoked';createdAt:string;rotatedAt:string;revokedAt?:string}>;killSwitch:boolean}>;
-      createWebhookChannel(workspaceId:string,label:string):Promise<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;secretVersion:number;status:'active';createdAt:string;rotatedAt:string;secret:string}>;
+      webhookChannels(workspaceId:string):Promise<{channels:Array<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;connectorId:'generic'|'github'|'azure_devops'|'stripe'|'resend';authMode:string;secretVersion:number;status:'active'|'revoked';createdAt:string;rotatedAt:string;revokedAt?:string}>;killSwitch:boolean|null;managementState:'current'|'unknown';endpoint:string;transportMode:'hosted-relay'|'desktop-host';reachability:'public-relay'|'local-network';reachable:boolean;reason:string;fingerprintSha256?:string;certificatePem?:string}>;
+      createWebhookChannel(workspaceId:string,label:string,connectorId?:'generic'|'github'|'azure_devops'|'stripe'|'resend'):Promise<{channelId:string;workspaceId:string;recipientDeviceId:string;recipientPublicKey:string;label:string;connectorId:'generic'|'github'|'azure_devops'|'stripe'|'resend';authMode:string;secretVersion:number;status:'active';createdAt:string;rotatedAt:string;secret:string;endpoint:string;transportMode:'hosted-relay'|'desktop-host';certificatePem?:string;fingerprintSha256?:string}>;
       rotateWebhookChannel(workspaceId:string,channelId:string):Promise<{channelId:string;secretVersion:number;secret:string}>;
       revokeWebhookChannel(workspaceId:string,channelId:string):Promise<{channelId:string;status:'revoked'}>;
       deleteWebhookChannel(workspaceId:string,channelId:string):Promise<{deleted:boolean}>;
       setWebhookKill(workspaceId:string,active:boolean):Promise<{active:boolean}>;
-      fetchWebhookEvents(workspaceId:string):Promise<{imported:number}>;
-      listWebhookEvents(workspaceId:string):Promise<Array<{id:string;sourceEventId:string;channelId:string;eventType:string;occurredAt:string;receivedAt:string;payload:Record<string,string|number|boolean|null>;payloadDigest:string;status:'quarantined';createdAt:string;proposedEffects:0}>>;
+      fetchWebhookEvents(workspaceId:string):Promise<{imported:number;rejected:number}>;
+      listWebhookEvents(workspaceId:string):Promise<Array<{id:string;sourceEventId:string;channelId:string;connectorId:'github'|'azure_devops'|'stripe'|'resend'|'generic';eventType:string;occurredAt:string;receivedAt:string;payload:Record<string,string|number|boolean|null>;payloadDigest:string;status:'quarantined';createdAt:string;runCount:number;runStatus?:'queued'|'running'|'completed'|'failed'|'canceled'}>>;
       deleteWebhookEvent(workspaceId:string,eventId:string):Promise<{ok:true}>;
+      webhookConnectors():Promise<Array<{id:'generic'|'github'|'azure_devops'|'stripe'|'resend';label:string;authMode:string;provisioning:'cli'|'api_or_manual'|'manual';publicHttpsRequired:boolean;available:boolean;readiness:string}>>;
+      automationProposals(workspaceId:string,chatId?:string):Promise<Array<{id:string;workspaceId:string;chatId?:string;title:string;definition:{version:1;title:string;trigger:{connectorId:'generic'|'github'|'azure_devops'|'stripe'|'resend';eventType:string;filters:Record<string,string|number|boolean|null>};action:{kind:'ai_prompt';provider:'codex'|'claude';model?:string;securityProfileId:string;instruction:string;maxDurationMs:number};delivery:{channelId?:string;endpoint?:string;reachability:'public_relay'|'local_network'|'not_configured'};provisioning:{mode:'az_devops_invoke'|'gh_cli'|'provider_api'|'manual';organization?:string;project?:string;repository?:string;targetBranch?:string;projectId?:string;repositoryId?:string;repositoryFullName?:string;commandPreview?:string}};proposalDigest:string;status:'proposed'|'approved'|'rejected'|'applied'|'failed'|'stale';createdAt:string;updatedAt:string;question?:{id:string;prompt:string;options:Array<{id:'approve'|'reject';label:string}>;status:'pending'|'answered';answer?:'approve'|'reject';answeredAt?:string};receipt?:{id:string;decision:'approved'|'rejected';proposalDigest:string;decidedAt:string;decisionExternalMutation?:Record<string,unknown>;externalMutation:Record<string,unknown>;provisioningEvents?:Array<{sequence:number;eventType:string;payload:Record<string,unknown>;eventDigest:string;createdAt:string}>}}>>;
+      decideAutomationProposal(workspaceId:string,proposalId:string,proposalDigest:string,decision:'approve'|'reject'):Promise<Awaited<ReturnType<Window['waypoint']['automationProposals']>>[number]>;
+      automationRulesAndRuns(workspaceId:string):Promise<{rules:Array<{id:string;proposalId:string;connectorId:string;channelId:string;eventType:string;filters:Record<string,string|number|boolean|null>;action:Record<string,unknown>;status:'enabled'|'killed';createdAt:string;updatedAt:string}>;runs:Array<{id:string;ruleId:string;eventId:string;status:'queued'|'running'|'completed'|'failed'|'canceled';chatId?:string;executionId?:string;resultSummary?:string;errorCode?:string;createdAt:string;updatedAt:string}>}>;
+      setAutomationRuleEnabled(workspaceId:string,ruleId:string,enabled:boolean):Promise<{ok:true}>;
+      cancelAutomationRun(workspaceId:string,runId:string):Promise<{ok:true}>;
       searchText(workspaceId: string, query: string): Promise<SearchResult[]>;
       searchSemantic(workspaceId: string, query: string): Promise<SearchResult[]>;
       indexDocument(workspaceId: string, objectId: string): Promise<{ ok: true; model: string; modelDigest: string }>;
@@ -149,6 +159,7 @@ declare global {
       saveMeetingMemory(workspaceId: string, meetingId: string): Promise<{ memoryId: string }>;
       deleteMeeting(workspaceId: string, meetingId: string): Promise<{ ok: true }>;
       readMeetingAudio(workspaceId: string, meetingId: string): Promise<{ mediaType: string; audio: Uint8Array<ArrayBuffer> }>;
+      meetingPlaybackUrl(workspaceId:string,meetingId:string):Promise<{url:string;mediaType:string}>;
       exportMeetingAudio(workspaceId: string, meetingId: string): Promise<{ canceled: boolean }>;
       meetingTranscriptionCapability(): Promise<{
         available: boolean;
@@ -157,6 +168,7 @@ declare global {
         reason: string;
       }>;
       startMeetingTranscription(workspaceId:string,meetingId:string):Promise<{runId:string}>;
+      transcribeMeetingRecording(workspaceId:string,meetingId:string,runId:string):Promise<{transcript:string;provider:string}>;
       transcribeMeetingSegment(workspaceId:string,meetingId:string,runId:string,index:number,audio:Uint8Array):Promise<{completedSegments:number}>;
       finishMeetingTranscription(workspaceId:string,meetingId:string,runId:string):Promise<{transcript:string;provider:string}>;
       cancelMeetingTranscription(workspaceId:string,meetingId:string,runId:string):Promise<{canceled:boolean}>;
@@ -439,7 +451,7 @@ declare global {
       setOpenRouterKey(apiKey:string):Promise<{keyConfigured:true}>;
       removeOpenRouterKey():Promise<{keyConfigured:false}>;
       updateOpenRouterSettings(value:{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}):Promise<{enabled:boolean;liveRequestsEnabled:boolean;strategicModel:string;everydayModel:string;fallbackProvider?:'codex'|'claude';monthlyCapMicros:number;ytdCapMicros:number;perRequestCapMicros:number;warningPercent:number}>;
-      runOpenRouterChat(value:{workspaceId:string;chatId:string;sourceMessageId:string;prompt:string;role:'strategic'|'everyday';attachmentIds:string[]}):Promise<{runId?:string;status?:'running';model?:string;fallbackProvider?:'codex'|'claude';reason?:string}>;
+      runOpenRouterChat(value:{workspaceId:string;chatId:string;sourceMessageId:string;prompt:string;role:'strategic'|'everyday';securityProfileId:string;attachmentIds:string[]}):Promise<{runId?:string;status?:'running';model?:string;fallbackProvider?:'codex'|'claude';reason?:string}>;
       cancelOpenRouterRun(workspaceId:string,runId:string):Promise<{canceled:boolean}>;
       executeTool(request:{version:1;workspaceId:string;origin?:'ui';tool:'workspace.list_files'|'workspace.read_file'|'workspace.search'|'workspace.write_file'|'terminal.run'|'local_cli.run'|'web.search'|'web.fetch'|'agent_browser.run'|'waypoint.command';arguments:Record<string,unknown>}):Promise<{runId:string;result?:unknown}>;
       cancelTool(workspaceId:string,runId:string):Promise<{canceled:boolean}>;

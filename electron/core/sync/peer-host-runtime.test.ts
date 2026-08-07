@@ -58,6 +58,8 @@ describe("desktop peer host", () => {
     ).toHaveLength(2);
     const firstPin = ownerVault.load("workspace_peer_host_01")!.transport;
     await owner.stopPeerHost("workspace_peer_host_01");
+    const stoppedChannels=await owner.webhookChannels("workspace_peer_host_01");
+    expect(stoppedChannels).toMatchObject({reachable:false,managementState:'unknown',killSwitch:null,certificatePem:firstPin?.mode==='desktop-host'?firstPin.certificatePem:undefined,fingerprintSha256:started.fingerprintSha256});
     await expect(owner.devices("workspace_peer_host_01")).rejects.toThrow();
     const restarted = await owner.startPeerHost(
       "workspace_peer_host_01",

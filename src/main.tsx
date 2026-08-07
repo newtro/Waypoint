@@ -11,7 +11,6 @@ import type {
   ActivityFamily,
   ActivityTimelineItem,
   AttachmentMetadata,
-  FixturePlaybookView,
   SanitizedSyncStatus,
   WorkspaceSummary,
 } from "../electron/core/types";
@@ -59,7 +58,6 @@ import { withLegacyModel } from "./provider-model-choices";
 import { nextOpenRouterActivation } from "./openrouter-activation";
 import { shouldFollowChat } from "./chat-scroll";
 import { ChatMarkdown } from "./chat-markdown";
-import { meetingWavSegments } from "./meeting-transcription.js";
 import { parseBrowserChatCommand } from "./browser-chat-command";
 import { ScreenCaptureStudio } from "./screen-capture-studio";
 import { confirmModal, promptModal, ModalDialogHost } from "./modal-dialogs";
@@ -102,15 +100,14 @@ type Meeting = Awaited<ReturnType<Window["waypoint"]["listMeetings"]>>[number];
 type TranscriptionCapability = Awaited<
   ReturnType<Window["waypoint"]["meetingTranscriptionCapability"]>
 >;
-type TriggerLab = Awaited<
-  ReturnType<Window["waypoint"]["listLocalTriggerLab"]>
->;
 type WebhookChannels = Awaited<
   ReturnType<Window["waypoint"]["webhookChannels"]>
 >;
 type WebhookEvent = Awaited<
   ReturnType<Window["waypoint"]["listWebhookEvents"]>
 >[number];
+type AutomationProposal = Awaited<ReturnType<Window["waypoint"]["automationProposals"]>>[number];
+type AutomationRuntime = Awaited<ReturnType<Window["waypoint"]["automationRulesAndRuns"]>>;
 type ToolSettings = Awaited<
   ReturnType<Window["waypoint"]["toolGatewaySettings"]>
 >;
@@ -268,16 +265,22 @@ export function App() {
     ),
     [transcriptionCapability, setTranscriptionCapability] =
       useState<TranscriptionCapability>(),
+    [meetingPlayback, setMeetingPlayback] = useState<{
+      meetingId: string;
+      url: string;
+      mediaType: string;
+    }>(),
     [meetingTranscriptionRun, setMeetingTranscriptionRun] = useState<{
       runId: string;
       meetingId: string;
       completed: number;
+      total?: number;
+      phase: "preparing" | "transcribing";
     }>();
-  const [playbooks, setPlaybooks] = useState<FixturePlaybookView[]>([]),
-    [dryRunDigests, setDryRunDigests] = useState<Record<string, string>>({}),
-    [triggerLab, setTriggerLab] = useState<TriggerLab>(),
-    [webhookChannels, setWebhookChannels] = useState<WebhookChannels>(),
-    [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([]);
+  const [webhookChannels, setWebhookChannels] = useState<WebhookChannels>(),
+    [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([]),
+    [automationProposals, setAutomationProposals] = useState<AutomationProposal[]>([]),
+    [automationRuntime,setAutomationRuntime]=useState<AutomationRuntime>({rules:[],runs:[]});
   const [toolSettings, setToolSettings] = useState<ToolSettings>(),
     [toolReceipts, setToolReceipts] = useState<ToolReceipt[]>([]),
     [toolFailures, setToolFailures] = useState<ToolFailure[]>([]),
@@ -643,14 +646,8 @@ export function App() {
   }
   async function openAutomations() {
     if (!workspace) return;
-    const [nextPlaybooks, nextLab, nextSync] = await Promise.all([
-      window.waypoint.listFixturePlaybooks(workspace.id),
-      window.waypoint.listLocalTriggerLab(workspace.id),
-      window.waypoint.desktopSyncStatus(workspace.id),
-    ]);
-    setPlaybooks(nextPlaybooks);
-    setTriggerLab(nextLab);
-    if (nextSync.configured && nextSync.transportMode === "hosted-relay") {
+    const nextSync = await window.waypoint.desktopSyncStatus(workspace.id);
+    if (nextSync.configured) {
       const [channels, events] = await Promise.all([
         window.waypoint.webhookChannels(workspace.id),
         window.waypoint.listWebhookEvents(workspace.id),
@@ -660,95 +657,17 @@ export function App() {
     } else {
       setWebhookChannels(undefined);
       setWebhookEvents([]);
-      if (nextSync.configured)
-        setNotice(
-          "Public inbound webhooks require the optional hosted relay. Direct desktop hosting remains available for peer sync and agent control.",
-        );
     }
+    const [proposals,runtime]=await Promise.all([window.waypoint.automationProposals(workspace.id),window.waypoint.automationRulesAndRuns(workspace.id)]);setAutomationProposals(proposals);setAutomationRuntime(runtime);
     setSidebarOpen(false);
     openViewTab("automations");
   }
-  async function createTriggerFixture() {
-    if (!workspace) return;
-    const eventType = (
-      await promptModal({
-        title: "Local fixture event type",
-        defaultValue: "document.imported",
-        okLabel: "Continue",
-      })
-    )?.trim();
-    if (!eventType) return;
-    const title = (
-      await promptModal({
-        title: "Synthetic fixture title",
-        defaultValue: "Local webhook simulation",
-        okLabel: "Create fixture",
-      })
-    )?.trim();
-    if (!title) return;
-    await window.waypoint.createLocalWebhookFixture(
-      workspace.id,
-      eventType,
-      crypto.randomUUID(),
-      { title, fixture: true },
-    );
-    setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));
-    setNotice(
-      "Synthetic webhook event quarantined locally. A suggested rule is waiting for review; no listener or action was enabled.",
-    );
-  }
-  async function approveTriggerRule(ruleId: string) {
-    if (!workspace) return;
-    await window.waypoint.approveLocalTriggerRule(workspace.id, ruleId);
-    setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));
-    setNotice(
-      "Rule approved into paused, simulation-only state. It cannot run unattended.",
-    );
-  }
-  async function dryRunTrigger(ruleId: string, simulateFailure = false) {
-    if (!workspace) return;
-    const result = await window.waypoint.dryRunLocalTriggerRule(
-      workspace.id,
-      ruleId,
-      simulateFailure,
-    );
-    setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));
-    setNotice(
-      result.idempotent
-        ? "This exact zero-effect dry run was already recorded."
-        : `${result.status.replace("_", " ")} recorded at attempt ${result.attempt}, with zero proposed effects.`,
-    );
-  }
-  async function toggleTriggerKill() {
-    if (!workspace || !triggerLab) return;
-    await window.waypoint.setLocalTriggerKill(
-      workspace.id,
-      !triggerLab.killSwitch,
-    );
-    setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));
-    setNotice(
-      triggerLab.killSwitch
-        ? "Local trigger evaluation resumed; rules remain paused and simulation-only."
-        : "Workspace trigger kill switch enabled. All evaluations are blocked.",
-    );
-  }
-  async function deleteTriggerEvent(eventId: string) {
-    if (
-      !workspace ||
-      !(await confirmModal({
-        title: "Delete fixture event?",
-        message:
-          "Permanently delete this local fixture event, its suggested rule, and all dry-run history?",
-        okLabel: "Permanently delete",
-        danger: true,
-      }))
-    )
-      return;
-    await window.waypoint.deleteLocalTriggerEvent(workspace.id, eventId);
-    setTriggerLab(await window.waypoint.listLocalTriggerLab(workspace.id));
-  }
   async function createWebhookChannel() {
     if (!workspace) return;
+    const connectors=await window.waypoint.webhookConnectors(),connectorId=(await promptModal({title:"Webhook connector",message:"Enter generic, github, or azure_devops. Stripe and Resend require signing-secret import that is not available yet.",defaultValue:"generic",okLabel:"Continue"}))?.trim().toLowerCase() as (typeof connectors)[number]['id']|undefined;
+    if(!connectorId)return;
+    const connector=connectors.find((item)=>item.id===connectorId);
+    if(!connector||connectorId==='stripe'||connectorId==='resend')throw new Error("Choose generic, github, or azure_devops. Stripe and Resend setup is unavailable until provider signing-secret import is implemented.");
     const label = (
       await promptModal({
         title: "Inbound webhook channel name",
@@ -760,20 +679,40 @@ export function App() {
     const result = await window.waypoint.createWebhookChannel(
         workspace.id,
         label,
+        connectorId,
       ),
       configuration = {
-        endpoint: `https://waypoint-relay.johnnycode.ai/v1/hooks/${result.channelId}`,
+        connectorId,
+        endpoint: result.endpoint,
         channelId: result.channelId,
         secretVersion: result.secretVersion,
-        signingSecret: result.secret,
+        authentication: connectorId==='azure_devops'?{type:'basic',username:'waypoint',password:result.secret}:connectorId==='github'?{type:'github-hmac-sha256',secret:result.secret}:connectorId==='generic'?{type:'waypoint-hmac-sha256',signingSecret:result.secret}:{type:result.authMode,temporaryRelaySecret:result.secret,requiresProviderSigningSecretImport:true},
         recipientPublicKey: result.recipientPublicKey,
-        mime: "application/vnd.waypoint.encrypted-event+json",
+        reachability:result.transportMode==='hosted-relay'?'public trusted relay':'local network; desktop host must remain running; cloud providers generally cannot reach or trust this endpoint',
+        ...(result.transportMode==='desktop-host'?{tls:{trust:'self-signed-pinned',certificatePem:result.certificatePem,fingerprintSha256:result.fingerprintSha256}}:{}),
       };
     await navigator.clipboard.writeText(JSON.stringify(configuration, null, 2));
     setWebhookChannels(await window.waypoint.webhookChannels(workspace.id));
-    setNotice(
-      "One-time encrypted sender configuration copied to the clipboard. Store it in the sender’s protected secret storage; Waypoint will not show the signing secret again.",
-    );
+    setNotice("One-time connector configuration copied to the clipboard. Store it in protected provider settings; Waypoint will not show the secret again.");
+  }
+  async function decideAutomationProposal(proposal:AutomationProposal,decision:'approve'|'reject'){
+    if(!workspace)return;
+    const updated=await window.waypoint.decideAutomationProposal(workspace.id,proposal.id,proposal.proposalDigest,decision);
+    setAutomationProposals((items)=>items.map((item)=>item.id===updated.id?updated:item));
+    setAutomationRuntime(await window.waypoint.automationRulesAndRuns(workspace.id));
+    setNotice(decision==='reject'?"Proposal rejected. No external provider change was made.":updated.status==='applied'?"The digest-bound connector configuration was applied and its exact approved rule is enabled. You can stop it at any time in Automations.":updated.status==='failed'?`The approved connector setup could not be applied: ${String(updated.receipt?.externalMutation.summary??'See Automations for the unavailable gate.')}`:"Proposal approved. Provisioning is waiting for a public endpoint or required provider configuration.");
+  }
+  async function setAutomationRuleEnabled(ruleId:string,enabled:boolean){
+    if(!workspace)return;
+    await window.waypoint.setAutomationRuleEnabled(workspace.id,ruleId,enabled);
+    setAutomationRuntime(await window.waypoint.automationRulesAndRuns(workspace.id));
+    setNotice(enabled?"Webhook automation resumed. New matching authenticated events can start the approved AI route.":"Webhook automation stopped. Queued runs were canceled; an already-running AI job must be canceled separately.");
+  }
+  async function cancelAutomationRun(runId:string){
+    if(!workspace)return;
+    await window.waypoint.cancelAutomationRun(workspace.id,runId);
+    setAutomationRuntime(await window.waypoint.automationRulesAndRuns(workspace.id));
+    setNotice("Automation cancellation requested.");
   }
   async function rotateWebhookChannel(channelId: string) {
     if (
@@ -812,7 +751,7 @@ export function App() {
     const result = await window.waypoint.fetchWebhookEvents(workspace.id);
     setWebhookEvents(await window.waypoint.listWebhookEvents(workspace.id));
     setNotice(
-      `${result.imported} signed inbound event${result.imported === 1 ? "" : "s"} fetched into quarantine. No rule, model, or action ran.`,
+      `${result.imported} authenticated inbound event${result.imported === 1 ? "" : "s"} fetched into quarantine.${result.rejected ? ` ${result.rejected} invalid encrypted event${result.rejected === 1 ? " was" : "s were"} rejected and acknowledged so later events can continue.` : ""} Only exact enabled rules were evaluated; unmatched events caused no action.`,
     );
   }
   async function deleteWebhookEvent(eventId: string) {
@@ -820,7 +759,8 @@ export function App() {
       !workspace ||
       !(await confirmModal({
         title: "Delete inbound event?",
-        message: "Permanently delete this quarantined inbound event?",
+        message:
+          "Permanently delete this unmatched quarantined event? Events linked to queued, running, or completed automation runs are retained as audit evidence and cannot be deleted here.",
         okLabel: "Permanently delete",
         danger: true,
       }))
@@ -828,83 +768,6 @@ export function App() {
       return;
     await window.waypoint.deleteWebhookEvent(workspace.id, eventId);
     setWebhookEvents(await window.waypoint.listWebhookEvents(workspace.id));
-  }
-  async function createPlaybook() {
-    if (!workspace) return;
-    const title = (
-      await promptModal({
-        title: "Fixture playbook title",
-        defaultValue: "Morning fixture review",
-        okLabel: "Create playbook",
-      })
-    )?.trim();
-    if (!title) return;
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    await window.waypoint.createFixturePlaybook(
-      workspace.id,
-      title,
-      timezone,
-      9,
-      0,
-    );
-    setPlaybooks(await window.waypoint.listFixturePlaybooks(workspace.id));
-    setNotice(
-      "Paused fixture playbook created. No schedule or external account was enabled.",
-    );
-  }
-  async function dryRunPlaybook(id: string) {
-    if (!workspace) return;
-    const result = await window.waypoint.dryRunFixturePlaybook(
-      workspace.id,
-      id,
-    );
-    setDryRunDigests((current) => ({ ...current, [id]: result.digest }));
-    setPlaybooks(await window.waypoint.listFixturePlaybooks(workspace.id));
-    setNotice(
-      `Dry run reviewed ${result.inputCount} synthetic items, deduplicated to ${result.deduplicatedCount}, with zero proposed effects.`,
-    );
-  }
-  async function runPlaybook(id: string, simulateFailure = false) {
-    if (!workspace || !dryRunDigests[id]) return;
-    const result = await window.waypoint.runFixturePlaybook(
-      workspace.id,
-      id,
-      dryRunDigests[id],
-      simulateFailure,
-    );
-    setPlaybooks(await window.waypoint.listFixturePlaybooks(workspace.id));
-    setNotice(
-      result.idempotent
-        ? "This exact fixture run was already completed."
-        : simulateFailure
-          ? `Synthetic failure recorded as ${result.status.replace("_", " ")}; retry remains manual and bounded.`
-          : "Fixture run completed locally with no external effects.",
-    );
-  }
-  async function killPlaybook(id: string) {
-    if (!workspace) return;
-    await window.waypoint.killFixturePlaybook(workspace.id, id);
-    setDryRunDigests((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
-    setPlaybooks(await window.waypoint.listFixturePlaybooks(workspace.id));
-  }
-  async function deletePlaybook(id: string) {
-    if (
-      !workspace ||
-      !(await confirmModal({
-        title: "Delete fixture playbook?",
-        message:
-          "Permanently delete this fixture playbook and its local run history?",
-        okLabel: "Permanently delete",
-        danger: true,
-      }))
-    )
-      return;
-    await window.waypoint.deleteFixturePlaybook(workspace.id, id);
-    setPlaybooks(await window.waypoint.listFixturePlaybooks(workspace.id));
   }
   async function openMeetings() {
     if (!workspace) return;
@@ -1053,20 +916,15 @@ export function App() {
   }
   async function playMeeting(meetingId: string) {
     if (!workspace) return;
-    const result = await window.waypoint.readMeetingAudio(
-        workspace.id,
-        meetingId,
-      ),
-      url = URL.createObjectURL(
-        new Blob([Uint8Array.from(result.audio).buffer], {
-          type: result.mediaType,
-        }),
-      ),
-      audio = new Audio(url),
-      release = () => URL.revokeObjectURL(url);
-    audio.addEventListener("ended", release, { once: true });
-    audio.addEventListener("error", release, { once: true });
-    await audio.play();
+    if (meetingPlayback?.meetingId === meetingId) {
+      setMeetingPlayback(undefined);
+      return;
+    }
+    const result = await window.waypoint.meetingPlaybackUrl(
+      workspace.id,
+      meetingId,
+    );
+    setMeetingPlayback({ meetingId, ...result });
   }
   async function saveTranscript(meetingId: string, reviewed: boolean) {
     if (!workspace) return;
@@ -1086,45 +944,21 @@ export function App() {
   async function transcribeMeeting(meetingId: string) {
     if (!workspace || meetingTranscriptionRun) return;
     const generation = ++meetingTranscriptionGenerationRef.current,
-      origin = workspace.id,
-      { audio } = await window.waypoint.readMeetingAudio(origin, meetingId),
-      context = new AudioContext();
-    let runId: string | undefined, decoded: AudioBuffer | undefined;
+      origin = workspace.id;
+    let runId: string | undefined;
     try {
-      if (audio.byteLength > 25 * 1024 * 1024)
-        throw new Error(
-          "Automatic local transcription currently supports recordings up to 25 MiB and ten minutes; manual transcript review remains available.",
-        );
-      decoded = await context.decodeAudioData(
-        audio.buffer.slice(
-          audio.byteOffset,
-          audio.byteOffset + audio.byteLength,
-        ),
-      );
       const started = await window.waypoint.startMeetingTranscription(
         origin,
         meetingId,
       );
       runId = started.runId;
-      setMeetingTranscriptionRun({ runId, meetingId, completed: 0 });
-      let index = 0;
-      for (const wav of meetingWavSegments(decoded)) {
-        try {
-          await window.waypoint.transcribeMeetingSegment(
-            origin,
-            meetingId,
-            runId,
-            index,
-            wav,
-          );
-        } finally {
-          wav.fill(0);
-        }
-        index++;
-        if (meetingTranscriptionGenerationRef.current === generation)
-          setMeetingTranscriptionRun({ runId, meetingId, completed: index });
-      }
-      const result = await window.waypoint.finishMeetingTranscription(
+      setMeetingTranscriptionRun({
+        runId,
+        meetingId,
+        completed: 0,
+        phase: "preparing",
+      });
+      const result = await window.waypoint.transcribeMeetingRecording(
         origin,
         meetingId,
         runId,
@@ -1153,13 +987,8 @@ export function App() {
       )
         showError(reason);
     } finally {
-      if (decoded)
-        for (let channel = 0; channel < decoded.numberOfChannels; channel++)
-          decoded.getChannelData(channel).fill(0);
-      await context.close().catch(() => undefined);
       if (meetingTranscriptionGenerationRef.current === generation)
         setMeetingTranscriptionRun(undefined);
-      audio.fill(0);
     }
   }
   async function cancelMeetingTranscription() {
@@ -1389,6 +1218,23 @@ export function App() {
   );
   useEffect(()=>window.waypoint.onScreenCaptureRequest(()=>setScreenCaptureOpen(true)),[])
   useEffect(()=>window.waypoint.onScreenCaptureCompleted((result)=>{if(result.status==='failed')setError(result.message);else if(result.status==='completed')setNotice(result.message)}),[])
+  useEffect(
+    () =>
+      window.waypoint.onMeetingTranscriptionProgress((event) => {
+        if (activeWorkspaceRef.current !== event.workspaceId) return;
+        setMeetingTranscriptionRun((current) =>
+          current?.runId === event.runId && current.meetingId === event.meetingId
+            ? {
+                ...current,
+                phase: event.phase,
+                completed: event.completed,
+                total: event.total,
+              }
+            : current,
+        );
+      }),
+    [],
+  );
   useEffect(()=>{if(!workspace)return;void Promise.all([window.waypoint.screenCaptureSettings(workspace.id),window.waypoint.screenCaptureReadiness()]).then(([settings,readiness])=>{setManualCaptureSettings(settings);setManualCaptureReadiness(readiness)})},[workspace])
   useEffect(() => {
     if (drawer !== "browser" || !workspace) return;
@@ -1450,6 +1296,12 @@ export function App() {
       .then(setAttachments)
       .catch(showError);
   }, [workspace, selectedChatId, chats]);
+  useEffect(()=>{
+    if(!workspace)return;
+    void Promise.all([window.waypoint.automationProposals(workspace.id),window.waypoint.automationRulesAndRuns(workspace.id)]).then(([proposals,runtime])=>{setAutomationProposals(proposals);setAutomationRuntime(runtime)}).catch(showError);
+    const offProposal=window.waypoint.onAutomationProposalCreated((event)=>{if(event.workspaceId===workspace.id)void window.waypoint.automationProposals(workspace.id).then(setAutomationProposals).catch(showError)}),offWebhook=window.waypoint.onWebhookEventsImported((event)=>{if(event.workspaceId===workspace.id)void window.waypoint.listWebhookEvents(workspace.id).then(setWebhookEvents).catch(showError)}),offRun=window.waypoint.onAutomationRunUpdated((event)=>{if(event.workspaceId===workspace.id)void Promise.all([window.waypoint.automationRulesAndRuns(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]).then(([runtime,inbound])=>{setAutomationRuntime(runtime);setWebhookEvents(inbound)}).catch(showError)});
+    return()=>{offProposal();offWebhook();offRun()};
+  },[workspace]);
   const autoTitleRefreshRef = useRef(refresh);
   autoTitleRefreshRef.current = refresh;
   const autoTitleChat = chats.find((item) => item.id === selectedChatId),
@@ -2546,6 +2398,7 @@ export function App() {
           sourceMessageId: messageId,
           prompt,
           role: "everyday",
+          securityProfileId:profile,
           attachmentIds,
         });
         let exactRunId: string, runKind: "hosted" | "local";
@@ -3375,6 +3228,7 @@ export function App() {
       runs.filter((run) => run.chatId === selectedChatId) as ExecutionRunView[],
     ),
     queued = attachments.filter((item) => item.ownerId === selectedChatId),
+    chatAutomationProposals=automationProposals.filter((item)=>item.chatId===selectedChatId&&item.question?.status==='pending'),
     historyGroups = groupChatHistory(chats, historyQuery, historySort),
     selectedComposerModel =
       chatCli === "openrouter"
@@ -3971,6 +3825,10 @@ export function App() {
               ))}
             </section>
             <div className="composer-dock">
+              {chatAutomationProposals.map((proposal)=><section className="automation-confirmation" role="group" aria-labelledby={`automation-question-${proposal.id}`} key={proposal.id}>
+                <div><small>{proposal.definition.trigger.connectorId.replaceAll('_',' ')} · explicit approval required</small><strong id={`automation-question-${proposal.id}`}>{proposal.title}</strong><p>{proposal.question?.prompt}</p><dl><div><dt>Trigger</dt><dd>{proposal.definition.trigger.eventType} · filters {Object.keys(proposal.definition.trigger.filters).length?JSON.stringify(proposal.definition.trigger.filters):'none'}</dd></div><div><dt>AI route</dt><dd>{proposal.definition.action.provider}{proposal.definition.action.model?` · ${proposal.definition.action.model}`:' · default model'} · profile {proposal.definition.action.securityProfileId} · {Math.round(proposal.definition.action.maxDurationMs/1000)}s</dd></div><div><dt>Instruction</dt><dd>{proposal.definition.action.instruction}</dd></div><div><dt>Delivery</dt><dd>{proposal.definition.delivery.reachability.replaceAll('_',' ')} · {proposal.definition.delivery.endpoint??'not configured'} · channel {proposal.definition.delivery.channelId??'not configured'}</dd></div><div><dt>Provisioning</dt><dd>{proposal.definition.provisioning.mode.replaceAll('_',' ')} · {[proposal.definition.provisioning.organization,proposal.definition.provisioning.project,proposal.definition.provisioning.repositoryFullName??proposal.definition.provisioning.repository,proposal.definition.provisioning.targetBranch].filter(Boolean).join(' / ')||'no provider target'} · stable IDs {[proposal.definition.provisioning.projectId,proposal.definition.provisioning.repositoryId].filter(Boolean).join(' / ')||'not applicable'}{proposal.definition.provisioning.commandPreview?` · ${proposal.definition.provisioning.commandPreview}`:''}</dd></div><div><dt>Approval digest</dt><dd><code>{proposal.proposalDigest}</code></dd></div></dl></div>
+                <div className="automation-confirmation-actions"><button type="button" className="secondary" onClick={()=>void decideAutomationProposal(proposal,'reject').catch(showError)}>Reject</button><button type="button" onClick={()=>void decideAutomationProposal(proposal,'approve').catch(showError)}>Approve and provision</button></div>
+              </section>)}
               {browserActivity.length > 0 && (
                 <details
                   className="execution-timeline browser-chat-activity"
@@ -5166,7 +5024,9 @@ export function App() {
                                 void playMeeting(item.id).catch(showError)
                               }
                             >
-                              Play
+                              {meetingPlayback?.meetingId === item.id
+                                ? "Hide player"
+                                : "Play"}
                             </button>
                             <button
                               onClick={() =>
@@ -5185,8 +5045,9 @@ export function App() {
                                   )
                                 }
                               >
-                                Cancel transcription (
-                                {meetingTranscriptionRun.completed} segments)
+                                {meetingTranscriptionRun.phase === "preparing"
+                                  ? "Cancel · preparing audio"
+                                  : `Cancel transcription (${meetingTranscriptionRun.completed}/${meetingTranscriptionRun.total ?? "?"} segments)`}
                               </button>
                             ) : (
                               <button
@@ -5200,6 +5061,22 @@ export function App() {
                               </button>
                             )}
                           </div>
+                          {meetingPlayback?.meetingId === item.id && (
+                            <audio
+                              className="meeting-player"
+                              controls
+                              autoPlay
+                              preload="metadata"
+                              src={meetingPlayback.url}
+                              onError={() =>
+                                showError(
+                                  "The local recording player could not load this audio.",
+                                )
+                              }
+                            >
+                              Local audio playback is unavailable in this renderer.
+                            </audio>
+                          )}
                           <textarea
                             aria-label={`Transcript draft for ${item.title}`}
                             placeholder="Enter or paste a local transcript draft. Mark uncertain speakers like “Speaker 1?”."
@@ -6843,8 +6720,7 @@ export function App() {
                       {desktopSync.peerHost?.running && (
                         <p className="settings-help">
                           Endpoint {desktopSync.peerHost.endpoint} · certificate{" "}
-                          {desktopSync.peerHost.fingerprintSha256?.slice(0, 16)}
-                          …
+                          is self-signed and must be pinned by senders · SHA-256 {desktopSync.peerHost.fingerprintSha256}
                         </p>
                       )}
                       {pendingPeers.map((item) => (
@@ -7096,11 +6972,22 @@ export function App() {
             {drawer === "automations" && (
               <div className="drawer-body">
                 <p className="drawer-intro">
-                  Signed inbound events can arrive through the opaque Waypoint
-                  relay and remain quarantined for review. Local synthetic rules
-                  and playbooks remain paused or dry-run-only. No event can
-                  invoke a model, rule, command, schedule, or external effect.
+                  Provider webhooks enter one authenticated, encrypted queue and
+                  remain quarantined until they match an explicitly approved
+                  rule. AI-created configurations are digest-bound and cannot
+                  provision a provider or start a model before you approve them.
                 </p>
+                <section>
+                  <h3>AI proposals <span>{automationProposals.length}</span></h3>
+                  {!automationProposals.length&&<p className="drawer-empty">Ask chat to create a webhook automation, or configure an inbound channel below.</p>}
+                  {automationProposals.map((proposal)=><article className={`playbook-item ${proposal.status}`} key={proposal.id}><header><div><small>{proposal.status} · {proposal.definition.trigger.connectorId.replaceAll('_',' ')}</small><strong>{proposal.title}</strong><small>{proposal.definition.trigger.eventType} · {proposal.definition.action.provider}{proposal.definition.action.model?` / ${proposal.definition.action.model}`:''} · profile {proposal.definition.action.securityProfileId} · {Math.round(proposal.definition.action.maxDurationMs/1000)}s</small><span>Filters {Object.keys(proposal.definition.trigger.filters).length?JSON.stringify(proposal.definition.trigger.filters):'none'}</span><span>Endpoint {proposal.definition.delivery.endpoint??'not configured'} · channel {proposal.definition.delivery.channelId??'not configured'}</span><span>Provisioning {proposal.definition.provisioning.mode.replaceAll('_',' ')} · {[proposal.definition.provisioning.organization,proposal.definition.provisioning.project,proposal.definition.provisioning.repositoryFullName??proposal.definition.provisioning.repository,proposal.definition.provisioning.targetBranch].filter(Boolean).join(' / ')||'no provider target'} · stable IDs {[proposal.definition.provisioning.projectId,proposal.definition.provisioning.repositoryId].filter(Boolean).join(' / ')||'not applicable'}</span><span>Instruction: {proposal.definition.action.instruction}</span><span>Digest {proposal.proposalDigest}</span>{proposal.definition.provisioning.commandPreview&&<span>{proposal.definition.provisioning.commandPreview}</span>}{proposal.receipt&&<><span>{String(proposal.receipt.externalMutation.summary??proposal.receipt.externalMutation.reason??'Decision recorded')}</span><details><summary>Audit trail and rollback</summary><pre>{JSON.stringify({rollback:proposal.receipt.externalMutation.rollback??'No external cleanup required',externalId:proposal.receipt.externalMutation.externalId,delivery:proposal.receipt.externalMutation.delivery,events:proposal.receipt.provisioningEvents??[]},null,2)}</pre></details></>}</div></header>{proposal.question?.status==='pending'&&<div className="meeting-actions"><button onClick={()=>void decideAutomationProposal(proposal,'reject').catch(showError)}>Reject</button><button onClick={()=>void decideAutomationProposal(proposal,'approve').catch(showError)}>Approve and provision</button></div>}</article>)}
+                </section>
+                <section>
+                  <h3>Active rules and runs <span>{automationRuntime.rules.length} / {automationRuntime.runs.length}</span></h3>
+                  {!automationRuntime.rules.length&&<p className="drawer-empty">No approved webhook rule is enabled.</p>}
+                  {automationRuntime.rules.map((rule)=><article className={`playbook-item ${rule.status}`} key={rule.id}><header><div><small>{rule.status} · {rule.connectorId.replaceAll('_',' ')}</small><strong>{rule.eventType}</strong><span>{Object.keys(rule.filters).length?JSON.stringify(rule.filters):'All authenticated events of this type'} · channel {rule.channelId.slice(0,10)}…</span></div><button onClick={()=>void setAutomationRuleEnabled(rule.id,rule.status!=='enabled').catch(showError)}>{rule.status==='enabled'?'Stop':'Resume'}</button></header></article>)}
+                  {automationRuntime.runs.slice(0,20).map((run)=><article className={`playbook-item ${run.status}`} key={run.id}><header><div><small>{run.status} · {new Date(run.createdAt).toLocaleString()}</small><strong>{run.resultSummary??'Webhook-triggered AI review'}</strong>{run.errorCode&&<span>{run.errorCode}</span>}</div><div className="automation-run-actions">{run.chatId&&<button onClick={()=>openChatTab(run.chatId!)}>Open chat</button>}{(run.status==='queued'||run.status==='running')&&<button onClick={()=>void cancelAutomationRun(run.id).catch(showError)}>Cancel</button>}</div></header></article>)}
+                </section>
                 <section>
                   <h3>
                     Signed inbound <span>{webhookEvents.length}</span>
@@ -7115,17 +7002,22 @@ export function App() {
                     <>
                       <div className="automation-boundary" role="status">
                         <strong>
-                          {webhookChannels.killSwitch
+                          {webhookChannels.managementState === "unknown"
+                            ? "Inbound management state unknown"
+                            : !webhookChannels.reachable
+                            ? "Inbound host unavailable"
+                            : webhookChannels.killSwitch
                             ? "Inbound kill switch active"
                             : "Encrypted inbound enabled"}
                         </strong>
                         <span>
-                          signed · replay protected · opaque relay · quarantined
-                          · zero effects
+                          {webhookChannels.reason} · {webhookChannels.reachability.replaceAll('-', ' ')} · {webhookChannels.transportMode.replaceAll('-', ' ')} · authenticated · replay protected · encrypted queue
                         </span>
+                        {webhookChannels.fingerprintSha256&&<code>Self-signed certificate SHA-256 {webhookChannels.fingerprintSha256}</code>}
                       </div>
                       <div className="drawer-actions">
                         <button
+                          disabled={!webhookChannels.reachable || webhookChannels.managementState === "unknown"}
                           onClick={() =>
                             void createWebhookChannel().catch(showError)
                           }
@@ -7133,6 +7025,7 @@ export function App() {
                           New inbound channel
                         </button>
                         <button
+                          disabled={!webhookChannels.reachable || webhookChannels.managementState === "unknown"}
                           onClick={() =>
                             void refreshWebhookEvents().catch(showError)
                           }
@@ -7141,6 +7034,7 @@ export function App() {
                         </button>
                         <button
                           className="secondary"
+                          disabled={!webhookChannels.reachable || webhookChannels.managementState === "unknown"}
                           onClick={() =>
                             void window.waypoint
                               .setWebhookKill(
@@ -7154,10 +7048,13 @@ export function App() {
                               .catch(showError)
                           }
                         >
-                          {webhookChannels.killSwitch
+                          {webhookChannels.managementState === "unknown"
+                            ? "Kill switch unavailable"
+                            : webhookChannels.killSwitch
                             ? "Resume inbound"
                             : "Kill inbound"}
                         </button>
+                        {webhookChannels.certificatePem&&<button className="secondary" onClick={()=>void navigator.clipboard.writeText(JSON.stringify({trust:'self-signed-pinned',certificatePem:webhookChannels.certificatePem,fingerprintSha256:webhookChannels.fingerprintSha256},null,2)).then(()=>setNotice('Pinned desktop-host certificate and full SHA-256 fingerprint copied.')).catch(showError)}>Copy TLS trust</button>}
                       </div>
                     </>
                   )}
@@ -7169,7 +7066,7 @@ export function App() {
                       <header>
                         <div>
                           <small>
-                            {channel.status} · secret v{channel.secretVersion}
+                            {channel.status} · {channel.connectorId.replaceAll('_',' ')} · {channel.authMode.replaceAll('_',' ')} · secret v{channel.secretVersion}
                           </small>
                           <strong>{channel.label}</strong>
                           <small>
@@ -7234,8 +7131,9 @@ export function App() {
                       <header>
                         <div>
                           <small>
-                            quarantined · untrusted · {event.proposedEffects}{" "}
-                            effects
+                            quarantined · untrusted · {event.runCount
+                              ? `${event.runCount} automation run${event.runCount === 1 ? "" : "s"} · ${event.runStatus}`
+                              : "unmatched · no automation run"}
                           </small>
                           <strong>{event.eventType}</strong>
                           <small>
@@ -7254,230 +7152,6 @@ export function App() {
                       </header>
                     </article>
                   ))}
-                </section>
-                <div className="automation-boundary" role="status">
-                  <strong>
-                    {triggerLab?.killSwitch
-                      ? "Kill switch active"
-                      : "Local simulation only"}
-                  </strong>
-                  <span>
-                    webhook.fixture.local · quarantined · zero effects · network
-                    off
-                  </span>
-                </div>
-                <div className="drawer-actions">
-                  <button
-                    onClick={() => void createTriggerFixture().catch(showError)}
-                  >
-                    Simulate webhook
-                  </button>
-                  <button
-                    className="secondary"
-                    onClick={() => void toggleTriggerKill().catch(showError)}
-                  >
-                    {triggerLab?.killSwitch
-                      ? "Resume evaluation"
-                      : "Kill all triggers"}
-                  </button>
-                  <button
-                    onClick={() => void createPlaybook().catch(showError)}
-                  >
-                    New fixture playbook
-                  </button>
-                </div>
-                <section>
-                  <h3>
-                    Proactive rule lab{" "}
-                    <span>{triggerLab?.rules.length ?? 0}</span>
-                  </h3>
-                  {triggerLab?.rules.map((rule) => {
-                    const event = triggerLab.events.find(
-                      (item) => item.id === rule.sourceEventId,
-                    );
-                    return (
-                      <article
-                        className={`playbook-item ${rule.status}`}
-                        key={rule.id}
-                      >
-                        <header>
-                          <div>
-                            <small>
-                              v{rule.version} · {rule.status} ·{" "}
-                              {event?.status ?? "source missing"}
-                            </small>
-                            <strong>{rule.statement}</strong>
-                            <small>
-                              {event?.eventType} · source digest{" "}
-                              {event?.payloadDigest.slice(0, 10)}… · definition{" "}
-                              {rule.definitionDigest.slice(0, 10)}…
-                            </small>
-                            <span>
-                              Observed locally. Payload is quarantined untrusted
-                              fixture data and is not shown or interpreted as
-                              authority.
-                            </span>
-                          </div>
-                          <button
-                            onClick={() =>
-                              void deleteTriggerEvent(rule.sourceEventId).catch(
-                                showError,
-                              )
-                            }
-                          >
-                            Delete
-                          </button>
-                        </header>
-                        <div className="meeting-actions">
-                          {rule.status === "suggested" && (
-                            <button
-                              disabled={triggerLab.killSwitch}
-                              onClick={() =>
-                                void approveTriggerRule(rule.id).catch(
-                                  showError,
-                                )
-                              }
-                            >
-                              Approve paused rule
-                            </button>
-                          )}
-                          <button
-                            disabled={
-                              triggerLab.killSwitch || rule.status !== "paused"
-                            }
-                            onClick={() =>
-                              void dryRunTrigger(rule.id).catch(showError)
-                            }
-                          >
-                            Dry run
-                          </button>
-                          <button
-                            disabled={
-                              triggerLab.killSwitch || rule.status !== "paused"
-                            }
-                            onClick={() =>
-                              void dryRunTrigger(rule.id, true).catch(showError)
-                            }
-                          >
-                            Simulate failure
-                          </button>
-                        </div>
-                        {rule.runs.slice(0, 5).map((run) => (
-                          <small className="playbook-run" key={run.id}>
-                            {run.status.replace("_", " ")} · attempt{" "}
-                            {run.attempt} · {run.proposedEffects} effects
-                          </small>
-                        ))}
-                      </article>
-                    );
-                  })}
-                  {!triggerLab?.rules.length && (
-                    <p className="drawer-empty">
-                      No local webhook fixtures. Simulation never exposes a
-                      listener or activates a rule.
-                    </p>
-                  )}
-                </section>
-                <section>
-                  <h3>
-                    Paused playbooks <span>{playbooks.length}</span>
-                  </h3>
-                  {playbooks.map((item) => (
-                    <article
-                      className={`playbook-item ${item.status}`}
-                      key={item.id}
-                    >
-                      <header>
-                        <div>
-                          <small>
-                            v{item.version} · {item.status} · {item.timezone}
-                          </small>
-                          <strong>{item.title}</strong>
-                          <small>
-                            Definition v{item.definition.schemaVersion} ·{" "}
-                            {item.definition.connector.provider}@
-                            {item.definition.connector.version} ·{" "}
-                            {item.definition.steps
-                              .map((step) => step.operation)
-                              .join(" → ")}
-                          </small>
-                          <small>
-                            Authority: {item.permission.accountId} /{" "}
-                            {item.permission.tenantId} ·{" "}
-                            {item.permission.scopes.join(", ")} · read only
-                          </small>
-                          <span>
-                            Preview only: daily{" "}
-                            {String(item.hour).padStart(2, "0")}:
-                            {String(item.minute).padStart(2, "0")} · next{" "}
-                            {new Intl.DateTimeFormat(undefined, {
-                              dateStyle: "medium",
-                              timeStyle: "short",
-                              timeZone: item.timezone,
-                            }).format(new Date(item.nextOccurrence))}
-                          </span>
-                        </div>
-                        <button
-                          onClick={() =>
-                            void deletePlaybook(item.id).catch(showError)
-                          }
-                        >
-                          Delete
-                        </button>
-                      </header>
-                      <div className="meeting-actions">
-                        <button
-                          disabled={item.status === "killed"}
-                          onClick={() =>
-                            void dryRunPlaybook(item.id).catch(showError)
-                          }
-                        >
-                          Dry run
-                        </button>
-                        <button
-                          disabled={
-                            item.status === "killed" || !dryRunDigests[item.id]
-                          }
-                          onClick={() =>
-                            void runPlaybook(item.id).catch(showError)
-                          }
-                        >
-                          Run fixture now
-                        </button>
-                        <button
-                          disabled={
-                            item.status === "killed" || !dryRunDigests[item.id]
-                          }
-                          onClick={() =>
-                            void runPlaybook(item.id, true).catch(showError)
-                          }
-                        >
-                          Simulate failure
-                        </button>
-                        <button
-                          disabled={item.status === "killed"}
-                          onClick={() =>
-                            void killPlaybook(item.id).catch(showError)
-                          }
-                        >
-                          Kill switch
-                        </button>
-                      </div>
-                      {item.runs.slice(0, 5).map((run) => (
-                        <small className="playbook-run" key={run.id}>
-                          {run.status.replace("_", " ")} · attempt {run.attempt}{" "}
-                          · {run.inputCount} in / {run.outputCount} out ·{" "}
-                          {run.proposedEffects} effects
-                        </small>
-                      ))}
-                    </article>
-                  ))}
-                  {!playbooks.length && (
-                    <p className="drawer-empty">
-                      No fixture playbooks. Creating one never enables a
-                      schedule or external connector.
-                    </p>
-                  )}
                 </section>
               </div>
             )}

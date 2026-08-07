@@ -149,13 +149,9 @@ export class PeerHostRuntime {
     const external = createHttpsServer(
       { key: privateKeyPem, cert: certificatePem },
       (request, response) => {
-        if (
-          !request.url ||
-          request.url.startsWith("/v1/hooks/") ||
-          request.url.startsWith("/v1/webhook-")
-        ) {
+        if (!request.url) {
           response.writeHead(404, { "content-type": "application/json" });
-          response.end('{"error":"relay_only_feature"}');
+          response.end('{"error":"not_found"}');
           return;
         }
         let bytes = 0;
@@ -215,11 +211,11 @@ export class PeerHostRuntime {
       endpoint: descriptor.endpoint,
       reason:
         storedIdentity && !reusableIdentity
-          ? "Desktop host identity rotated after its saved network address or certificate became unusable. Create new invitations so peers can pin this identity."
-          : "This desktop is hosting authenticated direct peer transport. If it sleeps or quits, peers wait unless optional relay fallback is enabled.",
+          ? "Desktop host identity rotated after its saved network address or certificate became unusable. Create new peer invitations and webhook sender configurations so clients can pin this identity."
+          : "This desktop is hosting authenticated peer transport and signed inbound webhooks on the local network. If it sleeps or quits, delivery pauses unless optional relay fallback is enabled.",
       startedAt: new Date().toISOString(),
       fingerprintSha256: createHash("sha256")
-        .update(certificatePem)
+        .update(new X509Certificate(certificatePem).raw)
         .digest("hex"),
       workspaceId: active.workspaceId,
       identityRotated: Boolean(storedIdentity && !reusableIdentity),

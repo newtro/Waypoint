@@ -8,6 +8,7 @@ import {
   ipcMain,
   nativeImage,
   Notification,
+  protocol,
   safeStorage,
   screen,
   shell,
@@ -20,6 +21,7 @@ import path from "node:path";
 import {
   accessSync,
   constants,
+  createReadStream,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -27,12 +29,14 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   statfsSync,
   writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { Readable } from "node:stream";
 import { WorkspaceStore } from "./core/store.js";
 import { autoTitleMayStart,minimalTitlePrompt, resolveAutomaticTitle } from "./core/auto-chat-title.js";
 import { canonicalExecutionText } from "./core/execution-output.js";
@@ -51,6 +55,9 @@ import {
 } from "./core/execution-lifecycle.js";
 import { finalizeExecution } from "./core/execution-finalization.js";
 import { withCurrentDateTime } from "./core/prompt-context.js";
+import { WEBHOOK_CONNECTORS, validateAutomationProposal } from "./core/webhook-automations.js";
+import { extractAutomationProposalTool, withAutomationProposalTool } from "./core/automation-ai-tool.js";
+import { connectorProvisioningPreview, discoverConnectorTarget, provisionConnector, type CliExecutor } from "./core/connector-provisioning.js";
 import { readBackup, writeAtomicBackup } from "./core/backup.js";
 import { runBackupAdministration } from "./core/backup-administration-runner.js";
 import { extractDocumentOffMain } from "./core/document-extraction-runner.js";
@@ -140,6 +147,15 @@ import {
 import { InAppBrowserController } from "./core/in-app-browser.js";
 import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
 import { assertVisibleCapturePixels, captureReadiness, captureVisibilityStrategy, quickCaptureCropBounds, validateCaptureSettings, type CaptureMode, type CaptureSettings } from "./core/manual-screen-capture.js";
+import {
+  probeMeetingMediaDecoder,
+  transcribeMeetingFile,
+} from "./core/meeting-transcription-runner.js";
+import {
+  meetingPlaybackCachePath,
+  prepareSeekableMeetingPlayback,
+  removeSeekableMeetingPlayback,
+} from "./core/meeting-playback-cache.js";
 
 // Contained browser traffic must not bypass the audited HTTPS CONNECT gate over UDP/QUIC.
 app.commandLine.appendSwitch(
@@ -147,13 +163,114 @@ app.commandLine.appendSwitch(
   "disable_non_proxied_udp",
 );
 app.commandLine.appendSwitch("disable-quic");
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "waypoint-media",
+    privileges: { standard: true, secure: true, stream: true },
+  },
+]);
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
 let syncService: DesktopSyncService;
+const meetingPlaybackGrants = new Map<
+  string,
+  {
+    path: string;
+    mediaType: string;
+    bytes: number;
+    expiresAt: number;
+  }
+>();
+let meetingMediaDecoderProbe:
+  | ReturnType<typeof probeMeetingMediaDecoder>
+  | undefined;
+let meetingPlaybackCacheRoot = "";
+const meetingPlaybackPreparations = new Map<string, Promise<string>>();
+
+async function meetingPlaybackPath(audio: {
+  path: string;
+  mediaType: string;
+  sha256: string;
+}): Promise<string> {
+  const existing = meetingPlaybackPreparations.get(audio.sha256);
+  if (existing) return existing;
+  const preparation = (async () => {
+    const decoder = await (meetingMediaDecoderProbe ??= probeMeetingMediaDecoder());
+    return (
+      await prepareSeekableMeetingPlayback({
+        sourcePath: audio.path,
+        sourceSha256: audio.sha256,
+        mediaType: audio.mediaType,
+        cacheRoot: meetingPlaybackCacheRoot,
+        decoderCommand: decoder.command,
+      })
+    ).path;
+  })();
+  meetingPlaybackPreparations.set(audio.sha256, preparation);
+  try {
+    return await preparation;
+  } finally {
+    meetingPlaybackPreparations.delete(audio.sha256);
+  }
+}
+
+function registerMeetingPlaybackProtocol(): void {
+  protocol.handle("waypoint-media", (request) => {
+    if (request.method !== "GET" && request.method !== "HEAD")
+      return new Response(null, { status: 405 });
+    const url = new URL(request.url),
+      token = url.hostname,
+      grant = meetingPlaybackGrants.get(token);
+    if (!grant || grant.expiresAt < Date.now()) {
+      meetingPlaybackGrants.delete(token);
+      return new Response(null, { status: 404 });
+    }
+    let fileBytes: number;
+    try {
+      fileBytes = statSync(grant.path).size;
+    } catch {
+      meetingPlaybackGrants.delete(token);
+      return new Response(null, { status: 404 });
+    }
+    if (fileBytes !== grant.bytes) return new Response(null, { status: 409 });
+    const range = request.headers.get("range"),
+      match = range?.match(/^bytes=(\d+)-(\d*)$/);
+    let start = 0,
+      end = fileBytes - 1,
+      status = 200;
+    if (range) {
+      if (!match) return new Response(null, { status: 416 });
+      start = Number(match[1]);
+      end = match[2] ? Math.min(Number(match[2]), fileBytes - 1) : fileBytes - 1;
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= fileBytes)
+        return new Response(null, {
+          status: 416,
+          headers: { "Content-Range": `bytes */${fileBytes}` },
+        });
+      status = 206;
+    }
+    const length = end - start + 1,
+      headers: Record<string, string> = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+        "Content-Length": String(length),
+        "Content-Type": grant.mediaType,
+      };
+    if (status === 206) headers["Content-Range"] = `bytes ${start}-${end}/${fileBytes}`;
+    if (request.method === "HEAD") return new Response(null, { status, headers });
+    return new Response(
+      Readable.toWeb(createReadStream(grant.path, { start, end })) as ReadableStream,
+      { status, headers },
+    );
+  });
+}
+async function executeProvisioningCli(workspaceId:string,cli:'az'|'gh',args:string[]){const execution=await toolGateway.execute({version:1,workspaceId,origin:'ai',tool:'local_cli.run',arguments:{cli,args,cwd:'.',timeoutMs:120_000}},gatewayPolicy(workspaceId)),completed=execution.result??await toolGateway.waitForCompletion(execution.runId,125_000);if(completed.receipt.status!=='completed')throw new Error(completed.receipt.summary??`${cli} connector command failed`);return completed.output??JSON.stringify(completed.value??{})}
+async function prepareAutomationProposal(workspaceId:string,chatId:string|undefined,value:unknown){let definition=validateAutomationProposal(value);if(definition.trigger.connectorId==='azure_devops'||definition.trigger.connectorId==='github'){const identity=await discoverConnectorTarget(definition,((cli,args)=>executeProvisioningCli(workspaceId,cli,args)) as CliExecutor);definition=validateAutomationProposal({...definition,provisioning:{...definition.provisioning,...identity}})}const sync=syncService.status(workspaceId),delivery=sync.configured?syncService.planWebhookChannel(workspaceId,definition.trigger.connectorId):{reachability:'not_configured' as const},previewDefinition=validateAutomationProposal({...definition,delivery});definition=validateAutomationProposal({...previewDefinition,provisioning:{...previewDefinition.provisioning,commandPreview:connectorProvisioningPreview(previewDefinition)}});const proposal=store.createAutomationProposal(workspaceId,chatId,definition);for(const window of BrowserWindow.getAllWindows())window.webContents.send('waypoint:automation-proposal-created',{workspaceId,chatId,proposalId:proposal.id});return proposal}
 let syncVault: ProtectedSyncVault;
 let peerHostRuntime: PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
+const activeWebhookRuns = new Set<string>();
 const syncAbort = new AbortController();
 let trustedSenderId: number | undefined;
 const pendingManualCaptures = new Map<string, { workspaceId:string; senderId:number; sourceId: string; sourceName: string; mode: CaptureMode; width:number; height:number; expiresAt: number }>();
@@ -563,6 +680,10 @@ async function processRemoteJobs(workspaceId: string) {
     activeRemoteJobs.delete(workspaceId);
   }
 }
+
+const activeAutomationWorkspaces=new Set<string>(),activeAutomationProvisioningWorkspaces=new Set<string>();
+async function withWorkspaceReservation<T>(active:Set<string>,workspaceId:string,label:string,operation:()=>Promise<T>):Promise<T>{if(active.has(workspaceId))throw new Error(`Another ${label} operation is already active for this workspace`);active.add(workspaceId);try{return await operation()}finally{active.delete(workspaceId)}}
+async function processAutomationRuns(workspaceId:string){store.evaluateAutomationEvents(workspaceId);if(activeAutomationWorkspaces.has(workspaceId))return;const claimed=store.claimAutomationRun(workspaceId);if(!claimed)return;activeAutomationWorkspaces.add(workspaceId);captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id});let executionId:string|undefined;try{const cli=claimed.action.provider,profile=store.listSecurityProfiles(workspaceId).find((item)=>item.id===claimed.action.securityProfileId);if(!profile)throw new Error('Approved automation security profile is unavailable');const capability=await detectCli(cli);if(!capability.available||capability.compatible===false||!capability.executable)throw new Error(capability.compatibilityError??`${cli} CLI is unavailable`);const chatId=store.createChat(workspaceId,`Automation · ${claimed.title}`),sourceMessageId=store.addMessage(workspaceId,chatId,'user',`Webhook automation started\n\n${claimed.prompt}`),budget=createExecutionBudget({kind:'root',profile,prompt:claimed.prompt,attachmentCount:0});executionId=store.createExecution({workspaceId,chatId,sourceMessageId,cli,model:claimed.action.model,securityProfileId:profile.id,prompt:claimed.prompt,budgetReceipt:serializeExecutionBudget(budget)});const events:ExecutionEvent[]=[],running=await workbench.start(executionId,{cli,prompt:claimed.prompt,workspaceRoot:profile.roots[0],profile,model:claimed.action.model,timeoutMs:Math.min(claimed.action.maxDurationMs,budget.maxDurationMs),maxOutputBytes:budget.maxOutputBytes,executable:capability.executable,version:capability.version},(event)=>{events.push(event);try{store.appendExecutionEvent(executionId!,workspaceId,event)}catch{/* Workspace deletion is blocked while automation work is active. */}});store.startExecution(executionId,workspaceId,running.executable,running.version);store.attachAutomationExecution(workspaceId,claimed.id,chatId,executionId);captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id});void running.completion.then(async(result)=>{await finalizeExecution(store,{runId:executionId!,workspaceId,chatId,cli,result,fallbackEvents:events});store.finishAutomationRun(workspaceId,claimed.id,result.status==='completed'?'completed':result.status==='canceled'?'canceled':'failed',result.status==='completed'?'AI review completed':result.error??`AI review ${result.status}`,result.status==='completed'?undefined:result.status);captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id})}).catch((error)=>{try{store.finishAutomationRun(workspaceId,claimed.id,'failed',error instanceof Error?error.message:'AI review failed','execution_finalization_failed');captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id})}catch{/* Terminal state may already be durable. */}}).finally(()=>activeAutomationWorkspaces.delete(workspaceId))}catch(error){const message=error instanceof Error?error.message:'Automation run failed';if(!executionId&&/concurrency/i.test(message))store.deferAutomationRun(workspaceId,claimed.id);else store.finishAutomationRun(workspaceId,claimed.id,'failed',message,'automation_start_failed');captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id});activeAutomationWorkspaces.delete(workspaceId)}}
 
 function gatewayPolicy(workspaceId: string): ToolGatewayPolicy {
   const profile = store
@@ -1645,6 +1766,7 @@ function registerIpc(): void {
       chatId = text(value.chatId, "chat ID", 64),
       sourceMessageId = text(value.sourceMessageId, "source message ID", 64),
       prompt = text(value.prompt, "prompt", 2_000_000),
+      securityProfileId=text(value.securityProfileId,"security profile ID",64),
       role =
         value.role === "strategic"
           ? ("strategic" as const)
@@ -1653,6 +1775,7 @@ function registerIpc(): void {
       throw new Error(
         "OpenRouter attachments are not enabled; files remain local.",
       );
+    const automationProfile=store.listSecurityProfiles(workspaceId).find((item)=>item.id===securityProfileId);if(!automationProfile)throw new Error('Security profile is unavailable');
     const settings = store.openRouterSettings(),
       usage = store.providerUsage(),
       apiKey = providerVault.getKey(),
@@ -1723,14 +1846,12 @@ function registerIpc(): void {
         workspaceId,
         role,
         model: route.model!,
-        prompt: withCurrentDateTime(prompt),
+        prompt: withAutomationProposalTool({prompt:withCurrentDateTime(prompt),chatId,provider:'openrouter',model:route.model!,securityProfileId,maxDurationMs:automationProfile.maxDurationMs}),
         apiKey,
         signal: controller.signal,
         requestCapMicros: settings.perRequestCapMicros ?? 100_000,
       })
-      .then(({ text: answer, receipt }) =>
-        store.finishHostedRun(workspaceId, runId, "completed", receipt, answer),
-      )
+      .then(async({ text: answer, receipt }) =>{const parsed=extractAutomationProposalTool(answer);let display=answer;if(parsed.definition){try{await prepareAutomationProposal(workspaceId,chatId,parsed.definition);display=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I’ve prepared the exact configuration below for your approval. Nothing has been provisioned or enabled.`}catch(error){display=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${error instanceof Error?error.message:'proposal preparation failed'}. Nothing was changed.`}}else if(parsed.error)display=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${parsed.error}. Nothing was changed.`;store.finishHostedRun(workspaceId,runId,"completed",receipt,display)})
       .catch((error: Error & { receipt?: ProviderUsageReceipt }) => {
         const receipt = error.receipt;
         if (receipt)
@@ -2122,6 +2243,9 @@ function registerIpc(): void {
       );
     if (
       activeSyncRuns.has(workspaceId) ||
+      activeWebhookRuns.has(workspaceId) ||
+      activeAutomationWorkspaces.has(workspaceId) ||
+      activeAutomationProvisioningWorkspaces.has(workspaceId) ||
       activeReflectionRuns.has(workspaceId) ||
       [...activeHostedRuns.values()].some(
         (run) => run.workspaceId === workspaceId,
@@ -2617,39 +2741,30 @@ function registerIpc(): void {
   handle("waypoint:webhook-channel-create", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
-      label = text(value.label, "channel label", 80).trim();
+      label = text(value.label, "channel label", 80).trim(),
+      connectorId = text(value.connectorId ?? "generic", "webhook connector", 40);
     if (!label) throw new Error("Channel label is required");
-    return syncService.createWebhookChannel(workspaceId, label);
+    if (connectorId === "stripe" || connectorId === "resend") throw new Error("Stripe and Resend webhook setup is unavailable until provider signing-secret import is implemented");
+    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.createWebhookChannel(workspaceId, label, connectorId));
   });
   handle("waypoint:webhook-channel-rotate", async (_event, input: unknown) => {
-    const value = input as Record<string, unknown>;
-    return syncService.rotateWebhookChannel(
-      text(value.workspaceId, "workspace ID", 64),
-      text(value.channelId, "channel ID", 128),
-    );
+    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId, "workspace ID", 64),channelId=text(value.channelId, "channel ID", 128);
+    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.rotateWebhookChannel(workspaceId,channelId));
   });
   handle("waypoint:webhook-channel-revoke", async (_event, input: unknown) => {
-    const value = input as Record<string, unknown>;
-    return syncService.revokeWebhookChannel(
-      text(value.workspaceId, "workspace ID", 64),
-      text(value.channelId, "channel ID", 128),
-    );
+    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId, "workspace ID", 64),channelId=text(value.channelId, "channel ID", 128);
+    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.revokeWebhookChannel(workspaceId,channelId));
   });
   handle("waypoint:webhook-channel-delete", async (_event, input: unknown) => {
-    const value = input as Record<string, unknown>;
-    return syncService.deleteWebhookChannel(
-      text(value.workspaceId, "workspace ID", 64),
-      text(value.channelId, "channel ID", 128),
-    );
+    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId, "workspace ID", 64),channelId=text(value.channelId, "channel ID", 128);
+    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.deleteWebhookChannel(workspaceId,channelId));
   });
   handle("waypoint:webhook-kill", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     if (typeof value.active !== "boolean")
       throw new Error("Kill state is invalid");
-    return syncService.setWebhookKill(
-      text(value.workspaceId, "workspace ID", 64),
-      value.active,
-    );
+    const workspaceId=text(value.workspaceId, "workspace ID", 64);
+    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.setWebhookKill(workspaceId,value.active as boolean));
   });
   handle("waypoint:webhook-fetch", async (_event, input: unknown) => {
     const workspaceId = text(
@@ -2657,13 +2772,41 @@ function registerIpc(): void {
       "workspace ID",
       64,
     );
-    return syncService.fetchWebhookEvents(workspaceId, store);
+    return withWorkspaceReservation(activeWebhookRuns,workspaceId,'inbound fetch',async()=>{const result=await syncService.fetchWebhookEvents(workspaceId, store);await processAutomationRuns(workspaceId);return result});
   });
   handle("waypoint:webhook-events", (_event, input: unknown) =>
     store.listExternalInboundEvents(
       text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
     ),
   );
+  handle("waypoint:webhook-connectors", () => WEBHOOK_CONNECTORS);
+  handle("waypoint:automation-proposals", (_event, input: unknown) => {
+    const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,"workspace ID",64),chatId=value.chatId===undefined?undefined:text(value.chatId,"chat ID",64);
+    return store.listAutomationProposals(workspaceId,chatId);
+  });
+  handle("waypoint:automation-rules-runs", (_event,input:unknown)=>store.listAutomationRulesAndRuns(text((input as Record<string,unknown>).workspaceId,"workspace ID",64)));
+  handle("waypoint:automation-rule-status", (_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,"workspace ID",64),ruleId=text(value.ruleId,"automation rule ID",64),status=value.enabled===true?'enabled':'killed';store.setAutomationRuleStatus(workspaceId,ruleId,status);if(status==='enabled')void processAutomationRuns(workspaceId);return{ok:true}});
+  handle("waypoint:automation-run-cancel", (_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,"workspace ID",64),runId=text(value.runId,"automation run ID",64),run=store.listAutomationRulesAndRuns(workspaceId).runs.find((item)=>item.id===runId);if(!run)throw new Error('Automation run not found');if(run.status==='queued')store.cancelQueuedAutomationRun(workspaceId,runId);else if(run.status==='running'&&run.executionId)workbench.cancel(String(run.executionId));else if(run.status==='running')throw new Error('Automation run is starting; try cancel again in a moment');else throw new Error('Automation run is already complete');return{ok:true}});
+  handle("waypoint:automation-proposal-decide", async (_event, input: unknown) => {
+    const value=input as Record<string,unknown>,decision=String(value.decision);
+    if(decision!=="approve"&&decision!=="reject")throw new Error("Automation decision is invalid");
+    const workspaceId=text(value.workspaceId,"workspace ID",64),proposalId=text(value.proposalId,"proposal ID",64),proposalDigest=text(value.proposalDigest,"proposal digest",64),reserved=decision==='approve';
+    if(reserved){if(activeAutomationProvisioningWorkspaces.has(workspaceId))throw new Error('Another connector provisioning operation is already active for this workspace');activeAutomationProvisioningWorkspaces.add(workspaceId)}
+    try{
+      const proposal=store.decideAutomationProposal(workspaceId,proposalId,proposalDigest,decision);
+      if(decision==='reject')return proposal;
+      const planned=proposal.definition.delivery;
+      if(!planned.channelId||!planned.endpoint)return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary:'Configure desktop sync or a hosted relay, then create a fresh proposal for approval.'});
+      if(proposal.definition.trigger.connectorId!=='generic'&&planned.reachability!=='public_relay')return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary:'This cloud provider requires a public trusted HTTPS relay. The approved local-network endpoint was not mutated.'});
+      if(proposal.definition.trigger.connectorId==='stripe'||proposal.definition.trigger.connectorId==='resend')return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary:`${proposal.definition.trigger.connectorId} signing-secret import is not configured in this build. No channel or provider endpoint was created.`});
+      store.beginAutomationProvisioning(workspaceId,proposalId,proposalDigest);
+      let delivery:{channelId:string;endpoint:string;reachability:'public_relay'|'local_network'}|undefined,providerMutation:Record<string,unknown>|undefined;
+      try{
+      const channel=await syncService.createWebhookChannel(workspaceId,proposal.definition.title,proposal.definition.trigger.connectorId,planned.channelId);delivery={channelId:channel.channelId,endpoint:channel.endpoint,reachability:channel.transportMode==='hosted-relay'?'public_relay':'local_network'};if(delivery.channelId!==planned.channelId||delivery.endpoint!==planned.endpoint||delivery.reachability!==planned.reachability)throw new Error('Created webhook delivery does not match the approved proposal');store.checkpointAutomationProvisioning(workspaceId,proposalId,proposalDigest,{executed:true,outcome:'partial',summary:'Waypoint inbound channel created; provider configuration is pending.',delivery,rollback:{waypoint:{operation:'revoke_and_delete_channel',channelId:delivery.channelId}}});const definition=proposal.definition,{secret}=syncService.webhookProvisioningSecret(workspaceId,channel.channelId),policy=gatewayPolicy(workspaceId),providerInspection={operation:'inspect_and_delete_exact_endpoint',connectorId:definition.trigger.connectorId,endpoint:delivery.endpoint,organization:definition.provisioning.organization,repository:definition.provisioning.repositoryFullName??definition.provisioning.repository};store.checkpointAutomationProvisioning(workspaceId,proposalId,proposalDigest,{executed:true,outcome:'uncertain',summary:'Provider mutation attempt is starting; final provider outcome has not been reconciled.',delivery,rollback:{waypoint:{operation:'revoke_and_delete_channel',channelId:delivery.channelId},provider:providerInspection}});const result=await provisionConnector({definition,secret,workspaceRoot:path.join(app.getPath('userData'),'automation-provisioning-tmp'),execute:async(cli,args)=>{const execution=await toolGateway.execute({version:1,workspaceId,origin:'ui',tool:'local_cli.run',arguments:{cli,args,cwd:'.',timeoutMs:120_000}},policy,[secret]),completed=execution.result??await toolGateway.waitForCompletion(execution.runId,125_000),receipt=completed.receipt;if(receipt.status!=='completed')throw new Error(receipt.summary??`${cli} connector provisioning failed`);return completed.output??JSON.stringify(completed.value??{})}});providerMutation={connectorId:result.connectorId,externalId:result.externalId,rollback:result.rollback};const rollback={waypoint:{operation:'revoke_and_delete_channel',channelId:delivery.channelId},provider:result.rollback};store.checkpointAutomationProvisioning(workspaceId,proposalId,proposalDigest,{executed:true,outcome:'partial',summary:'Provider hook and Waypoint channel were created; final receipt is pending.',delivery,externalId:result.externalId,providerMutation,rollback});
+        return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'applied',summary:result.summary,externalId:result.externalId,rollback,delivery});
+      }catch(error){if(store.automationProposal(workspaceId,proposalId).status!=='approved')throw error;const summary=error instanceof Error?error.message:'Connector provisioning failed',details=error as {waypointMutation?:Record<string,unknown>;providerMutation?:Record<string,unknown>},waypointMutation=details.waypointMutation,provider=providerMutation??details.providerMutation,uncertain=/outcome is uncertain/i.test(summary)||waypointMutation?.outcome==='uncertain'||provider?.outcome==='uncertain',executed=Boolean(delivery||waypointMutation||provider),rollback={waypoint:delivery?{operation:'revoke_and_delete_channel',channelId:delivery.channelId}:waypointMutation?.rollback,provider:provider?.rollback??(uncertain?{operation:'inspect_for_exact_endpoint',endpoint:delivery?.endpoint??planned.endpoint}:undefined)};return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary,delivery,executed,outcome:uncertain?'uncertain':executed?'partial':'known',rollback})}
+    }finally{if(reserved)activeAutomationProvisioningWorkspaces.delete(workspaceId)}
+  });
   handle("waypoint:webhook-event-delete", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     store.deleteExternalInboundEvent(
@@ -2999,7 +3142,24 @@ function registerIpc(): void {
     for (const [id, run] of meetingTranscriptionRuns)
       if (run.workspaceId === workspaceId && run.meetingId === meetingId)
         cancelMeetingRun(id);
+    let audio:
+      | ReturnType<WorkspaceStore["meetingAudio"]>
+      | undefined;
+    try {
+      audio = store.meetingAudio(workspaceId, meetingId);
+    } catch {
+      // Failed meetings and already-missing files have no playback artifact.
+    }
     store.deleteMeeting(workspaceId, meetingId);
+    if (audio) {
+      const paths = new Set([
+        audio.path,
+        meetingPlaybackCachePath(meetingPlaybackCacheRoot, audio.sha256),
+      ]);
+      for (const [token, grant] of meetingPlaybackGrants)
+        if (paths.has(grant.path)) meetingPlaybackGrants.delete(token);
+      removeSeekableMeetingPlayback(meetingPlaybackCacheRoot, audio.sha256);
+    }
     return { ok: true };
   });
   handle("waypoint:read-meeting-audio", (_event, input: unknown) => {
@@ -3009,6 +3169,29 @@ function registerIpc(): void {
         text(value.meetingId, "meeting ID", 64),
       );
     return { mediaType: audio.mediaType, audio: readFileSync(audio.path) };
+  });
+  handle("waypoint:meeting-playback-url", async (event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      audio = store.meetingAudio(
+        text(value.workspaceId, "workspace ID", 64),
+        text(value.meetingId, "meeting ID", 64),
+      ),
+      playbackPath = await meetingPlaybackPath(audio),
+      bytes = statSync(playbackPath).size,
+      token = randomBytes(32).toString("hex");
+    for (const [key, grant] of meetingPlaybackGrants)
+      if (grant.expiresAt < Date.now()) meetingPlaybackGrants.delete(key);
+    meetingPlaybackGrants.set(token, {
+      path: playbackPath,
+      mediaType: audio.mediaType,
+      bytes,
+      expiresAt: Date.now() + 2 * 60 * 60_000,
+    });
+    event.sender.once("destroyed", () => meetingPlaybackGrants.delete(token));
+    return {
+      url: `waypoint-media://${token}/recording`,
+      mediaType: audio.mediaType,
+    };
   });
   handle("waypoint:export-meeting-audio", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
@@ -3036,14 +3219,20 @@ function registerIpc(): void {
     return { canceled: false };
   });
   handle("waypoint:meeting-transcription-capability", async () => {
-    const available = await meetingTranscription.probe();
+    const [transcriptionReady, decoder] = await Promise.all([
+        meetingTranscription.probe(),
+        (meetingMediaDecoderProbe ??= probeMeetingMediaDecoder()),
+      ]),
+      available = transcriptionReady && decoder.available;
     return {
       available,
       provider: "Fast Local Whisper tiny.en",
       speakerDiarization: false,
       reason: available
-        ? "Packaged local English transcription is ready for recordings up to ten minutes. Output is an unreviewed draft; speaker identity and diarization are not inferred. Audio never leaves this device."
-        : "Packaged local transcription failed its readiness probe. Manual transcript review remains available; no cloud fallback will be used.",
+        ? "Local English transcription is ready for recordings up to two hours using the packaged Whisper model and installed FFmpeg decoder. Output is an unreviewed draft; speaker identity and diarization are not inferred. Audio never leaves this device."
+        : transcriptionReady
+          ? decoder.reason
+          : "Packaged local transcription failed its readiness probe. Manual transcript review remains available; no cloud fallback will be used.",
     };
   });
   handle("waypoint:meeting-transcription-start", (event, input: unknown) => {
@@ -3060,7 +3249,7 @@ function registerIpc(): void {
       throw new Error("A local meeting transcription is already running");
     const runId = randomUUID(),
       controller = new AbortController(),
-      deadline = Date.now() + 15 * 60_000,
+      deadline = Date.now() + 60 * 60_000,
       stopTimer = setInterval(() => {
         if (
           Date.now() > deadline ||
@@ -3082,6 +3271,80 @@ function registerIpc(): void {
       stopTimer,
     });
     return { runId };
+  });
+  handle("waypoint:meeting-transcription-recording", async (event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      runId = text(value.runId, "transcription run ID", 64),
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      meetingId = text(value.meetingId, "meeting ID", 64),
+      run = meetingTranscriptionRuns.get(runId);
+    if (
+      !run ||
+      run.workspaceId !== workspaceId ||
+      run.meetingId !== meetingId ||
+      run.inFlight
+    )
+      throw new Error("Meeting transcription run is invalid");
+    const decoder = await (meetingMediaDecoderProbe ??= probeMeetingMediaDecoder());
+    if (!decoder.available || !decoder.command) {
+      cancelMeetingRun(runId);
+      throw new Error(decoder.reason);
+    }
+    const audio = store.meetingAudio(workspaceId, meetingId);
+    run.inFlight = true;
+    try {
+      await transcribeMeetingFile({
+        audioPath: audio.path,
+        decoderCommand: decoder.command,
+        temporaryRoot: path.join(app.getPath("userData"), "meeting-transcription-tmp"),
+        signal: run.controller.signal,
+        transcribe: async (bytes, signal) => {
+          const result = await meetingTranscription.transcribe(bytes, signal),
+            part = result.text.trim().slice(0, 100_000);
+          if (!part) throw new Error("Meeting transcript segment was empty");
+          if (run.characters + part.length > 500_000)
+            throw new Error("Meeting transcript exceeds bounds");
+          run.parts.push(part);
+          run.characters += part.length;
+          run.nextIndex++;
+          return { text: part };
+        },
+        onProgress: (progress) =>
+          event.sender.send("waypoint:meeting-transcription-progress", {
+            workspaceId,
+            meetingId,
+            runId,
+            ...progress,
+          }),
+      });
+      const meeting = store
+        .listMeetings(workspaceId)
+        .find((item) => item.id === meetingId);
+      if (
+        !meetingTranscriptionRuns.has(runId) ||
+        !meeting ||
+        meeting.status !== "ready" ||
+        store.toolGatewaySettings(workspaceId).stopped ||
+        run.baseline !==
+          JSON.stringify([meeting.transcript, meeting.transcriptStatus]) ||
+        !run.parts.length
+      )
+        throw new Error(
+          "Meeting transcription could not be committed because its source or policy changed",
+        );
+      clearInterval(run.stopTimer);
+      meetingTranscriptionRuns.delete(runId);
+      const transcript = run.parts.join("\n\n");
+      run.parts.length = 0;
+      store.updateMeetingTranscript(workspaceId, meetingId, transcript, false);
+      return { transcript, provider: "Fast Local Whisper tiny.en" };
+    } catch (error) {
+      cancelMeetingRun(runId);
+      throw error;
+    } finally {
+      const current = meetingTranscriptionRuns.get(runId);
+      if (current) current.inFlight = false;
+    }
   });
   handle(
     "waypoint:meeting-transcription-segment",
@@ -3500,7 +3763,7 @@ function registerIpc(): void {
         throw new Error("Prompt and attached text exceed the execution limit");
       prompt += context;
     }
-    prompt = withCurrentDateTime(prompt);
+    prompt = withAutomationProposalTool({prompt:withCurrentDateTime(prompt),chatId,provider:cli as 'codex'|'claude',model:value.model?text(value.model,"model",120):undefined,securityProfileId:profileId,maxDurationMs:profile.maxDurationMs});
     const budget = createExecutionBudget({
       kind: parentExecutionId ? "child" : "root",
       profile,
@@ -3582,16 +3845,17 @@ function registerIpc(): void {
           ),
       });
       void running.completion
-        .then((result) =>
-          finalizeExecution(store, {
-            runId,
-            workspaceId,
-            chatId,
-            cli: cli as "codex" | "claude",
-            result,
-            fallbackEvents,
-          }),
-        )
+        .then(async(result) => {
+          let answerOverride:string|undefined;
+          if(result.status==='completed'){
+            const parsed=extractAutomationProposalTool(canonicalExecutionText(cli as 'codex'|'claude',fallbackEvents));
+            if(parsed.definition){
+              try{await prepareAutomationProposal(workspaceId,chatId,parsed.definition);answerOverride=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I’ve prepared the exact configuration below for your approval. Nothing has been provisioned or enabled.`}
+              catch(error){answerOverride=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${error instanceof Error?error.message:'proposal preparation failed'}. Nothing was changed.`}
+            }else if(parsed.error)answerOverride=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${parsed.error}. Nothing was changed.`;
+          }
+          return finalizeExecution(store, {runId,workspaceId,chatId,cli:cli as "codex" | "claude",result,fallbackEvents,answerOverride});
+        })
         .catch((error) =>
           console.error("Failed to persist terminal execution state", error),
         );
@@ -4088,6 +4352,15 @@ else {
     store = new WorkspaceStore(
       path.join(app.getPath("userData"), "waypoint.sqlite"),
     );
+    meetingPlaybackCacheRoot = path.join(
+      app.getPath("userData"),
+      "meeting-playback-cache",
+    );
+    rmSync(meetingPlaybackCacheRoot, { recursive: true, force: true });
+    const automationProvisioningTempRoot = path.join(app.getPath("userData"), "automation-provisioning-tmp");
+    rmSync(automationProvisioningTempRoot, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 });
+    mkdirSync(automationProvisioningTempRoot, { recursive: true, mode: 0o700 });
+    registerMeetingPlaybackProtocol();
     try {
       browserClosure = verifyBrowserClosure(
         app.isPackaged
@@ -4223,6 +4496,12 @@ else {
             },
             summary: "Read workspace summary",
           };
+        if(command==='automation.connectors.list')return{value:WEBHOOK_CONNECTORS,summary:'Listed supported webhook connector contracts'};
+        if(command==='automation.proposal.create'){
+          const chatId=typeof input.chatId==='string'?text(input.chatId,'chat ID',64):undefined;
+          const proposal=await prepareAutomationProposal(workspaceId,chatId,input.definition);
+          return{value:{proposalId:proposal.id,status:proposal.status,proposalDigest:proposal.proposalDigest,question:proposal.question},summary:'Prepared an automation proposal for explicit user confirmation'};
+        }
         if(command==='browser.status'){const settings=store.toolGatewaySettings(workspaceId),surface=inAppBrowser.status(workspaceId);return{value:{mode:settings.browserProfileMode,profile:settings.browserProfileName,allowedDomains:settings.browserAllowedDomains,stopped:settings.stopped,surface},summary:'Read browser readiness and policy status'}}
         if(command==='browser.domains.update'){const current=store.toolGatewaySettings(workspaceId),domains=Array.isArray(input.domains)?input.domains.map((item)=>text(item,'browser domain',253)):[];const next=store.setToolGatewaySettings(workspaceId,{...current,browserAllowedDomains:domains});return{value:{allowedDomains:next.browserAllowedDomains},summary:'Updated browser public-domain policy'}}
         if(command==='screen_capture.status'){return{value:{settings:store.screenCaptureSettings(workspaceId),captures:store.listScreenCaptures(workspaceId).map(({id,title,mode,capturedAt,expiresAt,bytes})=>({id,title,mode,capturedAt,expiresAt,bytes})),readiness:captureReadiness(process.platform,process.platform==='darwin'?systemPreferences.getMediaAccessStatus('screen') as 'granted'|'denied'|'restricted'|'not-determined'|'unknown':'unknown')},summary:'Read manual local screenshot status'}}
@@ -4407,23 +4686,16 @@ else {
         if(initialWorkspace)registerCaptureShortcut(initialWorkspace.id,store.screenCaptureSettings(initialWorkspace.id));
         const timer = setInterval(() => {
           for (const workspace of store.listWorkspaces()) {
-            if (
-              activeSyncRuns.has(workspace.id) ||
-              !syncService.status(workspace.id).configured
-            )
-              continue;
-            activeSyncRuns.add(workspace.id);
-            void syncService
-              .syncOnce(workspace.id, store, syncAbort.signal)
-              .then(() => processRemoteJobs(workspace.id))
-              .catch((error) => {
-                if (!syncAbort.signal.aborted)
-                  console.warn(
-                    "Workspace sync attempt failed",
-                    error instanceof Error ? error.message : "unknown",
-                  );
-              })
-              .finally(() => activeSyncRuns.delete(workspace.id));
+            const syncStatus=syncService.status(workspace.id);
+            if(!syncStatus.configured||(syncStatus.transportMode==='desktop-host'&&!syncStatus.peerHost?.running))continue;
+            if(!activeSyncRuns.has(workspace.id)){
+              activeSyncRuns.add(workspace.id);const signal=AbortSignal.any([syncAbort.signal,AbortSignal.timeout(20_000)]);
+              void syncService.syncOnce(workspace.id,store,signal).then(()=>processRemoteJobs(workspace.id)).catch((error)=>{if(!syncAbort.signal.aborted)console.warn('Workspace sync attempt failed',error instanceof Error?error.message:'unknown')}).finally(()=>activeSyncRuns.delete(workspace.id));
+            }
+            if(!activeWebhookRuns.has(workspace.id)){
+              activeWebhookRuns.add(workspace.id);const signal=AbortSignal.any([syncAbort.signal,AbortSignal.timeout(20_000)]);
+              void syncService.fetchWebhookEvents(workspace.id,store,signal).then(async(result)=>{if(result.imported>0)captureWindow()?.webContents.send('waypoint:webhook-events-imported',{workspaceId:workspace.id,imported:result.imported});await processAutomationRuns(workspace.id)}).catch((error)=>{if(!syncAbort.signal.aborted)console.warn('Workspace webhook receive failed',error instanceof Error?error.message:'unknown')}).finally(()=>activeWebhookRuns.delete(workspace.id));
+            }
           }
         }, 5_000);
         timer.unref();

@@ -181,6 +181,8 @@ const BLOCKED: Array<[RegExp, string]> = [
 ];
 const SECRET_VALUE =
   /authorization\s*[:=]\s*(?:(?:bearer|basic)\s+)?[^\s,;]+|(?:bearer|basic)\s+[A-Za-z0-9._~+/-]+=*|(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const JSON_SECRET_VALUE = /((?:"|')?(?:authorization|password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie|basicAuthCredentials)(?:"|')?\s*:\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+const AUTHORIZATION_VALUE = /(authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?[^\s,;}"']+/gi;
 const PRIVATE_KEY =
   /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g;
 const URL_AUTH = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi;
@@ -188,6 +190,8 @@ export function redactToolText(value: string, secretNames: string[] = []) {
   let result = value
     .replace(PRIVATE_KEY, "[REDACTED_PRIVATE_KEY]")
     .replace(URL_AUTH, "$1[REDACTED]@")
+    .replace(AUTHORIZATION_VALUE, "$1[REDACTED]")
+    .replace(JSON_SECRET_VALUE, '$1"[REDACTED]"')
     .replace(
       SECRET_VALUE,
       (match) => `${match.split(/[:=]/, 1)[0]}=[REDACTED]`,
@@ -441,6 +445,8 @@ export class ToolGateway {
     }
   >();
   private stopped = new Set<string>();
+  private completedRuns = new Map<string, ToolResult>();
+  private completionWaiters = new Map<string, (result: ToolResult) => void>();
   private browserGates = new Map<
     string,
     { url: string; close(): Promise<void> }
@@ -468,6 +474,7 @@ export class ToolGateway {
       { name: "waypoint.command", version: "1.0.0", effect: "domain" },
     ] as const;
   }
+  waitForCompletion(runId:string,timeoutMs=120_000):Promise<ToolResult>{const completed=this.completedRuns.get(runId);if(completed){this.completedRuns.delete(runId);return Promise.resolve(completed)}if(!/^[A-Za-z0-9_-]{16,128}$/.test(runId)||!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>300_000)return Promise.reject(new Error('Invalid tool completion wait'));if(this.completionWaiters.has(runId))return Promise.reject(new Error('Tool completion already has a waiter'));return new Promise<ToolResult>((resolve,reject)=>{const timer=setTimeout(()=>{this.completionWaiters.delete(runId);reject(new Error('Tool completion wait timed out'))},timeoutMs);timer.unref?.();this.completionWaiters.set(runId,(result)=>{clearTimeout(timer);resolve(result)})})}
   stop(workspaceId: string) {
     this.stopped.add(workspaceId);
     for (const [id, item] of this.active)
@@ -536,8 +543,10 @@ export class ToolGateway {
   async execute(
     request: ToolRequest,
     policy: ToolGatewayPolicy,
+    runtimeSecretValues: readonly string[] = [],
   ): Promise<{ runId: string; result?: ToolResult }> {
     validatePolicy(policy);
+    const redactRuntime=(value:string)=>runtimeSecretValues.reduce((result,secret)=>secret.length>=4?result.split(secret).join('[REDACTED]'):result,redactToolText(value,policy.secretNames));
     if (
       request.version !== 1 ||
       !ID.test(request.workspaceId) ||
@@ -1084,19 +1093,21 @@ export class ToolGateway {
         createdAt: startedAt,
       });
       let raw = "",
+        cliStdout = "",
         rawBytes = 0,
         truncated = false,
         sequence = 1,
         settled = false;
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
-      const consume = (chunk: string) => {
+      const consume = (chunk: string, stdout: boolean) => {
         if (truncated) return;
         const buffer = Buffer.from(chunk),
           remaining = MAX_OUTPUT_BYTES - rawBytes,
           take = buffer.subarray(0, Math.max(0, remaining)).toString();
         rawBytes += Buffer.byteLength(take);
         raw += take;
+        if (stdout) cliStdout += take;
         if (buffer.length > remaining) truncated = true;
         if (take.trim())
           this.hooks.progress({
@@ -1110,8 +1121,8 @@ export class ToolGateway {
             createdAt: new Date().toISOString(),
           });
       };
-      child.stdout.on("data", consume);
-      child.stderr.on("data", consume);
+      child.stdout.on("data", (chunk: string) => consume(chunk, true));
+      child.stderr.on("data", (chunk: string) => consume(chunk, false));
       const timeout = setTimeout(
         () => this.terminate(runId, active, "timed_out"),
         Math.min(policy.maxDurationMs, requestedTimeout),
@@ -1122,7 +1133,7 @@ export class ToolGateway {
         clearTimeout(timeout);
         if (active.forceTimer) clearTimeout(active.forceTimer);
         this.active.delete(runId);
-        const output = redactToolText(raw, policy.secretNames);
+        const output = redactRuntime(request.tool === "local_cli.run" ? cliStdout : raw);
         this.complete(
           request,
           base,
@@ -1134,7 +1145,7 @@ export class ToolGateway {
           overrideReason,
           remediation,
           code,
-          error,
+          error?redactRuntime(error):undefined,
         );
       };
       child.once("error", (error) =>
@@ -1247,6 +1258,8 @@ export class ToolGateway {
   ) {
     this.hooks.complete(result);
     this.hooks.learn?.(request, result, overrideReason, remediation);
+    const waiter=this.completionWaiters.get(result.receipt.id);
+    if(waiter){this.completionWaiters.delete(result.receipt.id);waiter(result)}else{this.completedRuns.set(result.receipt.id,result);while(this.completedRuns.size>200)this.completedRuns.delete(this.completedRuns.keys().next().value!)}
   }
   private failureNote(
     value: unknown,

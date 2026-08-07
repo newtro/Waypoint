@@ -11,7 +11,7 @@ export interface ExecutionFinalizationStore {
 
 export async function finalizeExecution(
   store: ExecutionFinalizationStore,
-  input: { runId: string; workspaceId: string; chatId: string; cli: 'codex' | 'claude'; result: TerminalResult; fallbackEvents?: ExecutionEvent[] },
+  input: { runId: string; workspaceId: string; chatId: string; cli: 'codex' | 'claude'; result: TerminalResult; fallbackEvents?: ExecutionEvent[]; answerOverride?: string },
   options: { attempts?: number; retryDelay?: (attempt: number) => Promise<void> } = {},
 ): Promise<'persisted' | 'owner-deleted'> {
   const attempts = Math.max(1, options.attempts ?? 3)
@@ -22,7 +22,7 @@ export async function finalizeExecution(
       const storedEvents = store.listExecutions(input.workspaceId, input.chatId).find((run) => run.id === input.runId)?.events
       const durableEvents = Array.isArray(storedEvents) ? storedEvents.filter((event): event is Record<string, unknown> => Boolean(event) && typeof event === 'object') : []
       const events: Array<Record<string, unknown>> = input.fallbackEvents?.length ? input.fallbackEvents : durableEvents
-      const answer = canonicalExecutionText(input.cli, events)
+      const answer = input.answerOverride ?? canonicalExecutionText(input.cli, events)
       store.finishExecution(input.runId, input.workspaceId, input.result, answer)
       return 'persisted'
     } catch (error) {

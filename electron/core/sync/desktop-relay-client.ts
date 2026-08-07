@@ -18,6 +18,7 @@ import {
   validateDesktopHostDescriptor,
   type DesktopHostDescriptor,
 } from "./peer-host-transport.js";
+import type { WebhookAuthMode, WebhookConnectorId } from "../webhook-automations.js";
 
 export interface RelayClientConfig {
   endpoint: string;
@@ -186,11 +187,11 @@ export class DesktopRelayClient {
       signal,
     ) as Promise<{ keyEpoch: number }>;
   }
-  async createWebhookChannel(label: string, signal?: AbortSignal) {
+  async createWebhookChannel(label: string, connectorId = "generic", channelId?: string, signal?: AbortSignal) {
     return this.json(
       "POST",
       "/v1/webhook-channels",
-      { label },
+      { label, connectorId, channelId },
       201,
       signal,
     ) as Promise<WebhookChannelSecret>;
@@ -395,6 +396,8 @@ export interface WebhookChannel {
   recipientDeviceId: string;
   recipientPublicKey: string;
   label: string;
+  connectorId: WebhookConnectorId;
+  authMode: WebhookAuthMode;
   secretVersion: number;
   status: "active" | "revoked";
   createdAt: string;
