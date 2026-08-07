@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { WorkspaceStore } from './store.js'
 import {createExecutionBudget,serializeExecutionBudget} from './execution-budget.js'
 import {remotePolicyDigest} from './cross-device-control.js'
+import {archiveIntegrity} from './backup.js'
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), 'waypoint-store-'))
@@ -19,6 +20,17 @@ const provenance = { provider: 'test', providerVersion: '1', model: 'fixture', m
 const receipt=(profile:ReturnType<WorkspaceStore['listSecurityProfiles']>[number],kind:'root'|'child',prompt:string)=>serializeExecutionBudget(createExecutionBudget({kind,profile,prompt,attachmentCount:0}))
 
 describe('durable local workspace', () => {
+  it('creates every required security profile before the new workspace is used', () => {
+    const { store, workspace } = fixture()
+    const profiles = store.listSecurityProfiles(workspace.id)
+    expect(profiles.map((profile) => profile.name)).toEqual(['Workspace — conservative', 'Autonomous developer'])
+    expect(profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Workspace — conservative', filesystem: 'read-only', tools: [] }),
+      expect.objectContaining({ name: 'Autonomous developer', filesystem: 'workspace-write', tools: ['tool-gateway', 'terminal', 'local-cli'] }),
+    ]))
+    store.close()
+  })
+
   it('hard-deletes a non-last workspace and its attachment bytes while preserving other workspaces', () => {
     const { root, store, workspace } = fixture();
     const disposable = store.createWorkspace('Disposable QA', root);
@@ -289,6 +301,23 @@ describe('durable local workspace', () => {
     expect(store.counts().tombstones).toBe(2)
     expect(store.listActivity(restored.id)).toHaveLength(originalActivityCount + 1)
     expect(store.listActivity(restored.id).some((event) => event.action === 'workspace.restored')).toBe(true)
+    store.close()
+  })
+
+  it('backfills required profiles when restoring a legacy archive without changing archived profile authority', () => {
+    const { root, store, workspace } = fixture()
+    const archive = structuredClone(store.exportWorkspace(workspace.id))
+    const conservative = archive.objects.security_profiles.find((value) => (value as Record<string, unknown>).name === 'Workspace — conservative') as Record<string, unknown>
+    conservative.filesystem = 'workspace-write'
+    conservative.approval = 'on-write'
+    archive.objects.security_profiles = [conservative]
+    archive.integrity = archiveIntegrity({ version: archive.version, exportedAt: archive.exportedAt, workspace: archive.workspace, objects: archive.objects })
+
+    const restored = store.restoreWorkspace(archive, 'Legacy restore', path.join(root, 'legacy-restored'))
+    expect(store.listSecurityProfiles(restored.id)).toEqual([
+      expect.objectContaining({ name: 'Workspace — conservative', filesystem: 'workspace-write', approval: 'on-write' }),
+      expect.objectContaining({ name: 'Autonomous developer', filesystem: 'workspace-write', approval: 'on-write' }),
+    ])
     store.close()
   })
 

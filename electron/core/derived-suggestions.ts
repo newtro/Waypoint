@@ -6,7 +6,7 @@ export type SuggestionCategory='commitment'|'decision'|'fact'|'person'|'project'
 export interface SuggestionCandidate{fingerprint:string;category:SuggestionCategory;title:string;body:string;sourceExcerpt:string;startOffset:number;endOffset:number;confidence:number}
 
 const rules:Array<{category:SuggestionCategory;confidence:number;pattern:RegExp;title:string}>=[
-  {category:'commitment',confidence:.93,pattern:/\b(?:I will|I'll|I need to|we need to|we will|must)\b|(?:^|\s)TODO:/i,title:'Commitment'},
+  {category:'commitment',confidence:.93,pattern:/\b(?:I will|I'll|I commit(?: to)?|I need to|we need to|we will|must)\b|(?:^|\s)TODO:/i,title:'Commitment'},
   {category:'decision',confidence:.91,pattern:/\b(?:we decided|I decided|decision:|we(?:'ll| will) use)\b/i,title:'Decision'},
   {category:'fact',confidence:.84,pattern:/\b(?:remember that|fact:|note that)\b/i,title:'Fact'},
   {category:'person',confidence:.79,pattern:/\b(?:meet with|met with|talk to|ask|follow up with)\s+[A-Z][\p{L}'-]+/iu,title:'Person'},

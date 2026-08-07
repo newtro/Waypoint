@@ -2263,7 +2263,7 @@ function registerIpc(): void {
       buttons: ["Create protected sync identity", "Cancel"],
       defaultId: 1,
       cancelId: 1,
-      message: "Set up this Mac as the first sync owner?",
+      message: "Set up this device as the first sync owner?",
       detail:
         "This creates local protected keys. Next, host directly on this device or explicitly configure the optional hosted relay.",
     });

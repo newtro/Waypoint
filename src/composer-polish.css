@@ -1,0 +1,18 @@
+.composer-controls > div:first-child {
+  flex-wrap: wrap;
+}
+
+.composer .provider-select {
+  width: 150px;
+  max-width: 150px;
+}
+
+.composer .profile-select {
+  width: 190px;
+  max-width: 190px;
+}
+
+.composer .model-select {
+  width: 210px;
+  max-width: min(210px, 30vw);
+}

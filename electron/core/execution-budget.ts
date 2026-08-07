@@ -4,9 +4,16 @@ import type {SecurityProfile} from './ai-workbench.js'
 export const EXECUTION_BUDGET_VERSION=1 as const
 export interface ExecutionBudgetReceipt{version:1;kind:'root'|'child';approvalOrigin:'explicit-chat-action'|'explicit-delegate-action';device:'local';maxPromptBytes:number;maxOutputBytes:number;maxDurationMs:number;maxConcurrency:1;maxDepth:1;maxChildren:number;maxAttempts:1;maxAttachments:number;fallbackAllowed:false;externalCostAllowed:false;peerAllowed:false;profileDigest:string}
 export function securityProfileDigest(profile:SecurityProfile):string{return createHash('sha256').update(JSON.stringify({id:profile.id,roots:profile.roots,filesystem:profile.filesystem,network:profile.network,tools:profile.tools,approval:profile.approval,maxDurationMs:profile.maxDurationMs,maxConcurrency:profile.maxConcurrency,peerEligible:profile.peerEligible,secretNames:profile.secretNames})).digest('hex')}
+function isBoundedLocalProfile(profile:SecurityProfile):boolean{
+  if(profile.maxConcurrency!==1||!Number.isSafeInteger(profile.maxDurationMs)||profile.maxDurationMs<1||profile.maxDurationMs>120_000||profile.secretNames.length||profile.peerEligible||profile.network!=='provider-only')return false
+  const conservative=profile.filesystem==='read-only'&&profile.approval==='always'&&profile.tools.length===0
+  const autonomousTools=['local-cli','terminal','tool-gateway']
+  const autonomous=profile.filesystem==='workspace-write'&&profile.approval==='on-write'&&profile.tools.length===autonomousTools.length&&[...profile.tools].sort().every((tool,index)=>tool===autonomousTools[index])
+  return conservative||autonomous
+}
 export function createExecutionBudget(input:{kind:'root'|'child';profile:SecurityProfile;prompt:string;attachmentCount:number}):ExecutionBudgetReceipt{
   const child=input.kind==='child',maxPromptBytes=child?512*1024:2_000_000,maxAttachments=child?0:20,maxOutputBytes=child?2*1024*1024:8*1024*1024
-  if(input.profile.maxConcurrency!==1||!Number.isSafeInteger(input.profile.maxDurationMs)||input.profile.maxDurationMs<1||input.profile.secretNames.length||input.profile.peerEligible||input.profile.tools.length||input.profile.filesystem!=='read-only'||input.profile.network!=='provider-only'||input.profile.approval!=='always')throw new Error('Security profile exceeds the local execution budget boundary')
+  if(!isBoundedLocalProfile(input.profile))throw new Error('Security profile exceeds the local execution budget boundary')
   if(input.attachmentCount<0||input.attachmentCount>maxAttachments)throw new Error('Attachment count exceeds the execution budget')
   if(Buffer.byteLength(input.prompt,'utf8')>maxPromptBytes)throw new Error('Prompt exceeds the execution byte budget')
   const profileDigest=securityProfileDigest(input.profile)

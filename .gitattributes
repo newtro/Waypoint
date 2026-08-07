@@ -1,3 +1,9 @@
 # These sources are verified byte-for-byte before packaging. Never let a
 # platform checkout rewrite their line endings.
 vendor/voice/fast-local-source/** -text
+
+# Acceptance fixtures and rendered evidence are byte-exact binary artifacts.
+.codex/qa-artifacts/*.pdf -text -diff
+.codex/qa-artifacts/*.docx -text -diff
+.codex/qa-artifacts/**/*.pdf -text -diff
+.codex/qa-artifacts/**/*.png -text -diff

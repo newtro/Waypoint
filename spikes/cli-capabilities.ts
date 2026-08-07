@@ -95,6 +95,66 @@ export function cliExecutionPath(
   return unique([pathApi.dirname(executable), ...cliSearchDirectories(env, platform)]).join(pathApi.delimiter)
 }
 
+export function cliExecutionEnvironment(
+  executable: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    PATH: cliExecutionPath(executable, env, platform),
+    HOME: env.HOME ?? env.USERPROFILE ?? '',
+    USER: env.USER ?? env.USERNAME ?? '',
+    LANG: env.LANG ?? 'en_US.UTF-8',
+    NO_COLOR: '1',
+  }
+  if (platform === 'win32') {
+    const required: Record<string, string | undefined> = {
+      SystemRoot: env.SystemRoot ?? env.SYSTEMROOT,
+      USERPROFILE: env.USERPROFILE ?? env.HOME,
+      APPDATA: env.APPDATA,
+      LOCALAPPDATA: env.LOCALAPPDATA,
+      TEMP: env.TEMP,
+      TMP: env.TMP,
+      COMSPEC: env.COMSPEC,
+    }
+    for (const [name, value] of Object.entries(required)) if (value) environment[name] = value
+  }
+  return environment
+}
+
+const npmShimEntrypoints: Record<CliName, string[]> = {
+  codex: ['node_modules', '@openai', 'codex', 'bin', 'codex.js'],
+  claude: ['node_modules', '@anthropic-ai', 'claude-code', 'cli.js'],
+}
+
+export async function cliProcessInvocation(
+  name: CliName,
+  executable: string,
+  args: string[],
+  options: Pick<DetectionOptions, 'env' | 'platform' | 'canAccess'> & { nodeExecutable?: string } = {},
+): Promise<{ executable: string; args: string[] }> {
+  const platform = options.platform ?? process.platform
+  if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)) {
+    const pathApi = path.win32,
+      shimDirectory = pathApi.dirname(executable),
+      entrypointCandidates = [
+        pathApi.resolve(shimDirectory, ...npmShimEntrypoints[name]),
+        pathApi.resolve(shimDirectory, '..', ...npmShimEntrypoints[name].slice(1)),
+      ],
+      canAccess = options.canAccess ?? ((candidate: string) => access(candidate))
+    let entrypoint: string | undefined
+    for (const candidate of entrypointCandidates) try { await canAccess(candidate); entrypoint = candidate; break } catch { /* Try the next bounded npm layout. */ }
+    if (!entrypoint) throw new Error(`${name} Windows npm shim has an unsupported package layout`)
+    const nodeExecutable = options.nodeExecutable ?? await resolveExecutable('node', options)
+    if (!nodeExecutable || /\.(?:cmd|bat)$/i.test(nodeExecutable)) throw new Error('A native Node.js executable is required for the Windows npm CLI shim')
+    return {
+      executable: nodeExecutable,
+      args: [entrypoint, ...args],
+    }
+  }
+  return { executable, args }
+}
+
 export async function resolveExecutable(
   name: string,
   options: Pick<DetectionOptions, 'env' | 'platform' | 'canAccess'> = {},
@@ -124,14 +184,17 @@ export async function resolveExecutable(
 export async function detectCli(name: CliName, options: DetectionOptions = {}): Promise<CliCapability> {
   const executable = await resolveExecutable(name, options)
   if (!executable) return { name, available: false, error: `${name} was not found in PATH or a supported local install location` }
-  const run = options.run ?? ((resolved, args) => execFileAsync(resolved, args, {
-    timeout: 5_000,
-    shell: false,
-    windowsHide: true,
-    env: { PATH: cliExecutionPath(resolved, options.env ?? process.env, options.platform ?? process.platform) },
-  }))
   try {
-    const { stdout, stderr } = await run(executable, ['--version'])
+    const env = options.env ?? process.env,
+      platform = options.platform ?? process.platform,
+      { stdout, stderr } = options.run
+        ? await options.run(executable, ['--version'])
+        : await cliProcessInvocation(name, executable, ['--version'], options).then((invocation) => execFileAsync(invocation.executable, invocation.args, {
+            timeout: 5_000,
+            shell: false,
+            windowsHide: true,
+            env: cliExecutionEnvironment(executable, env, platform),
+          }))
     const version = `${stdout}${stderr}`.trim()
     if (!version) return { name, available: false, executable, error: 'CLI returned an empty version' }
     const compatibility=cliCompatibility(name,version)

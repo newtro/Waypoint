@@ -39,7 +39,11 @@ describe("private installed-browser profile snapshots", () => {
     mkdirSync(source);
     writeFileSync(path.join(source, "data"), "12345");
     expect(() => snapshotBrowserProfile({ source, target, browserId: "brave", profileId: "Default", maxBytes: 4 })).toThrow("bounded");
-    symlinkSync(path.join(source, "data"), path.join(source, "link"));
+    if (process.platform === "win32") {
+      const linkedDirectory = path.join(root, "linked-directory");
+      mkdirSync(linkedDirectory);
+      symlinkSync(linkedDirectory, path.join(source, "link"), "junction");
+    } else symlinkSync(path.join(source, "data"), path.join(source, "link"));
     expect(() => snapshotBrowserProfile({ source, target, browserId: "brave", profileId: "Default" })).toThrow("symbolic link");
   });
 });

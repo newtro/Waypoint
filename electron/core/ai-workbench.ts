@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
-import { cliExecutionPath, resolveExecutable, type CliName } from '../../spikes/cli-capabilities.js'
+import { cliExecutionEnvironment, cliProcessInvocation, resolveExecutable, type CliName } from '../../spikes/cli-capabilities.js'
 import {redactToolText} from './tool-gateway.js'
 
 export type RunStatus = 'queued'|'running'|'completed'|'failed'|'canceled'|'timed_out'
@@ -29,6 +29,7 @@ export interface RunningExecution {
 }
 
 type SpawnProcess = (file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; shell: false; windowsHide: true }) => ChildProcessWithoutNullStreams
+type InvocationResolver = typeof cliProcessInvocation
 
 function isWithin(candidate: string, root: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate))
@@ -77,7 +78,12 @@ export function parseEvent(cli: CliName, line: string): ExecutionEvent {
 
 export class CliWorkbench {
   private readonly active = new Map<string, RunningExecution>()
-  constructor(private readonly spawnProcess: SpawnProcess = spawn as SpawnProcess, private readonly resolver = resolveExecutable) {}
+  constructor(
+    private readonly spawnProcess: SpawnProcess = spawn as SpawnProcess,
+    private readonly resolver = resolveExecutable,
+    private readonly platform: NodeJS.Platform = process.platform,
+    private readonly invocationResolver: InvocationResolver = cliProcessInvocation,
+  ) {}
 
   async start(runId: string, request: RunRequest, onEvent: (event: ExecutionEvent) => void): Promise<RunningExecution> {
     validateRequest(request)
@@ -88,8 +94,9 @@ export class CliWorkbench {
     if(request.imagePaths?.some((imagePath)=>!path.isAbsolute(imagePath)))throw new Error('Attachment image paths must be absolute')
     if(request.cli!=='codex'&&request.imagePaths?.length)throw new Error(`${request.cli} adapter does not support image delivery`)
     const args = adapterArgs(request.cli, request.prompt, request.model, request.imagePaths)
-    const environment: NodeJS.ProcessEnv = { PATH: cliExecutionPath(executable), HOME: process.env.HOME ?? '', USER: process.env.USER ?? '', LANG: process.env.LANG ?? 'en_US.UTF-8', NO_COLOR: '1' }
-    const child = this.spawnProcess(executable, args, { cwd: path.resolve(request.workspaceRoot), env: environment, shell: false, windowsHide: true })
+    const environment = cliExecutionEnvironment(executable, process.env, this.platform),
+      invocation = await this.invocationResolver(request.cli, executable, args, { platform: this.platform })
+    const child = this.spawnProcess(invocation.executable, invocation.args, { cwd: path.resolve(request.workspaceRoot), env: environment, shell: false, windowsHide: true })
     let settled = false, canceled = false, timedOut = false, outputLimited = false, stderr = '', buffer = '', outputBytes = 0
     const timeoutMs = Math.min(request.timeoutMs ?? request.profile.maxDurationMs, request.profile.maxDurationMs)
     let forceTimer: NodeJS.Timeout|undefined

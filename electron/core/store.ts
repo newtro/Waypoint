@@ -280,6 +280,7 @@ export class WorkspaceStore {
       this.db.prepare('INSERT INTO workspaces VALUES (?,?,?,?)').run(workspace.id, workspace.name, workspace.localPath, workspace.createdAt);
       this.syncJournal.ensureWorkspace(workspace.id);
       this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+      this.ensureAutonomousDeveloperProfile(workspace.id, workspace.localPath);
       this.activity(workspace.id, 'workspace', 'created', workspace.id, 'workspace', { localPath: workspace.localPath });
     });
     return workspace;
@@ -620,7 +621,7 @@ export class WorkspaceStore {
     peerEligible: boolean;
     secretNames: string[];
   }> {
-    const rows = this.db.prepare('SELECT id,name,roots_json roots,filesystem,network,tools_json tools,approval,max_duration_ms maxDurationMs,max_concurrency maxConcurrency,peer_eligible peerEligible,secret_names_json secretNames FROM security_profiles WHERE workspace_id=? ORDER BY created_at').all(workspaceId) as Array<Record<string, unknown>>;
+    const rows = this.db.prepare("SELECT id,name,roots_json roots,filesystem,network,tools_json tools,approval,max_duration_ms maxDurationMs,max_concurrency maxConcurrency,peer_eligible peerEligible,secret_names_json secretNames FROM security_profiles WHERE workspace_id=? ORDER BY CASE name WHEN 'Workspace — conservative' THEN 0 WHEN 'Autonomous developer' THEN 1 ELSE 2 END,created_at,id").all(workspaceId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       ...row,
       id: String(row.id),
@@ -2159,6 +2160,8 @@ export class WorkspaceStore {
             idMap.set(String(row.security_profile_id), profile.id);
           }
         }
+        if (!this.db.prepare("SELECT 1 FROM security_profiles WHERE workspace_id=? AND name='Workspace — conservative'").get(workspace.id)) this.createDefaultSecurityProfile(workspace.id, workspace.localPath);
+        this.ensureAutonomousDeveloperProfile(workspace.id, workspace.localPath);
         for (const rowValue of archive.objects.documents ?? []) {
           const row = rowValue as Record<string, unknown>,
             id = idMap.get(String(row.id))!;

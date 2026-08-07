@@ -1,0 +1,5 @@
+Waypoint TXT Import Fixture
+
+WAYPOINT_TXT_19D4 is a disposable Windows acceptance marker.
+It verifies plain-text import, indexing, search, provenance, reindex, and deletion behavior.
+Created only for QA on 2026-08-06. No production or personal data is present.

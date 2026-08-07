@@ -26,6 +26,7 @@ import "./auto-chat-title.css";
 import "./chat-header-actions.css";
 import "./voice-mode.css";
 import "./screen-capture.css";
+import "./composer-polish.css";
 import {
   BrowserPcmCapture,
   BrowserSpeechMonitor,
@@ -155,8 +156,6 @@ export function App() {
     [chatCli, setChatCli] = useState<"codex" | "claude" | "openrouter">(
       "codex",
     ),
-    [routeProposal, setRouteProposal] =
-      useState<Awaited<ReturnType<Window["waypoint"]["proposeChatRoute"]>>>(),
     [selectedProfileId, setSelectedProfileId] = useState("");
   const [documentIndexes, setDocumentIndexes] = useState<
       Record<
@@ -288,7 +287,6 @@ export function App() {
     [voiceDevices, setVoiceDevices] = useState<MediaDeviceInfo[]>([]),
     [voicePartial, setVoicePartial] = useState("");
   const refreshGate = useRef(new RefreshGate()),
-    routeGate = useRef(new RefreshGate()),
     composerRef = useRef<HTMLTextAreaElement>(null),
     transcriptRef = useRef<HTMLElement>(null),
     transcriptFollowingRef = useRef(true),
@@ -1305,40 +1303,6 @@ export function App() {
     const timer = window.setTimeout(() => setChatCli(available.name), 0);
     return () => window.clearTimeout(timer);
   }, [capabilities, chatCli]);
-  useEffect(() => {
-    if (
-      !workspace ||
-      !selectedChatId ||
-      !selectedProfileId ||
-      chatCli === "openrouter"
-    ) {
-      const clear = window.setTimeout(() => setRouteProposal(undefined), 0);
-      return () => window.clearTimeout(clear);
-    }
-    const token = routeGate.current.begin(),
-      timer = window.setTimeout(() => {
-        if (routeGate.current.isCurrent(token)) setRouteProposal(undefined);
-      }, 0),
-      ids = attachments
-        .filter((item) => item.ownerId === selectedChatId)
-        .map((item) => item.id);
-    void window.waypoint
-      .proposeChatRoute(
-        workspace.id,
-        selectedChatId,
-        chatCli,
-        selectedProfileId,
-        ids,
-        false,
-      )
-      .then((route) => {
-        if (routeGate.current.isCurrent(token)) setRouteProposal(route);
-      })
-      .catch(() => {
-        if (routeGate.current.isCurrent(token)) setRouteProposal(undefined);
-      });
-    return () => window.clearTimeout(timer);
-  }, [workspace, selectedChatId, chatCli, selectedProfileId, attachments]);
   useEffect(() => {
     void Promise.resolve()
       .then(refreshOpenRouter)
@@ -3807,6 +3771,7 @@ export function App() {
                       <span />
                     </button>
                     <select
+                      className="provider-select"
                       name="cli"
                       value={chatCli}
                       onChange={(event) =>
@@ -3840,6 +3805,7 @@ export function App() {
                       </option>
                     </select>
                     <select
+                      className="profile-select"
                       name="profile"
                       value={selectedProfileId}
                       onChange={(event) =>
@@ -3854,6 +3820,7 @@ export function App() {
                       ))}
                     </select>
                     <select
+                      className="model-select"
                       name="model"
                       aria-label={`${chatCli} model`}
                       value={selectedComposerModel}
@@ -3896,13 +3863,6 @@ export function App() {
                       : "Text can be passed to Claude. Images, PDF, and Word stay local."}{" "}
                   {chatCli !== "openrouter" &&
                     cliModels.find((item) => item.provider === chatCli)?.reason}
-                </p>
-                <p className="route-copy" role="status">
-                  {chatCli === "openrouter"
-                    ? `${openRouter?.capability.reason ?? "OpenRouter status unavailable"} Fallback only at cap to the configured available subscription route.`
-                    : routeProposal?.selected
-                      ? `Route: ${routeProposal.selected} · local signed-in CLI · ${routeProposal.fallbackEnabled ? "fallback enabled" : "no fallback"} · ${routeProposal.securityProfileId}`
-                      : "No eligible local route. Check provider health; fallback remains disabled."}
                 </p>
               </form>
               <small className="composer-hint">
@@ -4670,7 +4630,7 @@ export function App() {
             {drawer === "meetings" && (
               <div className="drawer-body">
                 <p className="drawer-intro">
-                  Audio-only recording stays on this Mac and is never synced or
+                  Audio-only recording stays on this device and is never synced or
                   uploaded. Confirm that everyone has consented and that
                   recording is legal where you are. Recordings remain until you
                   explicitly delete them.

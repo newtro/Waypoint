@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cliCompatibility, cliExecutionPath, cliSearchDirectories, detectCli, parseCliVersion, resolveExecutable } from './cli-capabilities.js'
+import { execFile } from 'node:child_process'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { promisify } from 'node:util'
+import os from 'node:os'
+import path from 'node:path'
+import { cliCompatibility, cliExecutionEnvironment, cliExecutionPath, cliProcessInvocation, cliSearchDirectories, detectCli, parseCliVersion, resolveExecutable } from './cli-capabilities.js'
+
+const execFileAsync = promisify(execFile)
 
 describe('cross-platform CLI capability detection', () => {
   it('uses PATHEXT for native Windows resolution', async () => {
@@ -25,6 +32,47 @@ describe('cross-platform CLI capability detection', () => {
   it('builds a child PATH that keeps the resolved executable and its runtime dependencies reachable', () => {
     expect(cliExecutionPath('/Users/test/.local/bin/claude', { PATH: '/usr/bin', HOME: '/Users/test' }, 'darwin').split(':'))
       .toEqual(expect.arrayContaining(['/Users/test/.local/bin', '/usr/bin', '/opt/homebrew/bin']))
+  })
+
+  it('preserves only the Windows runtime variables required by native CLI children', () => {
+    const value=cliExecutionEnvironment('C:\\Tools\\codex.cmd',{PATH:'C:\\Windows\\System32',USERPROFILE:'C:\\Users\\test',USERNAME:'test',SystemRoot:'C:\\Windows',APPDATA:'C:\\Users\\test\\AppData\\Roaming',LOCALAPPDATA:'C:\\Users\\test\\AppData\\Local',TEMP:'C:\\Temp',TMP:'C:\\Temp',COMSPEC:'C:\\Windows\\System32\\cmd.exe',SECRET_TOKEN:'no'},'win32')
+    expect(value).toMatchObject({HOME:'C:\\Users\\test',USER:'test',USERPROFILE:'C:\\Users\\test',SystemRoot:'C:\\Windows',APPDATA:'C:\\Users\\test\\AppData\\Roaming',LOCALAPPDATA:'C:\\Users\\test\\AppData\\Local',TEMP:'C:\\Temp',TMP:'C:\\Temp',COMSPEC:'C:\\Windows\\System32\\cmd.exe'})
+    expect(value).not.toHaveProperty('SECRET_TOKEN')
+  })
+
+  it('runs Windows npm shims through their package entrypoint without changing native or POSIX executables', async () => {
+    await expect(cliProcessInvocation('codex', 'C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd', ['--version'], {
+      platform: 'win32', nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe', canAccess: async () => undefined,
+    })).resolves.toEqual({
+      executable: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js', '--version'],
+    })
+    await expect(cliProcessInvocation('codex', 'C:\\Tools\\codex.exe', ['--version'], { platform: 'win32' })).resolves.toEqual({
+      executable: 'C:\\Tools\\codex.exe', args: ['--version'],
+    })
+    await expect(cliProcessInvocation('codex', '/opt/homebrew/bin/codex', ['--version'], { platform: 'darwin' })).resolves.toEqual({
+      executable: '/opt/homebrew/bin/codex', args: ['--version'],
+    })
+  })
+
+  it('supports a project-local Windows npm .bin shim without executing the shim', async () => {
+    const expected='C:\\repo\\node_modules\\@openai\\codex\\bin\\codex.js'
+    await expect(cliProcessInvocation('codex','C:\\repo\\node_modules\\.bin\\codex.cmd',['--version'],{platform:'win32',nodeExecutable:'C:\\Program Files\\nodejs\\node.exe',canAccess:async(candidate)=>{if(candidate!==expected)throw new Error('missing')}})).resolves.toEqual({executable:'C:\\Program Files\\nodejs\\node.exe',args:[expected,'--version']})
+  })
+
+  it.runIf(process.platform === 'win32')('preserves spaces and command metacharacters through a real Windows shim invocation', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'waypoint cli shim ')),
+      shim = path.join(root, 'codex.cmd'),
+      entrypoint = path.join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'),
+      dangerous = ['model&echo INJECTION', 'pipe|more', 'redirect>file', '<input', 'caret^value', 'percent%PATH%', 'bang!']
+    mkdirSync(path.dirname(entrypoint), { recursive: true })
+    writeFileSync(shim, '@echo off\r\n')
+    writeFileSync(entrypoint, 'console.log(JSON.stringify(process.argv.slice(2)))\n')
+    try {
+      const invocation = await cliProcessInvocation('codex', shim, dangerous, { platform: 'win32', nodeExecutable: process.execPath })
+      const { stdout } = await execFileAsync(invocation.executable, invocation.args, { shell: false })
+      expect(JSON.parse(stdout.trim())).toEqual(dangerous)
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
   it('executes the exact resolved path without re-resolving the name', async () => {

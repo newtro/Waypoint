@@ -53,10 +53,28 @@ describe('AI workbench privilege boundary', () => {
     await expect(running.completion).resolves.toMatchObject({status:'completed',exitCode:0})
     expect(spawn).toHaveBeenCalledWith('/trusted/bin/codex', expect.any(Array), expect.objectContaining({cwd:workspaceRoot,shell:false}))
     const environment = capturedOptions!.env
-    expect(Object.keys(environment).sort()).toEqual(['HOME','LANG','NO_COLOR','PATH','USER'])
+    expect(environment).toMatchObject({HOME:expect.any(String),LANG:expect.any(String),NO_COLOR:'1',PATH:expect.any(String),USER:expect.any(String)})
+    expect(environment).not.toHaveProperty('OPENAI_API_KEY')
     expect(environment.PATH?.split(path.delimiter)[0]).toBe(path.dirname('/trusted/bin/codex'))
     expect(child.stdin.read()?.toString()).toBe('hello')
     expect(events).toContainEqual(expect.objectContaining({type:'text',text:'done'}))
+  })
+
+  it('executes a resolved Windows npm shim through its package entrypoint while retaining the exact CLI path as provenance', async () => {
+    const child = new FakeChild(), spawn = vi.fn(() => child)
+    const invocation = vi.fn(async (_name, _executable, args) => ({
+      executable: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js', ...args],
+    }))
+    const workbench = new CliWorkbench(spawn as never, async () => 'C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd', 'win32', invocation as never)
+    const running = await workbench.start('windows-cmd', {cli:'codex',prompt:'hello',workspaceRoot,profile}, ()=>{})
+    expect(spawn).toHaveBeenCalledWith(expect.stringMatching(/node\.exe$/i), expect.arrayContaining([
+      'C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js', 'exec',
+    ]), expect.objectContaining({cwd:workspaceRoot,shell:false}))
+    expect(running.executable).toBe('C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd')
+    expect(invocation).toHaveBeenCalledWith('codex', 'C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd', expect.arrayContaining(['exec']), { platform: 'win32' })
+    child.emit('close', 0)
+    await expect(running.completion).resolves.toMatchObject({status:'completed'})
   })
 
   it('records failure, cancellation, and timeout as terminal outcomes', async () => {
