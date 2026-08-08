@@ -43,6 +43,7 @@ import "./in-app-browser.css";
 import "./execution-timeline-polish.css";
 import "./main-tabs.css";
 import "./settings-workspace.css";
+import "./theme.css";
 import {
   BrowserPcmCapture,
   BrowserSpeechMonitor,
@@ -68,6 +69,23 @@ import {
   primaryShortcutLabel,
   primaryShortcutPressed,
 } from "./platform-shortcuts";
+import {
+  applyAppearance,
+  nextAppearanceFromKey,
+  persistAppearance,
+  readAppearance,
+  resolveAppearance,
+  type AppearancePreference,
+} from "./theme";
+
+const appearanceMediaQuery = window.matchMedia("(prefers-color-scheme: dark)"),
+  initialAppearance = readAppearance(window.localStorage);
+applyAppearance(
+  document.documentElement,
+  initialAppearance,
+  appearanceMediaQuery.matches,
+);
+
 type VoiceMode = "push_to_talk" | "hands_free";
 type VoiceState =
   "off" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
@@ -188,6 +206,9 @@ function ChatAttachmentPreview({ workspaceId, chatId, attachment, queued, onOpen
 }
 
 export function App() {
+  const [appearance, setAppearance] =
+      useState<AppearancePreference>(initialAppearance),
+    [systemDark, setSystemDark] = useState(appearanceMediaQuery.matches);
   const platform = window.waypoint.platform,
     shortcutModifier = primaryShortcutLabel(platform),
     knowledgeIcon = knowledgeShortcutIcon(platform);
@@ -422,6 +443,16 @@ export function App() {
   function showError(reason: unknown) {
     setError(reason instanceof Error ? reason.message : String(reason));
   }
+  function changeAppearance(next: AppearancePreference) {
+    setAppearance(next);
+    try {
+      persistAppearance(window.localStorage, next);
+    } catch {
+      setNotice(
+        "Appearance changed for this session. Local preference storage is unavailable.",
+      );
+    }
+  }
   useEffect(() => {
     if (!error && !notice) return;
     const timer = window.setTimeout(
@@ -433,6 +464,14 @@ export function App() {
     );
     return () => window.clearTimeout(timer);
   }, [error, notice]);
+  useEffect(() => {
+    const update = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+    appearanceMediaQuery.addEventListener("change", update);
+    return () => appearanceMediaQuery.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    applyAppearance(document.documentElement, appearance, systemDark);
+  }, [appearance, systemDark]);
   async function selectReflectionRun(runId: string) {
     if (!workspace) return;
     setSelectedReflectionRunId(runId);
@@ -5595,6 +5634,7 @@ export function App() {
                 <nav className="settings-page-nav" aria-label="Settings sections">
                   <strong>Settings</strong>
                   {[
+                    ["settings-appearance", "Appearance"],
                     ["settings-capture", "Screen capture"],
                     ["settings-tools", "AI tools"],
                     ["settings-voice", "Voice chat"],
@@ -5625,6 +5665,47 @@ export function App() {
                       Configure local tools, models, capture, voice, sync, and recovery without leaving your active work.
                     </span>
                   </div>
+                <section id="settings-appearance" className="settings-section">
+                  <h3>Appearance</h3>
+                  <p className="drawer-intro">
+                    Choose Waypoint’s visual atmosphere on this device. System follows your operating-system appearance automatically.
+                  </p>
+                  <div className="appearance-picker" role="radiogroup" aria-label="App appearance">
+                    {([
+                      ["system", "System", "Follow this device"],
+                      ["light", "Light", "Clear paper and sage"],
+                      ["dark", "Dark", "Midnight cartography"],
+                    ] as const).map(([value, label, detail]) => (
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={appearance === value}
+                        id={`appearance-${value}`}
+                        tabIndex={appearance === value ? 0 : -1}
+                        onClick={() => changeAppearance(value)}
+                        onKeyDown={(event) => {
+                          const next = nextAppearanceFromKey(appearance, event.key);
+                          if (!next) return;
+                          event.preventDefault();
+                          changeAppearance(next);
+                          window.requestAnimationFrame(() =>
+                            document.getElementById(`appearance-${next}`)?.focus(),
+                          );
+                        }}
+                        key={value}
+                      >
+                        <span className={`appearance-swatch ${value}`} aria-hidden="true" />
+                        <strong>{label}</strong>
+                        <small>{detail}</small>
+                      </button>
+                    ))}
+                  </div>
+                  <small className="appearance-status" role="status">
+                    {appearance === "system"
+                      ? `Following your device · currently ${resolveAppearance(appearance, systemDark) === "dark" ? "Dark" : "Light"}`
+                      : `${appearance === "dark" ? "Midnight cartography" : "Light"} is active on this device`}
+                  </small>
+                </section>
                 <section id="settings-capture" className="settings-section">
                   <h3>Screen capture</h3>
                   <p className="drawer-intro">Choose whether your shortcut opens the full capture studio or takes a screenshot immediately. Captures stay local and are never sent to a model unless you explicitly add one to chat.</p>

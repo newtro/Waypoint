@@ -457,3 +457,10 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Waypoint has a no-warnings verification policy. ESLint runs with `--max-warnings 0`, suppressions require a narrow documented reason, and build budgets must be explicit rather than leaving recurring warnings in successful gates.
 - Required development commands use the repository-pinned Node 24.15.x and npm 12.0.x toolchain. A local unsigned package is permitted for development verification, but release signing remains a named external identity gate and is never represented as release-ready.
 - Screen-capture workflow migration 38 restores only Windows settings silently changed by shipped migration 34; an explicit later Quick selection always wins.
+
+# 2026-08-08 — Midnight cartography appearance
+
+- Waypoint supports System, Light, and Dark appearance modes. System is the safe default for a new device and follows operating-system appearance changes live.
+- Dark is a complete product theme rather than an inverted chat canvas: deep cartographic ink surfaces, mint focus and navigation, sparing amber detail, and restrained compass-orbit depth cover chat, tools, Settings, capture, browser, and dialogs.
+- Appearance is device-local presentation state. It is not workspace content and does not enter backup, sync, relay, or cross-workspace policy data.
+- Accessibility takes priority over visual flare: semantic selection, visible focus, reduced-motion behavior, practical desktop reflow, and readable contrast are phase gates.

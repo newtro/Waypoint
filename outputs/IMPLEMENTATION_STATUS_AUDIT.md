@@ -27,6 +27,10 @@ Status as of 2026-08-06. This is the canonical promised-feature trace for select
 
 Screen captures now attach directly to the selected chat without a persistent success notice. Capture and pasted images render as accessible bounded thumbnails in the composer and durable transcript, reopen through a protected viewer, persist across restart, and fail closed on stale context, corruption, excessive decoded dimensions, deletion, or ownership mismatch. The repair preserves pulled Windows guided/quick capture behavior and adds schema 38 to restore only untouched preferences silently changed by schema 34. Exact pinned-toolchain full tests, zero-warning lint, production build, packaged runtime closure, normal-profile package inspection, and independent review all passed with no remaining severity finding. User-consented macOS capture and physical Windows picker/shortcut confirmation remain the only device gates.
 
+## 2026-08-08 — System, Light, and midnight-cartography Dark appearance
+
+The desktop shell now has a device-local System/Light/Dark appearance setting with pre-render application, live OS following, and restart persistence. Midnight Dark is complete across chat, Markdown, execution history, Settings, Screen Capture, In-App Browser, attachments, dialogs, narrow layouts, focus states, and reduced motion. The pinned full test gate, zero-warning lint, production build, package closure, normal-profile visual/restart checks, computed contrast probes, keyboard interaction checks, and fresh independent 0-blocker/0-high/0-medium/0-low review pass.
+
 ## Post-R5 safe sequencing
 
 The remaining R5 expansions require a wider user policy or device/network authority: wider execution budgets, Codex no-tool child mode, peer execution, new providers/APIs, and remote embedding workers. R6 mobile requires platform/cache/distribution/notification/device decisions and hardware. These gates are recorded without inventing permission. The next documented safe local feature is therefore backup administration: explicit verification and isolated restore drills using the existing local export/restore contract.
