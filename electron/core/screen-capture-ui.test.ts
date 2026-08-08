@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 const styles = readFileSync(new URL('../../src/screen-capture.css', import.meta.url), 'utf8')
 const component = readFileSync(new URL('../../src/screen-capture-studio.tsx', import.meta.url), 'utf8')
 const settings = readFileSync(new URL('../../src/main.tsx', import.meta.url), 'utf8')
+const app = settings
 const recorder = readFileSync(new URL('../../src/hotkey-recorder.tsx', import.meta.url), 'utf8')
 
 describe('screen capture visual workspace', () => {
@@ -26,7 +27,7 @@ describe('screen capture visual workspace', () => {
   })
 
   it('keeps every post-capture action visible in the polished ready state', () => {
-    for (const label of ['Copy', 'Save locally', 'Annotate', 'Add to Chat', 'Add to Knowledge', 'Discard']) {
+    for (const label of ['Copy', 'Save locally', 'Annotate', 'Add to Knowledge', 'Discard']) {
       expect(component).toContain(`>${label}<`)
     }
     expect(component).toContain('aria-label="Screenshot quick actions"')
@@ -34,6 +35,26 @@ describe('screen capture visual workspace', () => {
     expect(component).toContain("sources.length&&!captures.some((item)=>item.id===capture.id)")
     expect(component).toContain('className="capture-ready-image"')
     expect(component).toContain('Local preview · nothing has been shared')
+  })
+
+  it('hands Add to Chat directly to the active composer without a success toast', () => {
+    expect(component).toContain('async function addToChat(captureId:string)')
+    expect(component).toContain('onAddedToChat(target.chatId,result.attachment)')
+    expect(component).toContain("attachingCaptureId===capture.id?'Adding…':'Add to Chat'")
+    expect(component).toContain('Start or select a chat before adding this screenshot.')
+    expect(component).toContain('Could not add screenshot to chat.')
+    expect(component).not.toContain('Screenshot queued in this chat')
+    expect(app).toContain('setAttachments((items)=>items.some((item)=>item.id===attachment.id)?items:[...items,attachment])')
+  })
+
+  it('renders protected image thumbnails, a safe viewer, and pasted images', () => {
+    expect(app).toContain('function ChatAttachmentPreview')
+    expect(app).toContain('attachmentImagePreview(workspaceId, attachment.id, "thumbnail")')
+    expect(app).toContain('alt={`Image attachment: ${attachment.name}`}')
+    expect(app).toContain('aria-label={`Open full image ${attachment.name}`}')
+    expect(app).toContain('Image missing or corrupt')
+    expect(app).toContain('onPaste={(event) => void pasteChatImages(event)}')
+    expect(app).toContain('addPastedChatImage')
   })
 
   it('provides an equivalent keyboard annotation path', () => {

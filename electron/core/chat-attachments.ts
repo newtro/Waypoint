@@ -15,6 +15,17 @@ export const ATTACHMENT_MEDIA_BY_EXTENSION:Readonly<Record<string,string>>={
   '.txt':'text/plain','.md':'text/markdown','.markdown':'text/markdown',
 }
 export const SUPPORTED_ATTACHMENT_MEDIA_TYPES=new Set(Object.values(ATTACHMENT_MEDIA_BY_EXTENSION))
+export const MAX_IMAGE_PIXELS=40_000_000
+
+export function imageDimensions(mediaType:string,bytes:Uint8Array):{width:number;height:number}{
+  const buffer=Buffer.from(bytes);let width=0,height=0
+  if(mediaType==='image/png'&&buffer.length>=24){width=buffer.readUInt32BE(16);height=buffer.readUInt32BE(20)}
+  else if(mediaType==='image/gif'&&buffer.length>=10){width=buffer.readUInt16LE(6);height=buffer.readUInt16LE(8)}
+  else if(mediaType==='image/jpeg'){let offset=2;while(offset+8<buffer.length){if(buffer[offset]!==0xff){offset++;continue}const marker=buffer[offset+1],length=buffer.readUInt16BE(offset+2);if(length<2)break;if((marker>=0xc0&&marker<=0xc3)||(marker>=0xc5&&marker<=0xc7)||(marker>=0xc9&&marker<=0xcb)||(marker>=0xcd&&marker<=0xcf)){height=buffer.readUInt16BE(offset+5);width=buffer.readUInt16BE(offset+7);break}offset+=2+length}}
+  else if(mediaType==='image/webp'&&buffer.length>=30){const kind=buffer.toString('ascii',12,16);if(kind==='VP8X'){width=1+buffer.readUIntLE(24,3);height=1+buffer.readUIntLE(27,3)}else if(kind==='VP8 '&&buffer.length>=30){width=buffer.readUInt16LE(26)&0x3fff;height=buffer.readUInt16LE(28)&0x3fff}else if(kind==='VP8L'&&buffer.length>=25&&buffer[20]===0x2f){const bits=buffer.readUInt32LE(21);width=(bits&0x3fff)+1;height=((bits>>>14)&0x3fff)+1}}
+  if(width<1||height<1||width>16384||height>16384||width*height>MAX_IMAGE_PIXELS)throw new Error('Image dimensions are invalid or exceed the safe preview limit')
+  return{width,height}
+}
 
 function starts(bytes:Uint8Array,signature:number[]):boolean{return signature.every((value,index)=>bytes[index]===value)}
 function validateSignature(mediaType:string,bytes:Uint8Array):void{

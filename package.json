@@ -1,6 +1,7 @@
 {
   "name": "waypoint",
   "version": "0.0.0",
+  "author": "Waypoint",
   "private": true,
   "packageManager": "npm@12.0.1",
   "engines": {
@@ -33,7 +34,7 @@
     "preinstall": "node scripts/enforce-toolchain.mjs",
     "build": "tsc -b && tsc -p tsconfig.preload.json && node scripts/copy-preload.mjs && vite build",
     "dev": "vite",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:dependencies": "npm audit --audit-level=low && npm audit signatures && npm run verify:dependency-policy && npm run verify:malware-advisories && npm run report:dependencies",

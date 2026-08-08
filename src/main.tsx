@@ -1,4 +1,5 @@
 import {
+  type ClipboardEvent,
   FormEvent,
   Fragment,
   StrictMode,
@@ -34,6 +35,7 @@ import "./styles.css";
 import "./provider-settings.css";
 import "./auto-chat-title.css";
 import "./chat-header-actions.css";
+import "./chat-attachments.css";
 import "./voice-mode.css";
 import "./screen-capture.css";
 import "./composer-polish.css";
@@ -156,6 +158,35 @@ const workspaceViewTitles: Record<WorkspaceView, string> = {
   browser: "In-App Browser",
 };
 
+type AttachmentViewer = { id: string; workspaceId: string; chatId: string; name: string; dataUrl: string; width: number; height: number };
+
+function ChatAttachmentPreview({ workspaceId, chatId, attachment, queued, onOpen, onRemove }: { workspaceId: string; chatId: string; attachment: AttachmentMetadata; queued?: boolean; onOpen(viewer: AttachmentViewer): void; onRemove?: () => void }) {
+  const [preview, setPreview] = useState<{ dataUrl: string; width: number; height: number }>(), [failed, setFailed] = useState(false);
+  const image = attachment.mediaType.startsWith("image/");
+  useEffect(() => {
+    if (!image) return;
+    let active = true;
+    void window.waypoint.attachmentImagePreview(workspaceId, attachment.id, "thumbnail").then((result) => {
+      if (active) setPreview({ dataUrl: `data:${result.mediaType};base64,${result.dataBase64}`, width: result.width, height: result.height });
+    }).catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [attachment.id, image, workspaceId]);
+  if (!image) return <span className="attachment-file-chip">▧ <b>{attachment.name}</b><small>{queued ? `${Math.ceil(attachment.bytes / 1024)} KiB` : "stored locally"}</small>{onRemove && <button type="button" aria-label={`Remove ${attachment.name}`} onClick={onRemove}>×</button>}</span>;
+  async function open() {
+    try {
+      const result = await window.waypoint.attachmentImagePreview(workspaceId, attachment.id, "viewer");
+      onOpen({ id: attachment.id, workspaceId, chatId, name: attachment.name, dataUrl: `data:${result.mediaType};base64,${result.dataBase64}`, width: result.width, height: result.height });
+    } catch { setFailed(true); }
+  }
+  return <figure className={`attachment-image-card${failed ? " failed" : ""}`}>
+    <button type="button" className="attachment-image-open" aria-label={`Open full image ${attachment.name}`} onClick={() => void open()} disabled={failed}>
+      {preview ? <img src={preview.dataUrl} width={preview.width} height={preview.height} alt={`Image attachment: ${attachment.name}`} /> : <span className="attachment-image-state">{failed ? "Preview unavailable" : "Loading image preview…"}</span>}
+    </button>
+    <figcaption><span title={attachment.name}>{attachment.name}</span><small>{failed ? "Image missing or corrupt" : queued ? `${Math.ceil(attachment.bytes / 1024)} KiB` : "stored locally"}</small></figcaption>
+    {onRemove && <button type="button" className="attachment-image-remove" aria-label={`Remove ${attachment.name}`} onClick={onRemove}>×</button>}
+  </figure>;
+}
+
 export function App() {
   const platform = window.waypoint.platform,
     shortcutModifier = primaryShortcutLabel(platform),
@@ -183,10 +214,12 @@ export function App() {
     });
   const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]),
     [attachmentBusy, setAttachmentBusy] = useState(false),
+    [attachmentViewer, setAttachmentViewer] = useState<AttachmentViewer>(),
     [chatCli, setChatCli] = useState<"codex" | "claude" | "openrouter">(
       "codex",
     ),
     [selectedProfileId, setSelectedProfileId] = useState("");
+  const attachmentContextRef = useRef<{ workspaceId?: string; chatId?: string }>({}), pasteAttemptRef = useRef(0), attachmentOperationsRef = useRef(0), viewerReturnFocusRef = useRef<HTMLElement | null>(null);
   const [documentIndexes, setDocumentIndexes] = useState<
       Record<
         string,
@@ -1204,8 +1237,7 @@ export function App() {
     setActivityCapture(status);
     setActivityExclusions(status.policy.exclusions.join("\n"));
   }
-  // refresh is protected by its own generation gate; subscription identity follows visible chat scope.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Subscription identity follows visible chat scope.
   useEffect(
     () =>
       window.waypoint.onInAppBrowserState((state) => {
@@ -1372,15 +1404,40 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [capabilities, chatCli]);
   useEffect(() => {
+    if (!attachmentViewer) return;
+    const background = [...document.querySelectorAll<HTMLElement>(".app-frame > :not(.attachment-viewer)")];
+    for (const item of background) item.inert = true;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAttachmentViewer(undefined);
+      if (event.key === "Tab") {
+        event.preventDefault();
+        document.querySelector<HTMLElement>(".attachment-viewer button")?.focus();
+      }
+    };
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("keydown", close);
+      for (const item of background) item.inert = false;
+      viewerReturnFocusRef.current?.focus();
+      viewerReturnFocusRef.current = null;
+    };
+  }, [attachmentViewer]);
+  useEffect(() => {
+    attachmentContextRef.current = { workspaceId: workspace?.id, chatId: selectedChatId };
+    pasteAttemptRef.current += 1;
+    const timer = window.setTimeout(() => setAttachmentViewer(undefined), 0);
+    return () => window.clearTimeout(timer);
+  }, [workspace?.id, selectedChatId]);
+  useEffect(() => {
     void Promise.resolve()
       .then(refreshOpenRouter)
       .catch(() => undefined);
   }, []);
   // Capability refresh is intentionally keyed only to opening the voice surface.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (drawer !== "settings") return;
     void loadVoiceCapability().catch(showError);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- capability loader is intentionally sampled only when Settings opens
   }, [drawer]);
   useEffect(() => {
     voiceStateRef.current = voiceState;
@@ -1421,7 +1478,6 @@ export function App() {
     };
   }, [workspace, selectedChatId]);
   // Speech completion is accepted only for the exact live turn and visible state.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(
     () =>
       window.waypoint.onVoiceSpeechState((event) => {
@@ -1460,10 +1516,10 @@ export function App() {
         setVoiceState("off");
         setVoicePartial("");
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- exact-turn refs deliberately decouple the capture callback identity
     [workspace, selectedChatId, voiceMode, voiceDevice, voiceSessionActive],
   );
   // The exact-turn refs intentionally guard this asynchronous native speech bridge.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (voiceState !== "thinking" || !workspace || !selectedChatId) return;
     const voice = voiceRunRef.current;
@@ -1534,6 +1590,7 @@ export function App() {
           showError(reason);
         }
       });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- exact-turn refs guard these intentionally sampled voice operations
   }, [
     voiceState,
     workspace,
@@ -1614,6 +1671,7 @@ export function App() {
               .catch(showError);
         }
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- browser events refresh through the generation-gated refresh function
     [workspace, selectedChatId],
   );
   useEffect(() => {
@@ -1958,8 +2016,10 @@ export function App() {
   }
   async function removeAttachment(id: string) {
     if (!workspace || !selectedChatId) return;
+    attachmentOperationsRef.current += 1;
     setAttachmentBusy(true);
     try {
+      if (attachmentViewer?.id === id) setAttachmentViewer(undefined);
       await window.waypoint.deleteAttachment(workspace.id, id);
       setAttachments(
         await window.waypoint.listChatAttachments(workspace.id, selectedChatId),
@@ -1967,7 +2027,55 @@ export function App() {
     } catch (reason) {
       showError(reason);
     } finally {
-      setAttachmentBusy(false);
+      attachmentOperationsRef.current = Math.max(0, attachmentOperationsRef.current - 1);
+      setAttachmentBusy(attachmentOperationsRef.current > 0);
+    }
+  }
+  async function pasteChatImages(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (!workspace || !selectedChatId) return;
+    const images = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+    if (!images.length) return;
+    event.preventDefault();
+    const target = { workspaceId: workspace.id, chatId: selectedChatId, attempt: ++pasteAttemptRef.current };
+    const added: string[] = [];
+    attachmentOperationsRef.current += 1;
+    setAttachmentBusy(true);
+    try {
+      const allowed: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
+      for (const [index, file] of images.entries()) {
+        if (file.size < 1 || file.size > 25 * 1024 * 1024) throw new Error("Pasted images must be no larger than 25 MiB");
+        const extension = allowed[file.type];
+        if (!extension) throw new Error(`Pasted ${file.type || "image"} is not supported`);
+        const base = file.name && file.name !== "image.png" ? file.name : `pasted-image-${Date.now()}-${index + 1}${extension}`;
+        const name = base.toLowerCase().endsWith(extension) ? base : `${base.replace(/\.[^.]+$/, "")}${extension}`;
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const current = attachmentContextRef.current;
+        if (pasteAttemptRef.current !== target.attempt || current.workspaceId !== target.workspaceId || current.chatId !== target.chatId) throw new Error("Image paste was canceled because the active chat changed");
+        const result = await window.waypoint.addPastedChatImage(target.workspaceId, target.chatId, name, file.type, bytes);
+        added.push(result.attachment.id);
+        const after = attachmentContextRef.current;
+        if (pasteAttemptRef.current !== target.attempt || after.workspaceId !== target.workspaceId || after.chatId !== target.chatId) throw new Error("Image paste was canceled because the active chat changed");
+        setAttachments((current) => current.some((item) => item.id === result.attachment.id) ? current : [...current, result.attachment]);
+      }
+    } catch (reason) {
+      const cleanup = await Promise.allSettled(added.map((id) => window.waypoint.deleteAttachment(target.workspaceId, id))), cleanupFailed = cleanup.some((item) => item.status === "rejected");
+      if (attachmentContextRef.current.workspaceId === target.workspaceId && attachmentContextRef.current.chatId === target.chatId) {
+        setAttachments(await window.waypoint.listChatAttachments(target.workspaceId, target.chatId).catch(() => []));
+        showError(cleanupFailed ? `${reason instanceof Error ? reason.message : String(reason)} A partially pasted image could not be removed; remove it from the prior chat before retrying.` : reason);
+      } else if (cleanupFailed) {
+        setError("A canceled pasted image could not be removed from the prior chat. Return to that chat and remove it before retrying.");
+      }
+    }
+    finally {
+      attachmentOperationsRef.current = Math.max(0, attachmentOperationsRef.current - 1);
+      setAttachmentBusy(attachmentOperationsRef.current > 0);
+    }
+  }
+  function showAttachmentViewer(viewer: AttachmentViewer) {
+    const current = attachmentContextRef.current;
+    if (current.workspaceId === viewer.workspaceId && current.chatId === viewer.chatId) {
+      viewerReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setAttachmentViewer(viewer);
     }
   }
   async function updateActivityCapture(
@@ -3794,14 +3902,11 @@ export function App() {
                       {attachments.some(
                         (item) => item.ownerId === message.id,
                       ) && (
-                        <div className="sent-files">
+                        <div className="sent-files" aria-label="Message attachments">
                           {attachments
                             .filter((item) => item.ownerId === message.id)
                             .map((item) => (
-                              <span key={item.id}>
-                                ▧ {item.name}
-                                <small>stored locally</small>
-                              </span>
+                              <ChatAttachmentPreview key={item.id} workspaceId={workspace.id} chatId={selectedChat.id} attachment={item} onOpen={showAttachmentViewer} />
                             ))}
                         </div>
                       )}
@@ -3891,17 +3996,7 @@ export function App() {
                 {queued.length > 0 && (
                   <div className="file-queue" aria-label="Queued attachments">
                     {queued.map((item) => (
-                      <span key={item.id}>
-                        ▧ <b>{item.name}</b>
-                        <small>{Math.ceil(item.bytes / 1024)} KiB</small>
-                        <button
-                          type="button"
-                          aria-label={`Remove ${item.name}`}
-                          onClick={() => void removeAttachment(item.id)}
-                        >
-                          ×
-                        </button>
-                      </span>
+                      <ChatAttachmentPreview key={item.id} workspaceId={workspace.id} chatId={selectedChat.id} attachment={item} queued onOpen={showAttachmentViewer} onRemove={() => void removeAttachment(item.id)} />
                     ))}
                   </div>
                 )}
@@ -3912,6 +4007,7 @@ export function App() {
                   rows={1}
                   placeholder="Message Waypoint"
                   aria-label="Message Waypoint"
+                  onPaste={(event) => void pasteChatImages(event)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -7190,7 +7286,11 @@ export function App() {
           </div>
         </>
       )}
-      {screenCaptureOpen&&workspace&&<ScreenCaptureStudio workspaceId={workspace.id} chatId={selectedChatId} defaultMode={manualCaptureSettings?.mode??'region'} onClose={()=>setScreenCaptureOpen(false)} onNotice={setNotice}/>}
+      {attachmentViewer && <div className="attachment-viewer" role="dialog" aria-modal="true" aria-label={`Image preview: ${attachmentViewer.name}`}>
+        <header><strong>{attachmentViewer.name}</strong><small>{attachmentViewer.width} × {attachmentViewer.height}</small><button type="button" autoFocus aria-label="Close image preview" onClick={() => setAttachmentViewer(undefined)}>×</button></header>
+        <div><img src={attachmentViewer.dataUrl} alt={`Full image attachment: ${attachmentViewer.name}`} /></div>
+      </div>}
+      {screenCaptureOpen&&workspace&&<ScreenCaptureStudio key={workspace.id} workspaceId={workspace.id} chatId={selectedChatId} defaultMode={manualCaptureSettings?.mode??'region'} onClose={()=>setScreenCaptureOpen(false)} onNotice={setNotice} onAddedToChat={(chatId,attachment)=>{if(selectedChatId!==chatId||workspace.id!==attachment.workspaceId)return;setAttachments((items)=>items.some((item)=>item.id===attachment.id)?items:[...items,attachment]);setNotice('');setScreenCaptureOpen(false)}}/>}
     </div>
   );
 }

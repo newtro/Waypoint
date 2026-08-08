@@ -137,6 +137,10 @@ contextBridge.exposeInMainWorld('waypoint', {
       workspaceId,
       chatId,
     }),
+  addPastedChatImage: (workspaceId: string, chatId: string, name: string, mediaType: string, bytes: Uint8Array) =>
+    ipcRenderer.invoke('waypoint:add-pasted-chat-image', { workspaceId, chatId, name, mediaType, bytes }),
+  attachmentImagePreview: (workspaceId: string, attachmentId: string, variant: 'thumbnail' | 'viewer') =>
+    ipcRenderer.invoke('waypoint:attachment-image-preview', { workspaceId, attachmentId, variant }),
   deleteAttachment: (workspaceId: string, attachmentId: string) =>
     ipcRenderer.invoke('waypoint:delete-attachment', {
       workspaceId,

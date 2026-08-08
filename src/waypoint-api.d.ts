@@ -28,7 +28,7 @@ declare global {
       updateScreenCapture(workspaceId:string,captureId:string,layers:ScreenCaptureLayer[],flattenedBytes?:Uint8Array):Promise<ScreenCaptureView>;
       copyScreenCapture(workspaceId:string,captureId:string):Promise<{copied:true}>;
       saveScreenCapture(workspaceId:string,captureId:string):Promise<{canceled:boolean}>;
-      addScreenCaptureToChat(workspaceId:string,captureId:string,chatId:string):Promise<{attachmentId:string}>;
+      addScreenCaptureToChat(workspaceId:string,captureId:string,chatId:string):Promise<{attachment:AttachmentMetadata;created:boolean}>;
       addScreenCaptureToKnowledge(workspaceId:string,captureId:string):Promise<{documentId:string;attachmentId:string}>;
       deleteScreenCapture(workspaceId:string,captureId:string):Promise<{deleted:true}>;
       openExternal(url:string):Promise<{opened:true}>;
@@ -141,6 +141,8 @@ declare global {
       attachDocument(workspaceId: string, objectId: string): Promise<{ canceled: boolean; attachmentId?: string }>;
       selectChatAttachments(workspaceId: string, chatId: string): Promise<{ canceled: boolean; attachments: AttachmentMetadata[] }>;
       listChatAttachments(workspaceId: string, chatId: string): Promise<AttachmentMetadata[]>;
+      addPastedChatImage(workspaceId:string,chatId:string,name:string,mediaType:string,bytes:Uint8Array):Promise<{attachment:AttachmentMetadata}>;
+      attachmentImagePreview(workspaceId:string,attachmentId:string,variant:'thumbnail'|'viewer'):Promise<{mediaType:'image/png';dataBase64:string;width:number;height:number}>;
       deleteAttachment(workspaceId: string, attachmentId: string): Promise<{ ok: true }>;
       graph(workspaceId: string): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>;
       activity(

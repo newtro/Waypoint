@@ -70,6 +70,7 @@ import { exportDiagnosticsReport, runDiagnostics } from "./core/diagnostics.js";
 import { sanitizeSyncStatus } from "./core/sync/sync-status.js";
 import {
   ATTACHMENT_MEDIA_BY_EXTENSION,
+  imageDimensions,
   MAX_ATTACHMENTS_PER_OWNER,
   readAndValidateAttachment,
 } from "./core/chat-attachments.js";
@@ -1048,7 +1049,7 @@ function registerIpc(): void {
   handle('waypoint:screen-capture-update', (_event, input: unknown) => { const value=input as Record<string,unknown>;return store.updateScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),value.layers,value.flattenedBytes instanceof Uint8Array?value.flattenedBytes:undefined) });
   handle('waypoint:screen-capture-copy', (_event, input: unknown) => { const value=input as Record<string,unknown>,capture=store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128));clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(capture.dataBase64,'base64')));return{copied:true} });
   handle('waypoint:screen-capture-save', async (_event, input: unknown) => { const value=input as Record<string,unknown>,capture=store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128)),result=await dialog.showSaveDialog({title:'Save screenshot',defaultPath:'Waypoint screenshot.png',filters:[{name:'PNG image',extensions:['png']}],properties:['createDirectory','showOverwriteConfirmation']});if(result.canceled||!result.filePath)return{canceled:true};writeFileSync(result.filePath,Buffer.from(capture.dataBase64,'base64'),{mode:0o600});return{canceled:false} });
-  handle('waypoint:screen-capture-add-chat', (_event, input: unknown) => {const value=input as Record<string,unknown>;return{attachmentId:store.addScreenCaptureToChat(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),text(value.chatId,'chat id',128))}});
+  handle('waypoint:screen-capture-add-chat', (_event, input: unknown) => {const value=input as Record<string,unknown>;return store.addScreenCaptureToChat(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),text(value.chatId,'chat id',128))});
   handle('waypoint:screen-capture-add-knowledge', (_event, input: unknown) => {const value=input as Record<string,unknown>;return store.addScreenCaptureToKnowledge(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128))});
   handle('waypoint:screen-capture-delete', (_event, input: unknown) => {const value=input as Record<string,unknown>;store.deleteScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128));return{deleted:true}});
   const assertBrowserWorkspace = (event: IpcMainInvokeEvent, workspaceId: string) => {
@@ -3018,6 +3019,31 @@ function registerIpc(): void {
       text(value.workspaceId, "workspace ID", 64),
       text(value.chatId, "chat ID", 64),
     );
+  });
+  handle("waypoint:add-pasted-chat-image", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, "workspace ID", 64), chatId = text(value.chatId, "chat ID", 64),
+      name = text(value.name, "attachment name", 240), mediaType = text(value.mediaType, "attachment media type", 40), bytes = value.bytes;
+    if (!(bytes instanceof Uint8Array)) throw new Error("Pasted image bytes are invalid");
+    imageDimensions(mediaType, bytes);
+    const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
+    if (decoded.isEmpty()) throw new Error("Pasted image is corrupt or cannot be decoded safely");
+    const id = store.addAttachmentBytes(workspaceId, chatId, name, mediaType, bytes), attachment = store.listChatAttachments(workspaceId, chatId).find((item) => item.id === id);
+    if (!attachment) throw new Error("Pasted image could not be queued");
+    return { attachment };
+  });
+  handle("waypoint:attachment-image-preview", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, "workspace ID", 64), attachmentId = text(value.attachmentId, "attachment ID", 64),
+      variant = text(value.variant, "preview variant", 12);
+    if (variant !== "thumbnail" && variant !== "viewer") throw new Error("Invalid preview variant");
+    const { metadata, bytes } = store.readAttachment(workspaceId, attachmentId);
+    if (!metadata.mediaType.startsWith("image/")) throw new Error("Only image attachments can be previewed");
+    const image = nativeImage.createFromBuffer(bytes);
+    if (image.isEmpty()) throw new Error("Image preview is unavailable because the file is corrupt");
+    const source = image.getSize(), maxEdge = variant === "thumbnail" ? 360 : 2400, scale = Math.min(1, maxEdge / Math.max(source.width, source.height)),
+      resized = scale < 1 ? image.resize({ width: Math.max(1, Math.round(source.width * scale)), height: Math.max(1, Math.round(source.height * scale)), quality: "good" }) : image,
+      size = resized.getSize(), png = resized.toPNG();
+    if (!png.byteLength) throw new Error("Image preview could not be rendered");
+    return { mediaType: "image/png", dataBase64: png.toString("base64"), width: size.width, height: size.height };
   });
   handle("waypoint:delete-attachment", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;

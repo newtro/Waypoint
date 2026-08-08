@@ -451,3 +451,9 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Automatic transcription is initially limited to ten minutes / 25 MiB / 48 kHz stereo because Chromium must decode the complete saved recording before it can produce bounded two-minute PCM worker segments. Longer recordings retain the existing manual transcript workflow rather than risking multi-gigabyte renderer memory.
 - Generated text is always an unreviewed draft. Waypoint does not infer speaker identity or claim diarization. Reviewed knowledge creation, source provenance, deletion cascade, backup/restore, and workspace isolation remain unchanged.
 - CrisperWhisper remains an optional high-fidelity meeting benchmark and speaker diarization remains repair-required; neither is dropped or silently activated.
+
+# 2026-08-08 — Verification warnings are failures
+
+- Waypoint has a no-warnings verification policy. ESLint runs with `--max-warnings 0`, suppressions require a narrow documented reason, and build budgets must be explicit rather than leaving recurring warnings in successful gates.
+- Required development commands use the repository-pinned Node 24.15.x and npm 12.0.x toolchain. A local unsigned package is permitted for development verification, but release signing remains a named external identity gate and is never represented as release-ready.
+- Screen-capture workflow migration 38 restores only Windows settings silently changed by shipped migration 34; an explicit later Quick selection always wins.

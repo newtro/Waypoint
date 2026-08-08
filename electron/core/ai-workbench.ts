@@ -90,8 +90,9 @@ export class CliWorkbench {
     if (this.active.size >= request.profile.maxConcurrency) throw new Error('Execution concurrency limit reached')
     const executable = request.executable ?? await this.resolver(request.cli)
     if (!executable) throw new Error(`${request.cli} CLI was not found on PATH`)
-    if (!path.isAbsolute(executable)) throw new Error('Resolved CLI path must be absolute')
-    if(request.imagePaths?.some((imagePath)=>!path.isAbsolute(imagePath)))throw new Error('Attachment image paths must be absolute')
+    const targetIsAbsolute = this.platform === 'win32' ? path.win32.isAbsolute : path.isAbsolute
+    if (!targetIsAbsolute(executable)) throw new Error('Resolved CLI path must be absolute')
+    if(request.imagePaths?.some((imagePath)=>!targetIsAbsolute(imagePath)))throw new Error('Attachment image paths must be absolute')
     if(request.cli!=='codex'&&request.imagePaths?.length)throw new Error(`${request.cli} adapter does not support image delivery`)
     const args = adapterArgs(request.cli, request.prompt, request.model, request.imagePaths)
     const environment = cliExecutionEnvironment(executable, process.env, this.platform),

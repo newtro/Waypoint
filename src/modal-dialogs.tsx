@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- dialog promise helpers and their single host intentionally share one queue */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 type AlertRequest = {

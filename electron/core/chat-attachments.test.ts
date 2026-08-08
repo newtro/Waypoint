@@ -3,7 +3,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { describe,expect,it } from 'vitest'
-import { MAX_ATTACHMENT_BYTES,MAX_ATTACHMENTS_PER_OWNER } from './chat-attachments.js'
+import { imageDimensions,MAX_ATTACHMENT_BYTES,MAX_ATTACHMENTS_PER_OWNER } from './chat-attachments.js'
 import { WorkspaceStore } from './store.js'
 
 function setup(){const root=mkdtempSync(path.join(tmpdir(),'waypoint-chat-attachment-')),database=path.join(root,'waypoint.sqlite'),store=new WorkspaceStore(database),workspace=store.createWorkspace('Private',path.join(root,'workspace')),chat=store.createChat(workspace.id,'Attachments'),message=store.addMessage(workspace.id,chat,'user','Review these files');return{root,database,store,workspace,chat,message}}
@@ -12,6 +12,8 @@ const statPermission=(file:string)=>statSync(file).mode&0o777
 const chmodDirectory=(file:string,mode:number)=>chmodSync(file,mode)
 
 describe('durable chat attachments',()=>{
+  it('persists validated pasted image bytes and reads them back with integrity',()=>{const{store,workspace,chat}=setup(),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64'),id=store.addAttachmentBytes(workspace.id,chat,'pasted-image.png','image/png',png),read=store.readAttachment(workspace.id,id);expect(read.metadata).toMatchObject({id,ownerId:chat,mediaType:'image/png',bytes:png.length});expect(read.bytes.equals(png)).toBe(true);store.close()})
+  it('rejects unsafe image dimensions before decoder allocation',()=>{const oversized=Buffer.alloc(24);Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]).copy(oversized);oversized.writeUInt32BE(16384,16);oversized.writeUInt32BE(16384,20);expect(()=>imageDimensions('image/png',oversized)).toThrow('safe preview limit')})
   it('accepts every explicitly supported opaque binary family without parsing it',()=>{const{root,store,workspace,chat}=setup(),fixtures:Array<[string,string,Uint8Array|string]>=[['image.png','image/png',Uint8Array.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])],['photo.jpg','image/jpeg',Uint8Array.from([0xff,0xd8,0xff,1])],['photo.jpeg','image/jpeg',Uint8Array.from([0xff,0xd8,0xff,2])],['anim.gif','image/gif','GIF89a'],['image.webp','image/webp',Uint8Array.from([0x52,0x49,0x46,0x46,0,0,0,0,0x57,0x45,0x42,0x50])],['paper.pdf','application/pdf','%PDF-'],['draft.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document','PK\u0003\u0004[Content_Types].xml word/document.xml'],['note.md','text/markdown','markdown'],['note.txt','text/plain','plain']];for(const[name,mime,bytes]of fixtures)store.addAttachment(workspace.id,chat,name,mime,source(root,name,bytes));expect(store.listAttachments(workspace.id,chat).map((item)=>item.name)).toEqual(fixtures.map(([name])=>name));store.close()})
   it('persists traceable chat/message metadata and prepares only truthful provider inputs',()=>{const{root,database,store,workspace,chat,message}=setup(),text=source(root,'context.md','# trusted context'),pdf=source(root,'reference.pdf','%PDF-1.7\nopaque bytes')
     const textId=store.addAttachment(workspace.id,message,'context.md','text/markdown',text),pdfId=store.addAttachment(workspace.id,chat,'reference.pdf','application/pdf',pdf)

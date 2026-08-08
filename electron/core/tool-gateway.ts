@@ -455,6 +455,7 @@ export class ToolGateway {
     private readonly hooks: ToolGatewayHooks,
     private readonly spawnProcess: Spawn = spawn as Spawn,
     private readonly createNetworkGate = createBrowserNetworkGate,
+    private readonly discoverCli = discoverLocalCli,
   ) {}
   configureWeb(handler: NonNullable<ToolGatewayHooks["web"]>) {
     this.hooks.web = handler;
@@ -1023,7 +1024,7 @@ export class ToolGateway {
             runId,
             result: this.denied(base, "unsupported_cli", policy),
           };
-        const found = discoverLocalCli(cli as "git" | "gh" | "az");
+        const found = this.discoverCli(cli as "git" | "gh" | "az");
         if (!found.executable)
           return {
             runId,
