@@ -1,5 +1,6 @@
 import { describe,expect,it } from 'vitest'
-import { missingRelativeImports,validPackagedFastLocalMetric } from './package-runtime-closure.js'
+import { fastSpeechSegments } from '../electron/core/fast-local-speech.js'
+import { missingRelativeImports,packagedFastLocalOpening,packagedFastLocalResponse,validPackagedFastLocalMetric } from './package-runtime-closure.js'
 
 describe('packaged runtime import closure',()=>{
   it('detects the packaged-only missing module that prevents main-process startup',()=>{
@@ -24,6 +25,13 @@ describe('packaged runtime import closure',()=>{
 })
 
 describe('packaged Fast Local metric',()=>{
+  it('measures the same bounded opening segment that production plays first',()=>{
+    expect(packagedFastLocalOpening).toBe('Waypoint is ready to help.')
+    expect(fastSpeechSegments(packagedFastLocalResponse)[0]).toBe(packagedFastLocalOpening)
+    expect(fastSpeechSegments(packagedFastLocalResponse).length).toBeGreaterThan(1)
+    expect(packagedFastLocalOpening.length).toBeLessThanOrEqual(80)
+    expect(packagedFastLocalOpening).toMatch(/[.!?]$/)
+  })
   it('accepts only playable 24 kHz streaming audio inside the first-audio budget',()=>{
     expect(validPackagedFastLocalMetric({firstPlayableAudioMs:999,samples:2400,sampleRate:24000})).toBe(true)
     expect(validPackagedFastLocalMetric({firstPlayableAudioMs:1001,samples:2400,sampleRate:24000})).toBe(false)
