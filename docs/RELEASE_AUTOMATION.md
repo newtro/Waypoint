@@ -15,6 +15,8 @@ Waypoint uses two GitHub Actions workflows:
 
 The prerelease version is `0.0.<release-workflow-run-number>` and is bound to the verified `main` commit. The release job cannot publish if either native package is missing or fails closure verification. It uploads to a resumable draft, verifies the exact asset set and checksums, then publishes. A rerun resumes a matching draft or verifies an already-published release for the same commit.
 
+Package closure exercises the shipped one-shot Fast Local worker from process launch through complete first-segment audio receipt. The non-representative shared GitHub runners use a strict three-second closure ceiling and print the measured value; this catches missing, stalled, or grossly regressed native runtime behavior without representing shared-runner speed as product latency. Waypoint's product acceptance target remains at most one second on representative user hardware, and local/default package verification continues to enforce that target. The latest hosted evidence was 1.163 seconds on `macos-15` and 2.156 seconds on `windows-2025`; Windows user-hardware voice latency remains a physical acceptance item rather than a release-automation claim.
+
 ## Signing boundary
 
 The automated artifacts are private development previews. They are not Apple-notarized and do not carry production Apple or Windows publisher identities. The workflow never invents or downloads signing credentials. Production signing/notarization requires separately provisioned GitHub secrets, certificate custody and rotation decisions, native verification, and an explicit signed-release gate.

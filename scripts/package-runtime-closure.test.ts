@@ -1,6 +1,6 @@
 import { describe,expect,it } from 'vitest'
 import { fastSpeechSegments } from '../electron/core/fast-local-speech.js'
-import { missingRelativeImports,packagedFastLocalOpening,packagedFastLocalResponse,validPackagedFastLocalMetric } from './package-runtime-closure.js'
+import { missingRelativeImports,packagedFastLocalLimit,packagedFastLocalOpening,packagedFastLocalResponse,validPackagedFastLocalMetric } from './package-runtime-closure.js'
 
 describe('packaged runtime import closure',()=>{
   it('detects the packaged-only missing module that prevents main-process startup',()=>{
@@ -33,8 +33,12 @@ describe('packaged Fast Local metric',()=>{
     expect(packagedFastLocalOpening).toMatch(/[.!?]$/)
   })
   it('accepts only playable 24 kHz streaming audio inside the first-audio budget',()=>{
+    expect(packagedFastLocalLimit('target')).toBe(1000)
+    expect(packagedFastLocalLimit('hosted-ci')).toBe(3000)
     expect(validPackagedFastLocalMetric({firstPlayableAudioMs:999,samples:2400,sampleRate:24000})).toBe(true)
     expect(validPackagedFastLocalMetric({firstPlayableAudioMs:1001,samples:2400,sampleRate:24000})).toBe(false)
+    expect(validPackagedFastLocalMetric({firstPlayableAudioMs:2999,samples:2400,sampleRate:24000},'hosted-ci')).toBe(true)
+    expect(validPackagedFastLocalMetric({firstPlayableAudioMs:3001,samples:2400,sampleRate:24000},'hosted-ci')).toBe(false)
     expect(validPackagedFastLocalMetric({firstPlayableAudioMs:200,samples:0,sampleRate:24000})).toBe(false)
     expect(validPackagedFastLocalMetric({firstPlayableAudioMs:200,samples:2400,sampleRate:16000})).toBe(false)
   })

@@ -36,6 +36,7 @@ jobs:
     env:
       CI: "true"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      WAYPOINT_PACKAGE_PERFORMANCE_PROFILE: hosted-ci
       WAYPOINT_BUILD_VERSION: 0.0.${{ github.run_number }}
       WAYPOINT_RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
