@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest'
-import { missingRelativeImports } from './package-runtime-closure.js'
+import { missingRelativeImports,validPackagedFastLocalMetric } from './package-runtime-closure.js'
 
 describe('packaged runtime import closure',()=>{
   it('detects the packaged-only missing module that prevents main-process startup',()=>{
@@ -20,5 +20,14 @@ describe('packaged runtime import closure',()=>{
     expect(missingRelativeImports([...files.keys()],(entry)=>files.get(entry)!,main)).toEqual(expect.arrayContaining([`${main} -> ${lazy}`,`${main} -> ${required}`]))
     files.set(lazy,'');files.set(required,'')
     expect(missingRelativeImports([...files.keys()],(entry)=>files.get(entry)!,main)).toEqual([])
+  })
+})
+
+describe('packaged Fast Local metric',()=>{
+  it('accepts only playable 24 kHz streaming audio inside the first-audio budget',()=>{
+    expect(validPackagedFastLocalMetric({firstPlayableAudioMs:999,samples:2400,sampleRate:24000})).toBe(true)
+    expect(validPackagedFastLocalMetric({firstPlayableAudioMs:1001,samples:2400,sampleRate:24000})).toBe(false)
+    expect(validPackagedFastLocalMetric({firstPlayableAudioMs:200,samples:0,sampleRate:24000})).toBe(false)
+    expect(validPackagedFastLocalMetric({firstPlayableAudioMs:200,samples:2400,sampleRate:16000})).toBe(false)
   })
 })
