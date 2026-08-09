@@ -6,7 +6,7 @@ import {
   installedCliModelCatalog,
   parseCodexModelCatalog,
 } from "./provider-model-catalog.js";
-import { withLegacyModel } from "../../src/provider-model-choices.js";
+import { subscriptionFallbackModel, withLegacyModel } from "../../src/provider-model-choices.js";
 
 describe("installed CLI model catalog", () => {
   it("accepts only visible bounded models from the installed Codex catalog", () => {
@@ -104,16 +104,19 @@ describe("installed CLI model catalog", () => {
       legacy: true,
     });
   });
+  it("uses only the selected subscription model for hosted cap fallback",()=>{expect(subscriptionFallbackModel('codex',{codex:'gpt-5.6-sol',claude:'sonnet'})).toBe('gpt-5.6-sol');expect(subscriptionFallbackModel('claude',{codex:'gpt-5.6-sol',claude:''})).toBeUndefined()})
+  it("does not pass the hosted model through the subscription fallback path",()=>{const source=readFileSync(new URL("../../src/main.tsx",import.meta.url),"utf8").replace(/\s+/g," ");expect(source).toContain("subscriptionFallbackModel(hosted.fallbackProvider, chatModels)");expect(source).not.toContain("hosted.fallbackProvider, profile, prompt, model")})
   it("renders synchronized accessible composer and Settings selects without freeform model entry", () => {
     const source = readFileSync(
       new URL("../../src/main.tsx", import.meta.url),
       "utf8",
     ).replace(/\s+/g," ");
     expect(source).toContain(
-      '<select className="model-select" name="model" aria-label={`${chatCli} model`}',
+      'aria-label={`${chatCli}${chatCli === "openrouter" && queuedHasImage ? " image" : ""} model`}',
     );
     expect(source).toContain('aria-label="Codex model preference"');
     expect(source).toContain('aria-label="Claude model preference"');
+    expect(source).toContain('aria-label="OpenRouter image model"');
     expect(source).not.toContain('placeholder="Optional model"');
     expect(source).not.toMatch(/<input[^>]+name="model"/);
   });

@@ -93,7 +93,7 @@ describe("voice preference and UI contract", () => {
     expect(
       compact.indexOf("constvoiceTurn=voiceSubmissionRef.current"),
     ).toBeLessThan(
-      compact.indexOf("if(cli==='openrouter'&&attachmentIds.length)"),
+      compact.indexOf("constmessageId=awaitwindow.waypoint.addMessage"),
     );
     expect(compact).toContain("setVoiceState('off');setVoicePartial('')");
     expect(source).toContain('aria-label="Default voice mode"');

@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { cliExecutionEnvironment, cliProcessInvocation, resolveExecutable, type CliName } from '../../spikes/cli-capabilities.js'
+import {imageDimensions,validateAttachment} from './chat-attachments.js'
 import {redactToolText} from './tool-gateway.js'
 
 export type RunStatus = 'queued'|'running'|'completed'|'failed'|'canceled'|'timed_out'
@@ -20,9 +22,11 @@ export const CONSERVATIVE_PROFILE: SecurityProfile = {
 
 export interface RunRequest {
   cli: CliName; prompt: string; workspaceRoot: string; profile: SecurityProfile; model?: string
-  parentRunId?: string; depth?: number; timeoutMs?: number; executable?: string; version?: string; imagePaths?: string[]
+  parentRunId?: string; depth?: number; timeoutMs?: number; executable?: string; version?: string; images?: CliImageInput[]
   maxOutputBytes?: number
+  beforeSpawn?:()=>void
 }
+export type CliImageInput={path:string;name:string;mediaType:'image/png'|'image/jpeg'|'image/gif'|'image/webp';sha256:string}
 
 export interface RunningExecution {
   executable: string; version?: string; args: string[]; cancel(): void; completion: Promise<{ status: Exclude<RunStatus,'queued'|'running'>; exitCode: number|null; error?: string }>
@@ -46,9 +50,15 @@ export function validateRequest(request: RunRequest): void {
   if(request.maxOutputBytes!==undefined&&(!Number.isSafeInteger(request.maxOutputBytes)||request.maxOutputBytes<1||request.maxOutputBytes>8_388_608))throw new Error('Execution output budget is invalid')
 }
 
-export function adapterArgs(cli: CliName, _prompt: string, model?: string, imagePaths: string[] = []): string[] {
-  if (cli === 'codex') return ['exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', ...imagePaths.flatMap((imagePath)=>['--image',imagePath]), ...(model ? ['--model', model] : []), '-']
-  return ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--no-session-persistence', '--safe-mode', '--tools', '', '--permission-mode', 'dontAsk', ...(model ? ['--model', model] : [])]
+export function adapterArgs(cli: CliName, _prompt: string, model?: string, images: CliImageInput[] = []): string[] {
+  if (cli === 'codex') return ['exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', ...images.flatMap((image)=>['--image',image.path]), ...(model ? ['--model', model] : []), '-']
+  return ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--no-session-persistence', '--safe-mode', '--tools', '', '--permission-mode', 'dontAsk', ...(images.length?['--input-format','stream-json']:[]), ...(model ? ['--model', model] : [])]
+}
+
+export function adapterInput(cli:CliName,prompt:string,images:CliImageInput[]=[],imageDataBase64:readonly string[]=[]):string{
+  if(cli!=='claude'||!images.length)return prompt
+  if(imageDataBase64.length!==images.length)throw new Error('Validated Claude image data is incomplete')
+  return `${JSON.stringify({type:'user',message:{role:'user',content:[{type:'text',text:prompt},...images.map((image,index)=>({type:'image',source:{type:'base64',media_type:image.mediaType,data:imageDataBase64[index]}}))]}})}\n`
 }
 
 export function parseEvent(cli: CliName, line: string): ExecutionEvent {
@@ -92,29 +102,35 @@ export class CliWorkbench {
     if (!executable) throw new Error(`${request.cli} CLI was not found on PATH`)
     const targetIsAbsolute = this.platform === 'win32' ? path.win32.isAbsolute : path.isAbsolute
     if (!targetIsAbsolute(executable)) throw new Error('Resolved CLI path must be absolute')
-    if(request.imagePaths?.some((imagePath)=>!targetIsAbsolute(imagePath)))throw new Error('Attachment image paths must be absolute')
-    if(request.cli!=='codex'&&request.imagePaths?.length)throw new Error(`${request.cli} adapter does not support image delivery`)
-    const args = adapterArgs(request.cli, request.prompt, request.model, request.imagePaths)
-    const environment = cliExecutionEnvironment(executable, process.env, this.platform),
-      invocation = await this.invocationResolver(request.cli, executable, args, { platform: this.platform })
-    const child = this.spawnProcess(invocation.executable, invocation.args, { cwd: path.resolve(request.workspaceRoot), env: environment, shell: false, windowsHide: true })
+    const images=request.images??[],imageDataBase64:string[]=[],imageBytes:Buffer[]=[];if(images.length>20)throw new Error('Attachment image count exceeds the execution limit')
+    let totalImageBytes=0;for(const image of images){if(!targetIsAbsolute(image.path))throw new Error('Attachment image paths must be absolute');const bytes=readFileSync(image.path);totalImageBytes+=bytes.byteLength;if(totalImageBytes>20*1024*1024)throw new Error('Attachment images exceed the execution byte limit');const validated=validateAttachment(image.name,image.mediaType,bytes);imageDimensions(image.mediaType,bytes);if(validated.sha256!==image.sha256)throw new Error('Attachment image integrity check failed');imageBytes.push(bytes);if(request.cli==='claude')imageDataBase64.push(bytes.toString('base64'))}
+    let snapshotRoot:string|undefined,deliveredImages=images
+    const cleanupSnapshots=()=>{if(snapshotRoot){rmSync(snapshotRoot,{recursive:true,force:true});snapshotRoot=undefined}}
+    try{
+      if(request.cli==='codex'&&images.length){snapshotRoot=mkdtempSync(path.join(path.resolve(request.workspaceRoot),'.waypoint-cli-images-'));deliveredImages=images.map((image,index)=>{const snapshotPath=path.join(snapshotRoot!,`${index}${path.extname(image.name).toLowerCase()}`);writeFileSync(snapshotPath,imageBytes[index],{flag:'wx',mode:0o600});return{...image,path:snapshotPath}})}
+      const args = adapterArgs(request.cli, request.prompt, request.model, deliveredImages),
+        environment = cliExecutionEnvironment(executable, process.env, this.platform),
+        invocation = await this.invocationResolver(request.cli, executable, args, { platform: this.platform })
+      request.beforeSpawn?.()
+      const child = this.spawnProcess(invocation.executable, invocation.args, { cwd: path.resolve(request.workspaceRoot), env: environment, shell: false, windowsHide: true })
     let settled = false, canceled = false, timedOut = false, outputLimited = false, stderr = '', buffer = '', outputBytes = 0
     const timeoutMs = Math.min(request.timeoutMs ?? request.profile.maxDurationMs, request.profile.maxDurationMs)
     let forceTimer: NodeJS.Timeout|undefined
     const finishSignal = () => { if (!settled) { child.kill('SIGTERM'); forceTimer??=setTimeout(()=>{if(!settled)child.kill('SIGKILL')},2_000) } }
     const timer = setTimeout(() => { timedOut = true; finishSignal() }, timeoutMs)
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
-    child.stdin.end(request.prompt)
+    child.stdin.end(adapterInput(request.cli,request.prompt,images,imageDataBase64))
     const maxOutputBytes=request.maxOutputBytes??8_388_608
     child.stdout.on('data', (chunk: string) => { outputBytes += Buffer.byteLength(chunk); if (outputBytes > maxOutputBytes) { outputLimited = true; finishSignal(); return }; buffer += chunk; const lines = buffer.split(/\r?\n/); buffer = lines.pop() ?? ''; for (const line of lines) if (line.trim()) onEvent(parseEvent(request.cli, line)) })
     child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8_192) })
     const completion = new Promise<{ status: Exclude<RunStatus,'queued'|'running'>; exitCode: number|null; error?: string }>((resolve) => {
-      child.once('error', (error) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId); resolve({ status: 'failed', exitCode: null, error: error.message }) })
-      child.once('close', (code) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId); if (buffer.trim() && !outputLimited) onEvent(parseEvent(request.cli, buffer)); const status = timedOut ? 'timed_out' : canceled ? 'canceled' : outputLimited ? 'failed' : code === 0 ? 'completed' : 'failed'; resolve({ status, exitCode: code, error: outputLimited ? `CLI output exceeded the ${maxOutputBytes}-byte execution budget` : status === 'failed' ? (stderr.trim() || `CLI exited with code ${code}`) : undefined }) })
+      child.once('error', (error) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId);cleanupSnapshots(); resolve({ status: 'failed', exitCode: null, error: error.message }) })
+      child.once('close', (code) => { if (settled) return; settled = true; clearTimeout(timer);if(forceTimer)clearTimeout(forceTimer); this.active.delete(runId);cleanupSnapshots(); if (buffer.trim() && !outputLimited) onEvent(parseEvent(request.cli, buffer)); const status = timedOut ? 'timed_out' : canceled ? 'canceled' : outputLimited ? 'failed' : code === 0 ? 'completed' : 'failed'; resolve({ status, exitCode: code, error: outputLimited ? `CLI output exceeded the ${maxOutputBytes}-byte execution budget` : status === 'failed' ? (stderr.trim() || `CLI exited with code ${code}`) : undefined }) })
     })
     const running: RunningExecution = { executable, version:request.version, args, cancel: () => { canceled = true; finishSignal() }, completion }
     this.active.set(runId, running)
     return running
+    }catch(error){cleanupSnapshots();throw error}
   }
 
   cancel(runId: string): boolean { const run = this.active.get(runId); if (!run) return false; run.cancel(); return true }

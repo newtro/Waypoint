@@ -10,7 +10,7 @@ describe('visible AI workbench evidence',()=>{
   })
   it('renders streaming state, truthful provider capability, cancellation, and retry controls without dashboard chrome',()=>{
     const source=readFileSync(new URL('../../src/main.tsx',import.meta.url),'utf8')
-    for(const evidence of ['aria-live="polite"','uniqueExecutionEvents(run)','local CLI','Images and text can be passed','Stop','Retry','compatibilityError'])expect(source).toContain(evidence)
+    for(const evidence of ['aria-live="polite"','uniqueExecutionEvents(run)','local CLI','Images use Claude structured image input','OpenRouter image model','Stop','Retry','compatibilityError'])expect(source).toContain(evidence)
     expect(source).not.toContain('Add note')
   })
 })

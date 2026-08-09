@@ -18,9 +18,9 @@ The composer accepts supported images, PDF, DOCX, TXT, and Markdown files. Image
 
 Provider capability matters:
 
-- Codex can receive supported image paths plus bounded text extracted locally.
-- Claude currently receives bounded text in this Waypoint adapter; unsupported binary/image delivery is reported honestly.
-- OpenRouter chat attachments are currently disabled, so files remain local rather than being silently uploaded.
+- **Images:** Codex receives validated image paths through its CLI image input. Claude receives validated pixels through its installed CLI’s structured, tool-free image input. OpenRouter receives base64 image content only through the explicit curated **Images** model selected in Settings. The current verified OpenRouter image choices are Kimi K3 and Qwen 3.8 Max.
+- **Documents:** PDF, DOCX, TXT, and Markdown use the same bounded local extraction path for Codex, Claude, and OpenRouter. The execution timeline records the source name, digest prefix, and extractor provenance without storing attachment bytes in the receipt.
+- **OpenRouter routing:** GLM 5.2 and DeepSeek V4 Flash are currently text-only choices. When a chat includes pixels, Waypoint uses the separately selected Images model and records the actual model and cost. It never guesses that a text-only model can see an image.
 
 Imported documents can be added to Knowledge for local extraction, provenance-bearing chunking, and search. Attaching a file to a chat does not automatically make it a Knowledge document.
 
@@ -30,8 +30,8 @@ After the first meaningful exchange, Waypoint may attempt a bounded, tool-free t
 
 ## Current limitations
 
-CLI model availability depends on the installed CLI version and current sign-in. OpenRouter health is not claimed until it is configured and used. Hosted usage can cost money. Windows CLI/process behavior must be validated on Windows.
+CLI model availability depends on the installed CLI version and current sign-in. OpenRouter health is not claimed until it is configured and used. Hosted image usage can cost money and remains subject to the same explicit activation and caps. A scanned PDF with no extractable text is not silently sent to hosted OCR; attach page images or use a separately authorized OCR path. Very large aggregate document context fails with guidance to send fewer or smaller sources. Windows CLI/process behavior must be validated on Windows.
 
 ## Privacy and data handling
 
-Prompts and attachment bytes stay within the selected route and current security policy. Secrets, raw environment values, and Keychain contents must not appear in chat receipts. Help retrieval uses only the user’s question and bundled product pages; it does not search other chats or workspaces.
+Prompts and attachment bytes stay within the selected route and current security policy. PDF and DOCX bytes remain local because Waypoint sends their locally extracted text rather than invoking a hosted parser. Images are transmitted only after the user sends the attachment through an eligible route. Secrets, raw environment values, protected paths, base64 payloads, and Keychain contents must not appear in chat receipts. Help retrieval uses only the user’s question and bundled product pages; it does not search other chats or workspaces.

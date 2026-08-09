@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import {createHash} from 'node:crypto'
+import {existsSync,mkdtempSync,readFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { adapterArgs, CliWorkbench, CONSERVATIVE_PROFILE, parseEvent, validateRequest } from './ai-workbench.js'
@@ -8,7 +11,7 @@ class FakeChild extends EventEmitter {
   stdin = new PassThrough(); stdout = new PassThrough(); stderr = new PassThrough(); killed = false
   kill() { this.killed = true; queueMicrotask(() => this.emit('close', null)); return true }
 }
-const workspaceRoot = path.resolve('/safe/workspace'), workspaceImage = path.join(workspaceRoot, 'map.png')
+const workspaceRoot = path.resolve('/safe/workspace'), workspaceImage = path.resolve('build/icons/waypoint.png'), imageBytes=readFileSync(workspaceImage), image={path:workspaceImage,name:'waypoint.png',mediaType:'image/png' as const,sha256:createHash('sha256').update(imageBytes).digest('hex')}
 const profile = { ...CONSERVATIVE_PROFILE, roots: [workspaceRoot] }
 
 describe('AI workbench privilege boundary', () => {
@@ -18,12 +21,34 @@ describe('AI workbench privilege boundary', () => {
     expect(adapterArgs('claude', 'hello')).not.toContain('--dangerously-skip-permissions')
     expect(adapterArgs('codex', 'private prompt')).not.toContain('private prompt')
     expect(adapterArgs('claude', 'private prompt')).not.toContain('private prompt')
-    expect(adapterArgs('codex', 'image', undefined, [workspaceImage])).toEqual(expect.arrayContaining(['--image',workspaceImage]))
+    expect(adapterArgs('codex', 'image', undefined, [image])).toEqual(expect.arrayContaining(['--image',workspaceImage]))
   })
 
-  it('rejects image delivery to adapters without a real image path', async () => {
-    const workbench = new CliWorkbench(vi.fn() as never, async()=>'/bin/claude')
-    await expect(workbench.start('no-image',{cli:'claude',prompt:'x',workspaceRoot,profile,imagePaths:[workspaceImage]},()=>{})).rejects.toThrow(/does not support image/)
+  it('delivers Claude images as structured stdin without enabling a filesystem tool or exposing a path', async () => {
+    const child=new FakeChild(),spawn=vi.fn(()=>child),workbench = new CliWorkbench(spawn as never, async()=>'/bin/claude'),running=await workbench.start('claude-image',{cli:'claude',prompt:'inspect',workspaceRoot,profile,images:[image]},()=>{})
+    const args=(spawn.mock.calls[0] as unknown as [string,string[]])[1],input=child.stdin.read()?.toString()??''
+    expect(args).toEqual(expect.arrayContaining(['--input-format','stream-json','--tools','']))
+    expect(args).not.toContain(workspaceImage)
+    expect(input).not.toContain(workspaceImage)
+    expect(JSON.parse(input)).toMatchObject({type:'user',message:{role:'user',content:[{type:'text',text:'inspect'},{type:'image',source:{type:'base64',media_type:'image/png'}}]}})
+    child.emit('close',0);await expect(running.completion).resolves.toMatchObject({status:'completed'})
+  })
+
+  it('gives Codex an immutable run-scoped image snapshot and removes it at terminal state',async()=>{
+    const root=mkdtempSync(path.join(tmpdir(),'waypoint-codex-image-')),child=new FakeChild(),workbench=new CliWorkbench((()=>child)as never,async()=>'/bin/codex'),running=await workbench.start('codex-image',{cli:'codex',prompt:'inspect',workspaceRoot:root,profile:{...profile,roots:[root]},images:[image]},()=>{}),imageArg=running.args[running.args.indexOf('--image')+1]
+    expect(imageArg).not.toBe(workspaceImage);expect(imageArg).toContain('.waypoint-cli-images-');expect(readFileSync(imageArg)).toEqual(imageBytes)
+    child.emit('close',0);await expect(running.completion).resolves.toMatchObject({status:'completed'});expect(existsSync(imageArg)).toBe(false)
+  })
+
+  it('revalidates caller-owned delivery authority after async invocation resolution and immediately before spawn',async()=>{
+    const order:string[]=[],child=new FakeChild(),workbench=new CliWorkbench((()=>{order.push('spawn');return child})as never,async()=>'/bin/codex',process.platform,(async(_name:string,_executable:string,args:string[])=>{order.push('resolve');await Promise.resolve();return{executable:'/bin/codex',args}})as never),running=await workbench.start('revalidate',{cli:'codex',prompt:'inspect',workspaceRoot,profile,beforeSpawn:()=>order.push('revalidate')},()=>{})
+    expect(order).toEqual(['resolve','revalidate','spawn']);child.emit('close',0);await running.completion
+  })
+
+  it('rejects forged image metadata before process launch', async () => {
+    const spawn=vi.fn(),workbench = new CliWorkbench(spawn as never, async()=>'/bin/claude')
+    await expect(workbench.start('bad-image',{cli:'claude',prompt:'x',workspaceRoot,profile,images:[{...image,sha256:'0'.repeat(64)}]},()=>{})).rejects.toThrow(/integrity/)
+    expect(spawn).not.toHaveBeenCalled()
   })
 
   it('rejects roots, secrets, and recursive lineage outside the profile', () => {

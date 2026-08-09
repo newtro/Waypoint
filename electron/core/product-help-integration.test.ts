@@ -7,7 +7,7 @@ describe("Waypoint Help route and package integration", () => {
 
   it("enriches root CLI and OpenRouter prompts, records sources, and skips child tasks", () => {
     const source = readFileSync(path.join(root, "electron/main.ts"), "utf8");
-    expect(source).toContain("withProductHelp(prompt, prompt, productHelpLibrary)");
+    expect(source).toContain("withProductHelp(\n        promptWithAttachments,\n        prompt,\n        productHelpLibrary,");
     expect(source).toContain("parentExecutionId\n      ? undefined\n      : withProductHelp");
     expect(source).toContain("Waypoint Help · ${helpSelection.sources.length}");
     expect(source).toContain("store.addHostedRunEvent(");

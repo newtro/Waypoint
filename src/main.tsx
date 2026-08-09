@@ -50,14 +50,14 @@ import {
   BrowserVoicePlayer,
 } from "./voice-capture";
 import { cancelLateVoiceRun } from "./voice-run-cancellation";
-import { openRouterModelChoices } from "./openrouter-model-catalog";
+import { openRouterImageModelChoices, openRouterModelChoices } from "../electron/core/openrouter-model-catalog";
 import {
   responseNoticeAfterRuns,
   runsForSourceMessage,
   uniqueChatRuns,
   uniqueExecutionEvents,
 } from "./chat-run-presentation";
-import { withLegacyModel } from "./provider-model-choices";
+import { subscriptionFallbackModel, withLegacyModel } from "./provider-model-choices";
 import { nextOpenRouterActivation } from "./openrouter-activation";
 import {
   formatProviderMicros,
@@ -705,7 +705,16 @@ export function App() {
   async function changeComposerModel(value: string) {
     if (chatCli === "openrouter") {
       if (!openRouter) return;
-      const next = { ...openRouter.settings, everydayModel: value };
+      const imageRoute = attachments.some(
+          (item) =>
+            item.ownerId === selectedChatId && item.mediaType.startsWith("image/"),
+        ),
+        next = {
+          ...openRouter.settings,
+          ...(imageRoute
+            ? { attachmentModel: value }
+            : { everydayModel: value }),
+        };
       setOpenRouter({ ...openRouter, settings: next });
       await window.waypoint.updateOpenRouterSettings(next);
       await refreshOpenRouter();
@@ -2529,10 +2538,6 @@ export function App() {
         }
         return;
       }
-      if (cli === "openrouter" && attachmentIds.length)
-        throw new Error(
-          "OpenRouter file delivery is not enabled. Remove attachments or use an eligible local CLI; files remain local.",
-        );
       const messageId = await window.waypoint.addMessage(
         workspace.id,
         chatId,
@@ -2561,9 +2566,9 @@ export function App() {
             hosted.fallbackProvider,
             profile,
             prompt,
-            model,
+            subscriptionFallbackModel(hosted.fallbackProvider, chatModels),
             undefined,
-            [],
+            attachmentIds,
           );
           exactRunId = fallback.runId;
           runKind = "local";
@@ -2579,7 +2584,9 @@ export function App() {
           exactRunId = hosted.runId;
           runKind = "hosted";
           setNotice(
-            `OpenRouter ${hosted.model} is responding within the reserved per-request cap…`,
+            attachmentIds.length
+              ? `OpenRouter ${hosted.model} is responding with ${attachmentIds.length} locally prepared attachment${attachmentIds.length === 1 ? "" : "s"} within the reserved cap…`
+              : `OpenRouter ${hosted.model} is responding within the reserved per-request cap…`,
           );
         }
         if (voiceTurn !== undefined) {
@@ -3379,17 +3386,24 @@ export function App() {
       runs.filter((run) => run.chatId === selectedChatId) as ExecutionRunView[],
     ),
     queued = attachments.filter((item) => item.ownerId === selectedChatId),
+    queuedHasImage = queued.some((item) => item.mediaType.startsWith("image/")),
     chatAutomationProposals=automationProposals.filter((item)=>item.chatId===selectedChatId&&item.question?.status==='pending'),
     historyGroups = groupChatHistory(chats, historyQuery, historySort),
     selectedComposerModel =
       chatCli === "openrouter"
-        ? (openRouter?.settings.everydayModel ?? "")
+        ? (queuedHasImage
+            ? openRouter?.settings.attachmentModel
+            : openRouter?.settings.everydayModel) ?? ""
         : chatModels[chatCli],
     composerModelChoices =
       chatCli === "openrouter"
-        ? openRouterModelChoices(selectedComposerModel).map((item) => ({
+        ? (queuedHasImage
+            ? openRouterImageModelChoices(selectedComposerModel)
+            : openRouterModelChoices(selectedComposerModel)
+          ).map((item) => ({
             id: item.id,
             label: `${item.name} — ${item.id}${item.legacy ? " (saved legacy/custom)" : ""}`,
+            disabled: item.legacy && queuedHasImage,
           }))
         : withLegacyModel(
             cliModels.find((item) => item.provider === chatCli)?.models ?? [
@@ -4202,7 +4216,7 @@ export function App() {
                     <select
                       className="model-select"
                       name="model"
-                      aria-label={`${chatCli} model`}
+                      aria-label={`${chatCli}${chatCli === "openrouter" && queuedHasImage ? " image" : ""} model`}
                       value={selectedComposerModel}
                       onChange={(event) =>
                         void changeComposerModel(event.target.value).catch(
@@ -4211,7 +4225,7 @@ export function App() {
                       }
                     >
                       {composerModelChoices.map((model) => (
-                        <option value={model.id} key={model.id || "default"}>
+                        <option value={model.id} key={model.id || "default"} disabled={Boolean("disabled" in model && model.disabled)}>
                           {model.label}
                         </option>
                       ))}
@@ -4237,10 +4251,12 @@ export function App() {
                 </div>
                 <p className="capability-copy">
                   {chatCli === "openrouter"
-                    ? "Text only · hosted cost · attachments stay local · cancel available."
+                    ? queuedHasImage
+                      ? `Image pixels use ${openRouter?.settings.attachmentModel || "the Images model selected in Settings"}; documents are extracted locally · hosted cost · cancel available.`
+                      : "Images are supported through the explicit Images model; PDF, Word, TXT, and Markdown are extracted locally · hosted cost · cancel available."
                     : chatCli === "codex"
-                      ? "Images and text can be passed to the Codex CLI. PDF and Word stay local."
-                      : "Text can be passed to Claude. Images, PDF, and Word stay local."}{" "}
+                      ? "Images use Codex image input; PDF, Word, TXT, and Markdown are extracted locally with provenance."
+                      : "Images use Claude structured image input; PDF, Word, TXT, and Markdown are extracted locally with provenance."}{" "}
                   {chatCli !== "openrouter" &&
                     cliModels.find((item) => item.provider === chatCli)?.reason}
                 </p>
@@ -6642,7 +6658,7 @@ export function App() {
                             Used only when the hosted lane is enabled and selected.
                           </span>
                         </div>
-                        <div className="model-role-grid">
+                        <div className="model-role-grid attachment-routes">
                           <label className="settings-field model-role-field">
                             <span>Strategic</span>
                             <select
@@ -6706,6 +6722,41 @@ export function App() {
                               ))}
                             </select>
                             <small>Routine hosted work</small>
+                          </label>
+                          <label className="settings-field model-role-field">
+                            <span>Images</span>
+                            <select
+                              aria-label="OpenRouter image model"
+                              value={openRouter.settings.attachmentModel}
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    attachmentModel: event.target.value,
+                                  },
+                                })
+                              }
+                            >
+                              <option value="">Choose an image model…</option>
+                              {openRouterImageModelChoices(
+                                openRouter.settings.attachmentModel,
+                              ).map((model) => (
+                                <option
+                                  value={model.id}
+                                  key={model.id}
+                                  disabled={model.legacy}
+                                >
+                                  {model.name} — {model.id}
+                                  {model.pricing ? ` · ${model.pricing}` : ""}
+                                  {model.legacy ? " (not verified for images)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <small>
+                              Used only for chats with image pixels; the actual
+                              model appears in the timeline and cost receipt.
+                            </small>
                           </label>
                         </div>
 

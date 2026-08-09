@@ -46,7 +46,7 @@ import {
   chunkingDigest,
   storedChunkingProvenance,
 } from "./core/embedding-benchmark.js";
-import { CliWorkbench, type ExecutionEvent } from "./core/ai-workbench.js";
+import { CliWorkbench, type CliImageInput, type ExecutionEvent } from "./core/ai-workbench.js";
 import { detectCli } from "../spikes/cli-capabilities.js";
 import {
   deleteWithExecutionCancellation,
@@ -66,6 +66,7 @@ import { connectorProvisioningPreview, discoverConnectorTarget, provisionConnect
 import { readBackup, writeAtomicBackup } from "./core/backup.js";
 import { runBackupAdministration } from "./core/backup-administration-runner.js";
 import { extractDocumentOffMain } from "./core/document-extraction-runner.js";
+import {assertAttachmentExtractionDigest,assertPreparedAttachmentSources,CHAT_DOCUMENT_MEDIA,CHAT_IMAGE_MEDIA,providerAttachmentLabel,withChatAttachmentContext,type PreparedAttachmentSource,type ProviderTextAttachment} from "./core/provider-attachment-context.js";
 import {
   chunkExtractedText,
   DOCUMENT_CHUNKING_POLICY,
@@ -120,6 +121,8 @@ import {
   OpenRouterClient,
   decideHostedRoute,
   openRouterCapability,
+  selectOpenRouterModel,
+  type OpenRouterImageInput,
   type ProviderUsageReceipt,
 } from "./core/openrouter-provider.js";
 import { VoiceRuntimeRegistry } from "./core/voice-runtime.js";
@@ -903,6 +906,105 @@ function text(value: unknown, field: string, max: number): string {
   if (typeof value !== "string" || value.length > max)
     throw new Error(`Invalid ${field}`);
   return value;
+}
+type PreparedChatAttachments = {
+  images: CliImageInput[];
+  hostedImages: OpenRouterImageInput[];
+  textBlocks: ProviderTextAttachment[];
+  receipt: string;
+  sources: PreparedAttachmentSource[];
+};
+function assertPreparedChatAttachmentsCurrent(workspaceId:string,chatId:string,sources:PreparedAttachmentSource[]):void{
+  assertPreparedAttachmentSources(sources,store.listChatAttachments(workspaceId,chatId).map((item)=>({id:item.id,sha256:item.sha256})))
+}
+async function prepareChatAttachments(
+  workspaceId: string,
+  chatId: string,
+  attachmentIds: string[],
+  includeHostedPixels = false,
+): Promise<PreparedChatAttachments> {
+  if (
+    attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER ||
+    new Set(attachmentIds).size !== attachmentIds.length
+  )
+    throw new Error("Invalid chat attachment selection");
+  const metadata = new Map(
+    store
+      .listChatAttachments(workspaceId, chatId)
+      .map((attachment) => [attachment.id, attachment]),
+  );
+  if (attachmentIds.some((id) => !metadata.has(id)))
+    throw new Error("Attachment not found in chat");
+  const images: CliImageInput[] = [],
+    hostedImages: OpenRouterImageInput[] = [],
+    textBlocks: PreparedChatAttachments["textBlocks"] = [],
+    summaries: string[] = [];
+  let totalSourceBytes = 0,
+    totalImageBytes = 0;
+  for (const attachmentId of attachmentIds) {
+    const item = metadata.get(attachmentId)!,
+      label = providerAttachmentLabel(item.name);
+    totalSourceBytes += item.bytes;
+    if (totalSourceBytes > 50 * 1024 * 1024)
+      throw new Error("Selected attachments exceed the 50 MiB aggregate preparation limit");
+    if (!CHAT_IMAGE_MEDIA.has(item.mediaType) && !CHAT_DOCUMENT_MEDIA.has(item.mediaType))
+      throw new Error(`${label} has no approved chat delivery path`);
+    const prepared = store.prepareAttachmentForProvider(workspaceId, attachmentId, {
+      inlineText: false,
+      filePaths: true,
+      acceptedMediaTypes: [...CHAT_IMAGE_MEDIA, ...CHAT_DOCUMENT_MEDIA],
+      maxBytes: 25 * 1024 * 1024,
+    });
+    if (prepared.kind !== "path")
+      throw new Error(
+        prepared.kind === "unsupported"
+          ? `${label}: ${prepared.reason}`
+          : `${label} could not be prepared for provider delivery`,
+      );
+    if (CHAT_IMAGE_MEDIA.has(item.mediaType)) {
+      totalImageBytes += item.bytes;
+      if (totalImageBytes > 20 * 1024 * 1024)
+        throw new Error("Selected images exceed the 20 MiB aggregate provider limit");
+      const bytes = readFileSync(prepared.path);
+      imageDimensions(item.mediaType, bytes);
+      const image = {
+        path: prepared.path,
+        name: label,
+        mediaType: item.mediaType as CliImageInput["mediaType"],
+        sha256: prepared.sha256,
+      };
+      images.push(image);
+      if (includeHostedPixels)
+        hostedImages.push({
+          name: label,
+          mediaType: image.mediaType,
+          dataBase64: bytes.toString("base64"),
+          sha256: prepared.sha256,
+        });
+      summaries.push(`${label} · image pixels · ${prepared.sha256.slice(0, 12)}`);
+      continue;
+    }
+    const extracted = await extractDocumentOffMain(prepared.path, item.mediaType);
+    if (extracted.status !== "extracted")
+      throw new Error(`${label}: ${extracted.message}`);
+    assertAttachmentExtractionDigest(prepared.sha256,extracted.sourceDigest,label);
+    textBlocks.push({
+      id: attachmentId,
+      name: label,
+      mediaType: item.mediaType,
+      sha256: prepared.sha256,
+      text: extracted.text,
+      extractor: extracted.extractor,
+      extractorVersion: extracted.extractorVersion,
+      ...(extracted.pages ? { pages: extracted.pages } : {}),
+    });
+    summaries.push(
+      `${label} · local text via ${extracted.extractor} ${extracted.extractorVersion} · ${prepared.sha256.slice(0, 12)}`,
+    );
+  }
+  const sources=attachmentIds.map((id)=>({id,sha256:metadata.get(id)!.sha256}));
+  assertPreparedChatAttachmentsCurrent(workspaceId,chatId,sources);
+  return { images, hostedImages, textBlocks, receipt: summaries.join("; "), sources };
 }
 function directoryBytes(root: string): number {
   try {
@@ -1756,6 +1858,7 @@ function registerIpc(): void {
       liveRequestsEnabled: value.liveRequestsEnabled === true,
       strategicModel: text(value.strategicModel, "strategic model ID", 200),
       everydayModel: text(value.everydayModel, "everyday model ID", 200),
+      attachmentModel: text(value.attachmentModel, "image model ID", 200),
       fallbackProvider: ["codex", "claude"].includes(
         String(value.fallbackProvider),
       )
@@ -1778,10 +1881,9 @@ function registerIpc(): void {
         value.role === "strategic"
           ? ("strategic" as const)
           : ("everyday" as const);
-    if (Array.isArray(value.attachmentIds) && value.attachmentIds.length)
-      throw new Error(
-        "OpenRouter attachments are not enabled; files remain local.",
-      );
+    const attachmentIds = Array.isArray(value.attachmentIds)
+      ? value.attachmentIds.map((item) => text(item, "attachment ID", 64))
+      : [];
     const automationProfile=store.listSecurityProfiles(workspaceId).find((item)=>item.id===securityProfileId);if(!automationProfile)throw new Error('Security profile is unavailable');
     const settings = store.openRouterSettings(),
       usage = store.providerUsage(),
@@ -1826,7 +1928,26 @@ function registerIpc(): void {
     });
     if (route.provider !== "openrouter")
       return fallback(route.provider, route.reason);
-    const helpSelection = withProductHelp(prompt, prompt, productHelpLibrary);
+    const preparedAttachments = await prepareChatAttachments(
+        workspaceId,
+        chatId,
+        attachmentIds,
+        true,
+      ),
+      attachmentRoute = selectOpenRouterModel({
+        settings,
+        role,
+        hasImages: preparedAttachments.images.length > 0,
+      }),
+      promptWithAttachments = withChatAttachmentContext(
+        prompt,
+        preparedAttachments.textBlocks,
+      ),
+      helpSelection = withProductHelp(
+        promptWithAttachments,
+        prompt,
+        productHelpLibrary,
+      );
     let release: () => void;
     try {
       release = openRouterBudget.reserve(settings, usage.summary);
@@ -1840,12 +1961,12 @@ function registerIpc(): void {
       throw error;
     }
     const runId = store.createHostedRun(
-        workspaceId,
-        chatId,
-        sourceMessageId,
-        role,
-        route.model!,
-      ),
+      workspaceId,
+      chatId,
+      sourceMessageId,
+      role,
+      attachmentRoute.model,
+    ),
       controller = new AbortController();
     activeHostedRuns.set(runId, { workspaceId, controller });
     if (helpSelection.sources.length)
@@ -1855,13 +1976,28 @@ function registerIpc(): void {
         "progress",
         `Waypoint Help ${helpSelection.helpVersion} · ${helpSelection.sources.map((source) => `${source.title} [${source.sha256.slice(0, 12)}]`).join("; ")}`,
       );
+    if (preparedAttachments.receipt)
+      store.addHostedRunEvent(
+        workspaceId,
+        runId,
+        "progress",
+        `Attachment delivery · ${preparedAttachments.receipt}`,
+      );
+    if (preparedAttachments.images.length)
+      store.addHostedRunEvent(
+        workspaceId,
+        runId,
+        "progress",
+        attachmentRoute.reason,
+      );
     store.startHostedRun(workspaceId, runId);
-    void openRouterClient
-      .run({
+    assertPreparedChatAttachmentsCurrent(workspaceId,chatId,preparedAttachments.sources);
+    void openRouterClient.run({
         workspaceId,
         role,
-        model: route.model!,
-        prompt: withAutomationProposalTool({prompt:withCurrentDateTime(helpSelection.prompt),chatId,provider:'openrouter',model:route.model!,securityProfileId,maxDurationMs:automationProfile.maxDurationMs}),
+        model: attachmentRoute.model,
+        prompt: withAutomationProposalTool({prompt:withCurrentDateTime(helpSelection.prompt),chatId,provider:'openrouter',model:attachmentRoute.model,securityProfileId,maxDurationMs:automationProfile.maxDurationMs}),
+        images: preparedAttachments.hostedImages,
         apiKey,
         signal: controller.signal,
         requestCapMicros: settings.perRequestCapMicros ?? 100_000,
@@ -1881,7 +2017,19 @@ function registerIpc(): void {
         release();
         activeHostedRuns.delete(runId);
       });
-    return { runId, status: "running", model: route.model };
+    return {
+      runId,
+      status: "running",
+      model: attachmentRoute.model,
+      attachmentDelivery: {
+        delivered: attachmentIds,
+        mode: preparedAttachments.images.length
+          ? "image-and-local-text"
+          : preparedAttachments.textBlocks.length
+            ? "local-text"
+            : "none",
+      },
+    };
   });
   handle("waypoint:cancel-openrouter-run", (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
@@ -3754,56 +3902,14 @@ function registerIpc(): void {
         })),
       });
     assertRoute(route, cli as "codex" | "claude", profileId);
-    const passedToCli: string[] = [],
-      unsupported: Array<{ id: string; reason: string }> = [],
-      imagePaths: string[] = [],
-      textParts: string[] = [];
-    for (const attachmentId of attachmentIds) {
-      const prepared = store.prepareAttachmentForProvider(
-        workspaceId,
-        attachmentId,
-        cli === "codex"
-          ? {
-              inlineText: true,
-              filePaths: true,
-              acceptedMediaTypes: [
-                "text/plain",
-                "text/markdown",
-                "image/png",
-                "image/jpeg",
-                "image/webp",
-                "image/gif",
-              ],
-              maxBytes: 20 * 1024 * 1024,
-            }
-          : {
-              inlineText: true,
-              filePaths: false,
-              acceptedMediaTypes: ["text/plain", "text/markdown"],
-              maxBytes: 512 * 1024,
-            },
-      );
-      if (prepared.kind === "unsupported")
-        unsupported.push({ id: attachmentId, reason: prepared.reason });
-      else if (prepared.kind === "text") {
-        textParts.push(prepared.text);
-        passedToCli.push(attachmentId);
-      } else {
-        imagePaths.push(prepared.path);
-        passedToCli.push(attachmentId);
-      }
-    }
-    if (textParts.length) {
-      const context = textParts
-        .map(
-          (content, index) =>
-            `\n\n--- Attached text ${index + 1} ---\n${content}`,
-        )
-        .join("");
-      if (prompt.length + context.length > 2_000_000)
-        throw new Error("Prompt and attached text exceed the execution limit");
-      prompt += context;
-    }
+    const preparedAttachments = await prepareChatAttachments(
+      workspaceId,
+      chatId,
+      attachmentIds,
+    );
+    prompt = withChatAttachmentContext(prompt, preparedAttachments.textBlocks);
+    const passedToCli = [...attachmentIds],
+      unsupported: Array<{ id: string; reason: string }> = [];
     const helpSelection = parentExecutionId
       ? undefined
       : withProductHelp(prompt, userPrompt, productHelpLibrary);
@@ -3845,6 +3951,13 @@ function registerIpc(): void {
           .join("; "),
         rawType: `waypoint-help:${helpSelection.helpVersion}`,
       });
+    if (preparedAttachments.receipt)
+      store.appendExecutionEvent(runId, workspaceId, {
+        type: "diagnostic",
+        name: `Attachment delivery · ${attachmentIds.length} source${attachmentIds.length === 1 ? "" : "s"}`,
+        text: preparedAttachments.receipt,
+        rawType: "waypoint-attachments:v1",
+      });
     const fallbackEvents: ExecutionEvent[] = [];
     try {
       const running = await startDurableChild({
@@ -3879,7 +3992,8 @@ function registerIpc(): void {
               depth: parentExecutionId ? 1 : 0,
               timeoutMs: budget.maxDurationMs,
               maxOutputBytes: budget.maxOutputBytes,
-              imagePaths,
+              images: preparedAttachments.images,
+              beforeSpawn:()=>assertPreparedChatAttachmentsCurrent(workspaceId,chatId,preparedAttachments.sources),
             },
             (event) => {
               fallbackEvents.push(event);
@@ -4609,6 +4723,10 @@ else {
                 input.everydayModel === undefined
                   ? current.everydayModel
                   : text(input.everydayModel, "everyday model ID", 200),
+              attachmentModel:
+                input.attachmentModel === undefined
+                  ? current.attachmentModel
+                  : text(input.attachmentModel, "image model ID", 200),
               fallbackProvider: ["codex", "claude"].includes(
                 String(input.fallbackProvider),
               )

@@ -23,7 +23,7 @@ Open **Settings → Models**. For Codex or Claude, check that the installed CLI 
 
 ### An attachment or document will not process
 
-Confirm the file type and size are supported and the active workspace/chat did not change while it was being added. A corrupt or excessively decoded image fails closed. PDF/DOCX/TXT/Markdown Knowledge imports use local extraction; an unavailable embedding provider degrades to non-semantic search rather than deleting the source.
+Confirm the file type and size are supported and the active workspace/chat did not change while it was being added. A corrupt or excessively decoded image fails closed. PDF/DOCX/TXT/Markdown chat delivery and Knowledge imports use local extraction. OpenRouter image chat also requires a verified Images model in **Settings → Models**; Kimi K3 and Qwen 3.8 Max are the current curated image choices. An unavailable embedding provider degrades to non-semantic search rather than deleting the source.
 
 ### Voice, meetings, or capture is not ready
 

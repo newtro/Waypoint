@@ -50,6 +50,10 @@ The complete remaining trace is `outputs/ROADMAP_COMPLETION_ADDENDUM.md`: Crispe
 R0 and the locally implementable R1 product path are complete. R2's remaining work is intrinsically tied to unavailable Windows hardware, signing identities, notarization, update hosting, or distribution authority. By explicit user direction, those validations remain deferred rather than blocking planned feature implementation. Work therefore advances to R3 in its canonical slice order without claiming R2 release readiness.
 
 Conservative R3 defaults are local-only, suggestion-first, no silent memory, no background send, no external account/source, and exact source provenance. These choices do not widen authority and may be made under the user's standing product-decision authorization.
+
+## 2026-08-08 — Provider attachment parity
+
+The common chat composer now delivers validated images to Codex, Claude Code, and explicitly enabled OpenRouter image routes, while PDF, DOCX, TXT, and Markdown use the same bounded local extraction and provenance contract across all three. OpenRouter keeps a distinct curated Images model so a text-only everyday route is never guessed or silently substituted; caps and subscription fallback remain authoritative. Signed-in Codex and Claude image completions, fixture OpenRouter multimodal transport, schema/settings preservation, full automated verification, packaged runtime closure, and normal-profile Settings/composer inspection establish the current Mac gate without a paid OpenRouter call. Scanned-PDF OCR, live hosted model health, Windows package validation, and physical-device validation remain truthful separate gates.
 # P6D status update — 2026-08-03
 
 - **Complete (fixture/contract gate):** protected OpenRouter configuration, explicit activation, model routing preferences, cost dashboard/caps, subscription fallback, hosted chat execution/cancel, durable receipts/timeline, backup/restore, incremental/replacement sync, and provider-domain settings seam.

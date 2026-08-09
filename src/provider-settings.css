@@ -186,6 +186,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
 }
+.model-role-grid.attachment-routes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .model-lane-card {
   min-width: 0;
@@ -462,6 +463,7 @@ html[data-theme="dark"] .provider-cost-grid progress::-webkit-progress-bar { bac
 @container model-settings (max-width: 400px) {
   .model-lane-grid,
   .model-role-grid,
+  .model-role-grid.attachment-routes,
   .provider-cost-grid,
   .model-budget-controls { grid-template-columns: 1fr; }
   .model-console-heading,
@@ -478,7 +480,8 @@ html[data-theme="dark"] .provider-cost-grid progress::-webkit-progress-bar { bac
 
 @media (max-width: 760px) {
   .model-lane-grid,
-  .model-role-grid { grid-template-columns: 1fr; }
+  .model-role-grid,
+  .model-role-grid.attachment-routes { grid-template-columns: 1fr; }
   .model-budget-controls { grid-template-columns: 1fr 1fr; }
   .model-credential-row { grid-template-columns: 1fr; }
   .model-credential-actions { padding-bottom: 0; }
