@@ -59,6 +59,10 @@ import {
 } from "./chat-run-presentation";
 import { withLegacyModel } from "./provider-model-choices";
 import { nextOpenRouterActivation } from "./openrouter-activation";
+import {
+  formatProviderMicros,
+  providerCapabilityPresentation,
+} from "./provider-settings-presentation";
 import { shouldFollowChat } from "./chat-scroll";
 import { ChatMarkdown } from "./chat-markdown";
 import { parseBrowserChatCommand } from "./browser-chat-command";
@@ -3404,7 +3408,13 @@ export function App() {
         { id: "", label: "Claude default (CLI selected)" },
       ],
       chatModels.claude,
-    );
+    ),
+    openRouterPresentation = openRouter
+      ? providerCapabilityPresentation(
+          openRouter.capability.state,
+          openRouter.capability.health,
+        )
+      : undefined;
   return (
     <div className="app-frame">
       <ModalDialogHost />
@@ -6430,339 +6440,463 @@ export function App() {
                     )}
                   </div>
                 </section>
-                <section id="settings-models" className="settings-section">
-                  <h3>OpenRouter & hosted models</h3>
-                  <p className="drawer-intro">
-                    Optional hosted routing. Codex and Claude subscriptions
-                    remain the primary local CLI lanes. Kimi K3 and DeepSeek V4
-                    Flash are roles until exact model IDs are configured and
-                    verified.
-                  </p>
-                  {openRouter && (
-                    <>
-                      <div
-                        className={`automation-boundary ${openRouter.usage.summary.capReached ? "warning" : ""}`}
-                        role="status"
+                <section
+                  id="settings-models"
+                  className="settings-section models-settings-section"
+                >
+                  <header className="model-console-heading">
+                    <div>
+                      <p>Routing desk</p>
+                      <h3>Models & routing</h3>
+                      <span>
+                        Choose signed-in subscription lanes, map optional hosted
+                        roles, and set hard spending limits in one place.
+                      </span>
+                    </div>
+                    {openRouterPresentation && (
+                      <span
+                        className={`model-status-pill ${openRouterPresentation.tone}`}
                       >
-                        <strong>
-                          {openRouter.capability.state.replaceAll("_", " ")}
-                        </strong>
-                        <span>
-                          {openRouter.capability.reason} · health{" "}
-                          {openRouter.capability.health.replaceAll("_", " ")}
-                        </span>
-                      </div>
-                      <div className="provider-cost-grid">
-                        <article>
-                          <small>This month</small>
-                          <strong>
-                            $
-                            {(
-                              openRouter.usage.summary.monthMicros / 1_000_000
-                            ).toFixed(2)}
-                          </strong>
-                          <span>
-                            projected $
-                            {(
-                              openRouter.usage.summary.projectedMonthMicros /
-                              1_000_000
-                            ).toFixed(2)}
-                          </span>
-                        </article>
-                        <article>
-                          <small>Year to date</small>
-                          <strong>
-                            $
-                            {(
-                              openRouter.usage.summary.ytdMicros / 1_000_000
-                            ).toFixed(2)}
-                          </strong>
-                          <span>
-                            {openRouter.usage.summary.capReached
-                              ? "cap reached"
-                              : openRouter.usage.summary.warning
-                                ? "warning threshold"
-                                : "within configured budget"}
-                          </span>
-                        </article>
-                      </div>
-                      <label className="meeting-consent">
-                        API key{" "}
-                        <input
-                          type="password"
-                          autoComplete="off"
-                          placeholder={
-                            openRouter.keyConfigured
-                              ? "Protected key stored"
-                              : "Enter key to protected storage"
-                          }
-                          value={openRouterKey}
-                          onChange={(event) =>
-                            setOpenRouterKeyDraft(event.target.value)
-                          }
-                        />
-                      </label>
-                      <div className="drawer-actions">
-                        <button
-                          disabled={!openRouterKey}
-                          onClick={() =>
-                            void storeOpenRouterKey().catch(showError)
-                          }
-                        >
-                          Store protected key
-                        </button>
-                        {openRouter.keyConfigured && (
-                          <button
-                            className="secondary"
-                            onClick={() =>
-                              void window.waypoint
-                                .removeOpenRouterKey()
-                                .then(refreshOpenRouter)
-                                .catch(showError)
-                            }
-                          >
-                            Remove key
-                          </button>
-                        )}
-                      </div>
-                      <label className="meeting-consent">
-                        <input
-                          type="checkbox"
-                          checked={
-                            openRouter.settings.enabled &&
-                            openRouter.settings.liveRequestsEnabled
-                          }
-                          disabled={!openRouter.keyConfigured}
-                          onChange={() =>
-                            void toggleOpenRouterActivation().catch(showError)
-                          }
-                        />
-                        Enable hosted OpenRouter requests when explicitly
-                        selected (may incur cost; no background health call)
-                      </label>
-                      <label>
-                        Codex model
-                        <select
-                          aria-label="Codex model preference"
-                          value={chatModels.codex}
-                          onChange={(event) =>
-                            workspace &&
-                            void window.waypoint
-                              .setChatModelPreference(
-                                workspace.id,
-                                "codex",
-                                event.target.value,
-                              )
-                              .then(setChatModels)
-                              .catch(showError)
-                          }
-                        >
-                          {codexModelChoices.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Claude model
-                        <select
-                          aria-label="Claude model preference"
-                          value={chatModels.claude}
-                          onChange={(event) =>
-                            workspace &&
-                            void window.waypoint
-                              .setChatModelPreference(
-                                workspace.id,
-                                "claude",
-                                event.target.value,
-                              )
-                              .then(setChatModels)
-                              .catch(showError)
-                          }
-                        >
-                          {claudeModelChoices.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <p className="settings-help">
-                        These workspace preferences are shared with the chat
-                        composer on this device. They remain device-local
-                        because installed CLI model catalogs can differ by
-                        machine.
-                      </p>
-                      <label className="settings-field">
-                        Strategic model{" "}
-                        <select
-                          aria-label="OpenRouter strategic model"
-                          value={openRouter.settings.strategicModel}
-                          onChange={(event) =>
-                            setOpenRouter({
-                              ...openRouter,
-                              settings: {
-                                ...openRouter.settings,
-                                strategicModel: event.target.value,
-                              },
-                            })
-                          }
-                        >
-                          <option value="">Choose a model…</option>
-                          {openRouterModelChoices(
-                            openRouter.settings.strategicModel,
-                          ).map((model) => (
-                            <option value={model.id} key={model.id}>
-                              {model.name} — {model.id}
-                              {"pricing" in model && model.pricing
-                                ? ` · ${model.pricing}`
-                                : ""}
-                              {model.legacy ? " (saved legacy/custom)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="settings-field">
-                        Everyday model{" "}
-                        <select
-                          aria-label="OpenRouter everyday model"
-                          value={openRouter.settings.everydayModel}
-                          onChange={(event) =>
-                            setOpenRouter({
-                              ...openRouter,
-                              settings: {
-                                ...openRouter.settings,
-                                everydayModel: event.target.value,
-                              },
-                            })
-                          }
-                        >
-                          <option value="">Choose a model…</option>
-                          {openRouterModelChoices(
-                            openRouter.settings.everydayModel,
-                          ).map((model) => (
-                            <option value={model.id} key={model.id}>
-                              {model.name} — {model.id}
-                              {"pricing" in model && model.pricing
-                                ? ` · ${model.pricing}`
-                                : ""}
-                              {model.legacy ? " (saved legacy/custom)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div className="settings-grid">
-                        <label>
-                          Monthly cap (USD)
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={
-                              openRouter.settings.monthlyCapMicros / 1_000_000
-                            }
-                            onChange={(event) =>
-                              setOpenRouter({
-                                ...openRouter,
-                                settings: {
-                                  ...openRouter.settings,
-                                  monthlyCapMicros: Math.round(
-                                    Number(event.target.value) * 1_000_000,
-                                  ),
-                                },
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          YTD cap (USD)
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={openRouter.settings.ytdCapMicros / 1_000_000}
-                            onChange={(event) =>
-                              setOpenRouter({
-                                ...openRouter,
-                                settings: {
-                                  ...openRouter.settings,
-                                  ytdCapMicros: Math.round(
-                                    Number(event.target.value) * 1_000_000,
-                                  ),
-                                },
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Warn at %
-                          <input
-                            type="number"
-                            min="1"
-                            max="100"
-                            value={openRouter.settings.warningPercent}
-                            onChange={(event) =>
-                              setOpenRouter({
-                                ...openRouter,
-                                settings: {
-                                  ...openRouter.settings,
-                                  warningPercent: Number(event.target.value),
-                                },
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Cap fallback
-                          <select
-                            value={
-                              openRouter.settings.fallbackProvider ?? "codex"
-                            }
-                            onChange={(event) =>
-                              setOpenRouter({
-                                ...openRouter,
-                                settings: {
-                                  ...openRouter.settings,
-                                  fallbackProvider: event.target.value as
-                                    "codex" | "claude",
-                                },
-                              })
-                            }
-                          >
-                            <option value="codex">Codex subscription</option>
-                            <option value="claude">Claude subscription</option>
-                          </select>
-                        </label>
-                      </div>
-                      <div className="drawer-actions">
-                        <button
-                          onClick={() =>
-                            void saveOpenRouterSettings().catch(showError)
-                          }
-                        >
-                          Save provider settings
-                        </button>
-                      </div>
-                      <h4>Cost breakdown</h4>
-                      <div className="activity-list">
-                        {openRouter.usage.summary.byModel.length ? (
-                          openRouter.usage.summary.byModel.map((item) => (
-                            <article className="provider-row" key={item.model}>
-                              <strong>{item.model}</strong>
+                        <i aria-hidden="true" />
+                        {openRouterPresentation.title}
+                      </span>
+                    )}
+                  </header>
+                  {openRouter && (
+                    <div className="model-console">
+                      <section
+                        className="model-settings-block subscription-lanes"
+                        aria-labelledby="subscription-lanes-title"
+                      >
+                        <div className="model-block-heading">
+                          <div>
+                            <span>Primary lanes</span>
+                            <h4 id="subscription-lanes-title">
+                              Signed-in subscriptions
+                            </h4>
+                          </div>
+                          <small>Device-local</small>
+                        </div>
+                        <div className="model-lane-grid">
+                          <label className="model-lane-card">
+                            <span className="model-lane-label">
+                              <i aria-hidden="true">C</i>
                               <span>
-                                ${(item.costMicros / 1_000_000).toFixed(4)}
+                                <strong>Codex</strong>
+                                <small>Signed-in CLI</small>
                               </span>
-                            </article>
-                          ))
-                        ) : (
-                          <p className="empty-copy">
-                            No hosted usage receipts. Setup and status checks
-                            make no provider call.
-                          </p>
-                        )}
-                      </div>
-                    </>
+                            </span>
+                            <select
+                              aria-label="Codex model preference"
+                              value={chatModels.codex}
+                              onChange={(event) =>
+                                workspace &&
+                                void window.waypoint
+                                  .setChatModelPreference(
+                                    workspace.id,
+                                    "codex",
+                                    event.target.value,
+                                  )
+                                  .then(setChatModels)
+                                  .catch(showError)
+                              }
+                            >
+                              {codexModelChoices.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="model-lane-card">
+                            <span className="model-lane-label">
+                              <i aria-hidden="true">A</i>
+                              <span>
+                                <strong>Claude</strong>
+                                <small>Signed-in CLI</small>
+                              </span>
+                            </span>
+                            <select
+                              aria-label="Claude model preference"
+                              value={chatModels.claude}
+                              onChange={(event) =>
+                                workspace &&
+                                void window.waypoint
+                                  .setChatModelPreference(
+                                    workspace.id,
+                                    "claude",
+                                    event.target.value,
+                                  )
+                                  .then(setChatModels)
+                                  .catch(showError)
+                              }
+                            >
+                              {claudeModelChoices.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <p className="model-local-note">
+                          These workspace choices also drive the composer. They
+                          stay on this device because installed CLI catalogs can
+                          differ by machine.
+                        </p>
+                      </section>
+
+                      <section
+                        className={`model-settings-block hosted-lane ${openRouter.usage.summary.capReached ? "is-warning" : ""}`}
+                        aria-labelledby="hosted-lane-title"
+                      >
+                        <div className="model-block-heading">
+                          <div>
+                            <span>Optional lane</span>
+                            <h4 id="hosted-lane-title">OpenRouter</h4>
+                          </div>
+                          <small>Explicit · may incur cost</small>
+                        </div>
+                        <div
+                          className={`model-route-status ${openRouterPresentation?.tone ?? "quiet"}`}
+                          role="status"
+                        >
+                          <i aria-hidden="true" />
+                          <div>
+                            <strong>{openRouterPresentation?.title}</strong>
+                            <span>{openRouter.capability.reason}</span>
+                          </div>
+                          <small>{openRouterPresentation?.health}</small>
+                        </div>
+                        <label className="model-activation-row">
+                          <span>
+                            <strong>Allow hosted requests</strong>
+                            <small>
+                              Only when OpenRouter is explicitly selected. No
+                              background provider call.
+                            </small>
+                          </span>
+                          <input
+                            type="checkbox"
+                            aria-label="Allow hosted OpenRouter requests"
+                            checked={
+                              openRouter.settings.enabled &&
+                              openRouter.settings.liveRequestsEnabled
+                            }
+                            disabled={!openRouter.keyConfigured}
+                            onChange={() =>
+                              void toggleOpenRouterActivation().catch(showError)
+                            }
+                          />
+                        </label>
+                        <div className="model-credential-row">
+                          <label className="model-secret-field">
+                            <span>Protected API key</span>
+                            <input
+                              type="password"
+                              autoComplete="off"
+                              aria-label="OpenRouter API key"
+                              placeholder={
+                                openRouter.keyConfigured
+                                  ? "Protected key stored"
+                                  : "Enter an OpenRouter key"
+                              }
+                              value={openRouterKey}
+                              onChange={(event) =>
+                                setOpenRouterKeyDraft(event.target.value)
+                              }
+                            />
+                            <small>
+                              Stored with OS protection; never backed up, synced,
+                              logged, or shown again.
+                            </small>
+                          </label>
+                          <div className="model-credential-actions">
+                            <button
+                              disabled={!openRouterKey}
+                              onClick={() =>
+                                void storeOpenRouterKey().catch(showError)
+                              }
+                            >
+                              Store key
+                            </button>
+                            {openRouter.keyConfigured && (
+                              <button
+                                className="secondary"
+                                onClick={() =>
+                                  void window.waypoint
+                                    .removeOpenRouterKey()
+                                    .then(refreshOpenRouter)
+                                    .catch(showError)
+                                }
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="model-subheading">
+                          <strong>Hosted roles</strong>
+                          <span>
+                            Used only when the hosted lane is enabled and selected.
+                          </span>
+                        </div>
+                        <div className="model-role-grid">
+                          <label className="settings-field model-role-field">
+                            <span>Strategic</span>
+                            <select
+                              aria-label="OpenRouter strategic model"
+                              value={openRouter.settings.strategicModel}
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    strategicModel: event.target.value,
+                                  },
+                                })
+                              }
+                            >
+                              <option value="">Choose a model…</option>
+                              {openRouterModelChoices(
+                                openRouter.settings.strategicModel,
+                              ).map((model) => (
+                                <option value={model.id} key={model.id}>
+                                  {model.name} — {model.id}
+                                  {"pricing" in model && model.pricing
+                                    ? ` · ${model.pricing}`
+                                    : ""}
+                                  {model.legacy
+                                    ? " (saved legacy/custom)"
+                                    : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <small>Planning and coordination</small>
+                          </label>
+                          <label className="settings-field model-role-field">
+                            <span>Everyday</span>
+                            <select
+                              aria-label="OpenRouter everyday model"
+                              value={openRouter.settings.everydayModel}
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    everydayModel: event.target.value,
+                                  },
+                                })
+                              }
+                            >
+                              <option value="">Choose a model…</option>
+                              {openRouterModelChoices(
+                                openRouter.settings.everydayModel,
+                              ).map((model) => (
+                                <option value={model.id} key={model.id}>
+                                  {model.name} — {model.id}
+                                  {"pricing" in model && model.pricing
+                                    ? ` · ${model.pricing}`
+                                    : ""}
+                                  {model.legacy
+                                    ? " (saved legacy/custom)"
+                                    : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <small>Routine hosted work</small>
+                          </label>
+                        </div>
+
+                        <div className="model-subheading budget-heading">
+                          <strong>Spend guardrails</strong>
+                          <span>Caps stop hosted routing before fallback.</span>
+                        </div>
+                        <div className="provider-cost-grid">
+                          <article>
+                            <div>
+                              <small>This month</small>
+                              <strong>
+                                {formatProviderMicros(
+                                  openRouter.usage.summary.monthMicros,
+                                )}
+                              </strong>
+                            </div>
+                            <span>
+                              of {formatProviderMicros(openRouter.settings.monthlyCapMicros)} · projected{" "}
+                              {formatProviderMicros(
+                                openRouter.usage.summary.projectedMonthMicros,
+                              )}
+                            </span>
+                            <progress
+                              aria-label="Monthly OpenRouter budget used"
+                              max={Math.max(
+                                1,
+                                openRouter.settings.monthlyCapMicros,
+                              )}
+                              value={Math.min(
+                                openRouter.usage.summary.monthMicros,
+                                Math.max(
+                                  1,
+                                  openRouter.settings.monthlyCapMicros,
+                                ),
+                              )}
+                            />
+                          </article>
+                          <article>
+                            <div>
+                              <small>Year to date</small>
+                              <strong>
+                                {formatProviderMicros(
+                                  openRouter.usage.summary.ytdMicros,
+                                )}
+                              </strong>
+                            </div>
+                            <span>
+                              of {formatProviderMicros(openRouter.settings.ytdCapMicros)} ·{" "}
+                              {openRouter.usage.summary.capReached
+                                ? "cap reached"
+                                : openRouter.usage.summary.warning
+                                  ? "near warning threshold"
+                                  : "within budget"}
+                            </span>
+                            <progress
+                              aria-label="Year-to-date OpenRouter budget used"
+                              max={Math.max(1, openRouter.settings.ytdCapMicros)}
+                              value={Math.min(
+                                openRouter.usage.summary.ytdMicros,
+                                Math.max(1, openRouter.settings.ytdCapMicros),
+                              )}
+                            />
+                          </article>
+                        </div>
+                        <div className="settings-grid model-budget-controls">
+                          <label>
+                            Monthly cap (USD)
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={
+                                openRouter.settings.monthlyCapMicros / 1_000_000
+                              }
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    monthlyCapMicros: Math.round(
+                                      Number(event.target.value) * 1_000_000,
+                                    ),
+                                  },
+                                })
+                              }
+                            />
+                          </label>
+                          <label>
+                            YTD cap (USD)
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={openRouter.settings.ytdCapMicros / 1_000_000}
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    ytdCapMicros: Math.round(
+                                      Number(event.target.value) * 1_000_000,
+                                    ),
+                                  },
+                                })
+                              }
+                            />
+                          </label>
+                          <label>
+                            Warn at %
+                            <input
+                              type="number"
+                              min="1"
+                              max="100"
+                              value={openRouter.settings.warningPercent}
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    warningPercent: Number(event.target.value),
+                                  },
+                                })
+                              }
+                            />
+                          </label>
+                          <label>
+                            Cap fallback
+                            <select
+                              value={
+                                openRouter.settings.fallbackProvider ?? "codex"
+                              }
+                              onChange={(event) =>
+                                setOpenRouter({
+                                  ...openRouter,
+                                  settings: {
+                                    ...openRouter.settings,
+                                    fallbackProvider: event.target.value as
+                                      "codex" | "claude",
+                                  },
+                                })
+                              }
+                            >
+                              <option value="codex">Codex subscription</option>
+                              <option value="claude">Claude subscription</option>
+                            </select>
+                          </label>
+                        </div>
+                        <div className="model-save-row">
+                          <span>
+                            Changes to hosted roles and budgets apply after save.
+                          </span>
+                          <button
+                            onClick={() =>
+                              void saveOpenRouterSettings().catch(showError)
+                            }
+                          >
+                            Save hosted routing
+                          </button>
+                        </div>
+                        <details className="model-usage-ledger">
+                          <summary>
+                            <span>Usage ledger</span>
+                            <small>
+                              {openRouter.usage.summary.byModel.length
+                                ? `${openRouter.usage.summary.byModel.length} models · receipt totals`
+                                : "No hosted usage receipts"}
+                            </small>
+                          </summary>
+                          <div className="activity-list">
+                            {openRouter.usage.summary.byModel.length ? (
+                              openRouter.usage.summary.byModel.map((item) => (
+                                <article
+                                  className="provider-row"
+                                  key={item.model}
+                                >
+                                  <strong>{item.model}</strong>
+                                  <span>
+                                    {formatProviderMicros(item.costMicros, 4)}
+                                  </span>
+                                </article>
+                              ))
+                            ) : (
+                              <p className="empty-copy">
+                                Setup and status checks make no provider call.
+                              </p>
+                            )}
+                          </div>
+                        </details>
+                      </section>
+                    </div>
                   )}
                 </section>
                 <section id="settings-sync" className="settings-section">
