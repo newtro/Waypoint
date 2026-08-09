@@ -128,15 +128,14 @@ jobs:
           waypoint_release_id="$(printf '%s\n' "$waypoint_release_ids" | sed '/^$/d')"
 
           if test -z "$waypoint_release_id"; then
-            gh release create "$waypoint_release_tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$WAYPOINT_RELEASE_SHA" \
-              --title "Waypoint ${WAYPOINT_BUILD_VERSION} (unsigned preview)" \
-              --notes "$waypoint_release_notes" \
-              --prerelease \
-              --draft
-            waypoint_release_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-              --jq ".[] | select(.tag_name == \"${waypoint_release_tag}\") | .id")"
+            waypoint_release_json="$(jq -n \
+              --arg tag "$waypoint_release_tag" \
+              --arg target "$WAYPOINT_RELEASE_SHA" \
+              --arg name "Waypoint ${WAYPOINT_BUILD_VERSION} (unsigned preview)" \
+              --arg body "$waypoint_release_notes" \
+              '{tag_name:$tag,target_commitish:$target,name:$name,body:$body,draft:true,prerelease:true,make_latest:"false"}' | \
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" --input -)"
+            waypoint_release_id="$(jq -r '.id' <<<"$waypoint_release_json")"
           fi
 
           waypoint_release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${waypoint_release_id}")"
