@@ -2,6 +2,7 @@ appId: com.waypoint.desktop
 productName: Waypoint
 directories:
   output: release
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - dist/**/*
   - dist-electron/electron/**/*
@@ -20,7 +21,10 @@ extraResources:
   - from: vendor/product-help
     to: waypoint-help
 mac:
-  target: dir
+  target:
+    - target: zip
+      arch:
+        - arm64
   icon: build/icons/waypoint.png
   minimumSystemVersion: '13.3.0'
   category: public.app-category.productivity
@@ -30,5 +34,13 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: Waypoint uses microphone audio only after you explicitly start Voice Chat or a local meeting recording.
 win:
-  target: dir
+  target:
+    - target: nsis
+      arch:
+        - x64
   icon: build/icons/waypoint.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

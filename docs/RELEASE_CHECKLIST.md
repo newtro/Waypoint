@@ -57,4 +57,6 @@ All coordinator/account/TLS and real peer items above are deferred until the use
 - [ ] User documentation and data-boundary disclosures match the shipped build.
 - [ ] Final whole-product adversarial review has no unresolved blocker or high-severity finding.
 
-Public publishing, deployment, automatic updates, signing/notarization, and external account integration are not authorized by the current local build workflow and remain deferred.
+Private unsigned preview publication is now authorized through the reviewed GitHub merge-release workflow. A successful CI run on `main` produces immutable macOS arm64 and Windows x64 prereleases with checksums. Production signing, notarization, public distribution, automatic updates, and Linux publication remain separate gates.
+
+Public publishing, deployment, automatic updates, signing/notarization, and external account integration remain deferred.

@@ -1,0 +1,14 @@
+import {readFileSync} from 'node:fs'
+import {describe,expect,it} from 'vitest'
+
+const ci=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8')
+const release=readFileSync(new URL('../.github/workflows/release.yml',import.meta.url),'utf8')
+const builder=readFileSync(new URL('../electron-builder.yml',import.meta.url),'utf8')
+const documentation=readFileSync(new URL('../docs/RELEASE_AUTOMATION.md',import.meta.url),'utf8')
+
+describe('GitHub delivery policy',()=>{
+  it('keeps CI read-only, pinned, and zero-warning',()=>{expect(ci).toContain('contents: read');expect(ci).toContain('name: Verify');expect(ci).toContain('npm run lint');expect(ci).toContain('npm test');expect(ci).toContain('npm audit --audit-level=high');expect(ci).not.toMatch(/uses: [^\n]+@v\d/)})
+  it('publishes only the exact successful main-push SHA with scoped write authority',()=>{expect(release).not.toContain('workflow_dispatch');expect(release).toContain("github.event.workflow_run.conclusion == 'success'");expect(release).toContain("github.event.workflow_run.event == 'push'");expect(release).toContain("github.event.workflow_run.head_branch == 'main'");expect(release).toContain('WAYPOINT_RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}');expect(release).toContain('needs: package');expect(release.match(/contents: write/g)).toHaveLength(1);expect(release).not.toMatch(/uses: [^\n]+@v\d/)})
+  it('stages a rerunnable draft and verifies all assets before immutable publication',()=>{const createIndex=release.indexOf('gh release create');const uploadIndex=release.indexOf('gh release upload');const publishIndex=release.indexOf('--method PATCH');expect(createIndex).toBeGreaterThan(-1);expect(release.slice(createIndex,uploadIndex)).toContain('--draft');expect(uploadIndex).toBeGreaterThan(createIndex);expect(publishIndex).toBeGreaterThan(uploadIndex);expect(release).toContain('sha256sum --check SHA256SUMS.txt');expect(release).toContain('jq -r \'.target_commitish\'');expect(release).toContain('--clobber')})
+  it('builds only reviewed native targets and proves the macOS runner architecture',()=>{expect(release).toContain('macos-15');expect(release).toContain('test "$(uname -m)" = "arm64"');expect(release).toContain('windows-2025');expect(release).not.toContain('ubuntu-latest');expect(builder).toContain('target: zip');expect(builder).toContain('target: nsis');expect(documentation).toContain('Automated unsigned prerelease');expect(documentation).toContain('Linux');expect(documentation).toContain('Not published')})
+})

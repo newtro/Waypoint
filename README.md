@@ -137,6 +137,8 @@ This repository favors evidence over implied capability. A feature may have an i
 
 If you are evaluating a local build, start with a disposable workspace and create an export before putting in material you cannot afford to lose. See [troubleshooting](docs/TROUBLESHOOTING.md) and the [release checklist](docs/RELEASE_CHECKLIST.md) for the current boundaries.
 
+Repository delivery uses [pinned CI and merge-release automation](docs/RELEASE_AUTOMATION.md). Successful `main` verification produces private unsigned macOS arm64 and Windows x64 prereleases; production signing and Linux publication remain separate evidence-backed gates.
+
 ---
 
 <p align="center">

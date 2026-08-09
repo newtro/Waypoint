@@ -479,3 +479,12 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Extract PDF, DOCX, TXT, and Markdown locally for all providers with filename, media type, source digest, extractor/version, page count where available, and an untrusted-data boundary. Do not invoke a hosted PDF parser or OCR implicitly, because that can add cost and widen data handling.
 - Preserve protected-key activation, spending caps, subscription fallback, workspace/chat ownership, integrity/dimension checks, hard deletion, backup/sync, and bounded receipts. Receipts contain only delivery labels and digest prefixes—not image bytes, base64, paths, secrets, or raw document bodies.
 - Scanned PDFs without an extractable text layer remain a truthful limitation. Page images can use the normal image path; a future OCR path requires its own reviewed local capability rather than a silent hosted fallback.
+
+# 2026-08-09 — GitHub CI, merge prereleases, and main protection
+
+- Require the pinned zero-warning verification gate on pull requests, merge groups, and `main`. A successful CI run for a `main` push automatically creates an immutable private prerelease from that exact commit.
+- Publish native macOS arm64 ZIP and Windows x64 installer assets with SHA-256 checksums. Keep them explicitly unsigned development previews until Apple notarization and production Apple/Windows identities are provisioned and reviewed.
+- Do not publish Linux merely because Electron can emit an archive. Linux remains gated on reviewed native browser/voice closure, platform behavior, package validation, and product acceptance.
+- Pin third-party Actions to immutable commit SHAs. Default workflow authority is read-only; only the terminal release job receives `contents: write`.
+- Protect `main` with pull requests, required `Verify`, resolved conversations, linear history, and no force-push/deletion. Required approvals remain zero while the private repository has only one owner, because authors cannot approve their own pull requests; raise the count when a second reviewer exists. Retain administrator emergency bypass.
+- Release automation has no manual-dispatch path: only a successful CI run for an exact `main` push can publish. Native assets are staged in a resumable draft, downloaded and checksum-verified, and only then published under the repository's immutable-release policy.

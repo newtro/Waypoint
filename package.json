@@ -58,7 +58,9 @@
     "prepare:fast-voice": "tsx scripts/prepare-fast-voice-assets.ts",
     "prepare:agent-browser": "tsx scripts/prepare-agent-browser-assets.ts",
     "verify:fast-voice": "npm run prepare:fast-voice && npm run build && tsx scripts/fast-voice-benchmark.ts",
-    "package:dir": "npm run prepare:fast-voice && npm run prepare:agent-browser && npm run build && electron-builder --dir --config electron-builder.yml"
+    "package:dir": "npm run prepare:fast-voice && npm run prepare:agent-browser && npm run build && electron-builder --dir --config electron-builder.yml",
+    "package:release:mac": "npm run prepare:fast-voice && npm run prepare:agent-browser && npm run build && electron-builder --mac zip --arm64 --publish never --config electron-builder.yml",
+    "package:release:windows": "npm run prepare:fast-voice && npm run prepare:agent-browser && npm run build && electron-builder --win nsis --x64 --publish never --config electron-builder.yml"
   },
   "dependencies": {
     "libsodium-wrappers-sumo": "0.8.4",
