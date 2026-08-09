@@ -32,7 +32,7 @@
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "preinstall": "node scripts/enforce-toolchain.mjs",
-    "build": "tsc -b && tsc -p tsconfig.preload.json && node scripts/copy-preload.mjs && vite build",
+    "build": "npm run prepare:product-help && tsc -b && tsc -p tsconfig.preload.json && node scripts/copy-preload.mjs && vite build",
     "dev": "vite",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
@@ -48,6 +48,8 @@
     "diagnose:chat-runtime": "tsx scripts/chat-runtime-diagnostics.ts",
     "relay:bootstrap-owner": "tsx scripts/relay-bootstrap-owner.ts",
     "verify:package-runtime": "tsx scripts/package-runtime-closure.ts",
+    "prepare:product-help": "tsx scripts/prepare-product-help.ts",
+    "verify:product-help": "tsx scripts/prepare-product-help.ts --verify",
     "verify:backup-worker": "npm run build && node scripts/backup-worker-proof.mjs",
     "verify:document-worker": "npm run build && node scripts/document-ingestion-proof.mjs",
     "spike:embeddings": "tsx spikes/embedding-benchmark.ts",

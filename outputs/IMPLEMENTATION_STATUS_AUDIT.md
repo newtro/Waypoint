@@ -31,6 +31,10 @@ Screen captures now attach directly to the selected chat without a persistent su
 
 The desktop shell now has a device-local System/Light/Dark appearance setting with pre-render application, live OS following, and restart persistence. Midnight Dark is complete across chat, Markdown, execution history, Settings, Screen Capture, In-App Browser, attachments, dialogs, narrow layouts, focus states, and reduced motion. The pinned full test gate, zero-warning lint, production build, package closure, normal-profile visual/restart checks, computed contrast probes, keyboard interaction checks, and fresh independent 0-blocker/0-high/0-medium/0-low review pass.
 
+## 2026-08-08 — Bundled product Help
+
+Waypoint chat now has a local, versioned Help library covering the primary product surfaces and current capability boundaries. Root Codex, Claude, and explicitly configured OpenRouter questions retrieve a bounded relevant set with visible Help provenance and citation instructions; unrelated work and delegated child tasks are unchanged. Build-time freshness enforcement, deterministic hashes, strict runtime validation, package closure, and per-page limitation/privacy sections make Help review part of every feature-facing change rather than an optional follow-up.
+
 ## Post-R5 safe sequencing
 
 The remaining R5 expansions require a wider user policy or device/network authority: wider execution budgets, Codex no-tool child mode, peer execution, new providers/APIs, and remote embedding workers. R6 mobile requires platform/cache/distribution/notification/device decisions and hardware. These gates are recorded without inventing permission. The next documented safe local feature is therefore backup administration: explicit verification and isolated restore drills using the existing local export/restore contract.

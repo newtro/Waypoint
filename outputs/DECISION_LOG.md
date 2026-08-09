@@ -464,3 +464,10 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Dark is a complete product theme rather than an inverted chat canvas: deep cartographic ink surfaces, mint focus and navigation, sparing amber detail, and restrained compass-orbit depth cover chat, tools, Settings, capture, browser, and dialogs.
 - Appearance is device-local presentation state. It is not workspace content and does not enter backup, sync, relay, or cross-workspace policy data.
 - Accessibility takes priority over visual flare: semantic selection, visible focus, reduced-motion behavior, practical desktop reflow, and readable contrast are phase gates.
+
+# 2026-08-08 — Bundled, self-maintaining Waypoint Help
+
+- Waypoint product knowledge is a versioned immutable application resource, not a hidden mega-prompt or a workspace Knowledge document. Likely app questions retrieve at most three locally ranked pages and require visible `[Waypoint Help: …]` citations; unrelated prompts and delegated child tasks receive no Help context.
+- Help pages are untrusted reference data and grant no tool, filesystem, browser, account, or external authority. Live readiness/status wins over general documentation, and the model must state when bundled Help does not establish an answer.
+- The source catalog is reviewed in the repository, deterministically staged with per-page SHA-256, included in macOS/Windows resources, and validated for path, symlink, UTF-8, size, and digest before use. The selected page digests are retained in each bounded run receipt so provenance stays distinguishable even within one Help version. Help resources are excluded from workspace backup, sync, relay, deletion, and provider-secret storage.
+- Keeping Help current is part of the feature gate: the normal build prepares and verifies the bundle, and feature-facing source changes fail freshness verification without a same-change Help page/catalog review.

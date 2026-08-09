@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extractFile, listPackage } from '@electron/asar'
 import { verifyBrowserClosure } from '../electron/core/agent-browser.js'
+import { loadProductHelp } from '../electron/core/product-help.js'
 
 const relativeImport=/\b(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.{1,2}\/[^'"]+)['"]/g
 const relativeRuntimeUrl=/\bnew\s+URL\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g
@@ -24,6 +25,11 @@ export function verifyPackagedRuntime(archive:string):void{
   if(!existsSync(archive))throw new Error(`Packaged archive not found: ${archive}`)
   const listed=listPackage(archive),originalByNormalized=new Map(listed.map((entry)=>[entry.replaceAll('\\','/'),entry])),entries=[...originalByNormalized.keys()],missing=missingRelativeImports(entries,(entry)=>extractFile(archive,originalByNormalized.get(entry)!.slice(1)).toString('utf8'),runtimeRoots[0],runtimeRoots.slice(1))
   if(missing.length)throw new Error(`Packaged main-process runtime has missing relative imports:\n${missing.join('\n')}`)
+}
+
+export function verifyPackagedProductHelp(resources:string):void{
+  const library=loadProductHelp(path.join(resources,'waypoint-help'))
+  if(library.documents.length<8||!/^\d{4}\.\d{2}\.\d{2}\./.test(library.helpVersion))throw new Error('Packaged Waypoint Help coverage/version is invalid')
 }
 
 const voiceFiles={
@@ -71,5 +77,5 @@ export function verifyPackagedWindowsResources(resources:string):void{
 
 if(process.argv[1]&&path.resolve(fileURLToPath(import.meta.url))===path.resolve(process.argv[1])){
   const here=path.dirname(fileURLToPath(import.meta.url)),archive=process.argv[2]??(process.platform==='win32'?path.resolve(here,'../release/win-unpacked/resources/app.asar'):path.resolve(here,'../release/mac-arm64/Waypoint.app/Contents/Resources/app.asar')),resources=path.dirname(archive)
-  verifyPackagedRuntime(archive);if(process.platform==='win32')verifyPackagedWindowsResources(resources);else verifyPackagedVoice(resources);console.log(`Packaged runtime and platform resource closure verified: ${archive}`)
+  verifyPackagedRuntime(archive);verifyPackagedProductHelp(resources);if(process.platform==='win32')verifyPackagedWindowsResources(resources);else verifyPackagedVoice(resources);console.log(`Packaged runtime and platform resource closure verified: ${archive}`)
 }

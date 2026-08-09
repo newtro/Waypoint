@@ -17,6 +17,8 @@ extraResources:
     to: agent-browser
   - from: vendor/browser-network-lockdown
     to: browser-network-lockdown
+  - from: vendor/product-help
+    to: waypoint-help
 mac:
   target: dir
   icon: build/icons/waypoint.png

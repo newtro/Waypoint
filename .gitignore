@@ -5,6 +5,7 @@ dist-preload/
 release/
 vendor/voice/fast-local-staging/
 vendor/browser-staging/
+vendor/product-help/
 *.log
 *.tsbuildinfo
 .DS_Store

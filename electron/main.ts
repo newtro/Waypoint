@@ -55,6 +55,11 @@ import {
 } from "./core/execution-lifecycle.js";
 import { finalizeExecution } from "./core/execution-finalization.js";
 import { withCurrentDateTime } from "./core/prompt-context.js";
+import {
+  loadProductHelp,
+  withProductHelp,
+  type ProductHelpLibrary,
+} from "./core/product-help.js";
 import { WEBHOOK_CONNECTORS, validateAutomationProposal } from "./core/webhook-automations.js";
 import { extractAutomationProposalTool, withAutomationProposalTool } from "./core/automation-ai-tool.js";
 import { connectorProvisioningPreview, discoverConnectorTarget, provisionConnector, type CliExecutor } from "./core/connector-provisioning.js";
@@ -174,6 +179,7 @@ protocol.registerSchemesAsPrivileged([
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
 let syncService: DesktopSyncService;
+let productHelpLibrary: ProductHelpLibrary | undefined;
 const meetingPlaybackGrants = new Map<
   string,
   {
@@ -1820,6 +1826,7 @@ function registerIpc(): void {
     });
     if (route.provider !== "openrouter")
       return fallback(route.provider, route.reason);
+    const helpSelection = withProductHelp(prompt, prompt, productHelpLibrary);
     let release: () => void;
     try {
       release = openRouterBudget.reserve(settings, usage.summary);
@@ -1841,13 +1848,20 @@ function registerIpc(): void {
       ),
       controller = new AbortController();
     activeHostedRuns.set(runId, { workspaceId, controller });
+    if (helpSelection.sources.length)
+      store.addHostedRunEvent(
+        workspaceId,
+        runId,
+        "progress",
+        `Waypoint Help ${helpSelection.helpVersion} · ${helpSelection.sources.map((source) => `${source.title} [${source.sha256.slice(0, 12)}]`).join("; ")}`,
+      );
     store.startHostedRun(workspaceId, runId);
     void openRouterClient
       .run({
         workspaceId,
         role,
         model: route.model!,
-        prompt: withAutomationProposalTool({prompt:withCurrentDateTime(prompt),chatId,provider:'openrouter',model:route.model!,securityProfileId,maxDurationMs:automationProfile.maxDurationMs}),
+        prompt: withAutomationProposalTool({prompt:withCurrentDateTime(helpSelection.prompt),chatId,provider:'openrouter',model:route.model!,securityProfileId,maxDurationMs:automationProfile.maxDurationMs}),
         apiKey,
         signal: controller.signal,
         requestCapMicros: settings.perRequestCapMicros ?? 100_000,
@@ -3668,6 +3682,7 @@ function registerIpc(): void {
     const cli = text(value.cli, "CLI", 20);
     if (!["codex", "claude"].includes(cli)) throw new Error("Unsupported CLI");
     let prompt = text(value.prompt, "prompt", 2_000_000);
+    const userPrompt = prompt;
     const profileId = text(value.securityProfileId, "security profile ID", 64),
       parentExecutionId = value.parentExecutionId
         ? text(value.parentExecutionId, "parent execution ID", 64)
@@ -3789,6 +3804,10 @@ function registerIpc(): void {
         throw new Error("Prompt and attached text exceed the execution limit");
       prompt += context;
     }
+    const helpSelection = parentExecutionId
+      ? undefined
+      : withProductHelp(prompt, userPrompt, productHelpLibrary);
+    if (helpSelection) prompt = helpSelection.prompt;
     prompt = withAutomationProposalTool({prompt:withCurrentDateTime(prompt),chatId,provider:cli as 'codex'|'claude',model:value.model?text(value.model,"model",120):undefined,securityProfileId:profileId,maxDurationMs:profile.maxDurationMs});
     const budget = createExecutionBudget({
       kind: parentExecutionId ? "child" : "root",
@@ -3817,6 +3836,15 @@ function registerIpc(): void {
       taskType: childTask?.type,
       budgetReceipt: serializeExecutionBudget(budget),
     });
+    if (helpSelection?.sources.length)
+      store.appendExecutionEvent(runId, workspaceId, {
+        type: "diagnostic",
+        name: `Waypoint Help · ${helpSelection.sources.length} source${helpSelection.sources.length === 1 ? "" : "s"}`,
+        text: helpSelection.sources
+          .map((source) => `${source.title} [${source.sha256.slice(0, 12)}]`)
+          .join("; "),
+        rawType: `waypoint-help:${helpSelection.helpVersion}`,
+      });
     const fallbackEvents: ExecutionEvent[] = [];
     try {
       const running = await startDurableChild({
@@ -4378,6 +4406,19 @@ else {
     store = new WorkspaceStore(
       path.join(app.getPath("userData"), "waypoint.sqlite"),
     );
+    try {
+      productHelpLibrary = loadProductHelp(
+        app.isPackaged
+          ? path.join(process.resourcesPath, "waypoint-help")
+          : path.resolve(currentDirectory, "../../vendor/product-help"),
+      );
+    } catch (error) {
+      productHelpLibrary = undefined;
+      console.error(
+        "Waypoint Help is unavailable",
+        error instanceof Error ? error.message : "integrity check failed",
+      );
+    }
     meetingPlaybackCacheRoot = path.join(
       app.getPath("userData"),
       "meeting-playback-cache",
