@@ -11,6 +11,7 @@ import {
   domainAllowed,
   publicAddress,
 } from "./agent-browser.js";
+import { EXPECTED_AGENT_BROWSER_CLOSURES } from "../generated-agent-browser-trust.js";
 const base = {
   mode: "isolated" as const,
   session: "workspace_one",
@@ -19,6 +20,20 @@ const base = {
   browserExecutable: "/app/chromium",
 };
 describe("agent browser contract", () => {
+  it("keeps each reviewed platform closure on an explicit finite digest list", () => {
+    const mac = EXPECTED_AGENT_BROWSER_CLOSURES["darwin-arm64"],
+      windows = EXPECTED_AGENT_BROWSER_CLOSURES["win32-x64"],
+      digest = /^[a-f0-9]{64}$/;
+    expect(mac.closureSha256).toHaveLength(2);
+    expect(windows.closureSha256).toHaveLength(1);
+    expect(
+      [...mac.closureSha256, ...windows.closureSha256].every((value) =>
+        digest.test(value),
+      ),
+    ).toBe(true);
+    expect(mac.closureSha256).not.toContain("0".repeat(64));
+    expect(windows.closureSha256).not.toContain("0".repeat(64));
+  });
   it("pins the reviewed runtime and emits only modeled local flags", () => {
     expect(AGENT_BROWSER_VERSION).toBe("0.33.2");
     expect(

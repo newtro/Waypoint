@@ -24,7 +24,7 @@ Private/loopback/link-local destinations, unsafe schemes, credential-bearing URL
 
 ## Current limitations
 
-Browser and web availability depend on packaged runtime closure, profile readiness, domain policy, and provider configuration. Tests do not perform authenticated or production writes. Cross-device tool execution still requires an enrolled available worker and compatible target policy.
+Browser and web availability depend on packaged runtime closure, profile readiness, domain policy, and provider configuration. Native packages accept only an exact reviewed browser closure for their platform; an unrecognized or incomplete runtime fails closed rather than silently enabling browser tools. Tests do not perform authenticated or production writes. Cross-device tool execution still requires an enrolled available worker and compatible target policy.
 
 ## Privacy and data handling
 

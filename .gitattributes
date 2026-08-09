@@ -2,6 +2,9 @@
 # platform checkout rewrite their line endings.
 vendor/voice/fast-local-source/** -text
 
+# Product Help is hashed and bundled byte-for-byte on every release runner.
+product-help/** text eol=lf
+
 # Acceptance fixtures and rendered evidence are byte-exact binary artifacts.
 .codex/qa-artifacts/*.pdf -text -diff
 .codex/qa-artifacts/*.docx -text -diff

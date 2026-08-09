@@ -333,7 +333,7 @@ export function verifyBrowserClosure(root: string) {
     manifest.platform !== process.platform ||
     manifest.arch !== process.arch ||
     !expected ||
-    manifest.closureSha256 !== expected.closureSha256 ||
+    !expected.closureSha256.includes(manifest.closureSha256) ||
     manifest.browserExecutable !== expected.browserExecutable ||
     !Array.isArray(manifest.entries) ||
     manifest.entries.length < 2
