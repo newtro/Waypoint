@@ -1,12 +1,18 @@
 # Tools, browser, and web access
 
-Waypoint’s Tool Gateway is a model-neutral, trusted-main policy boundary. It exposes bounded tools and Waypoint domain commands with status, cancellation, receipts, failure learning, workspace scope, and a global Stop. Codex and Claude keep their own native tool loops; Waypoint adds visibility and a thin bridge for Waypoint-specific controls.
+Waypoint’s Tool Gateway is a model-neutral, trusted-main policy boundary. It exposes bounded tools and Waypoint domain commands with status, cancellation, receipts, failure learning, workspace scope, and a global Stop. OpenRouter uses this gateway for its complete local tool loop. Codex and Claude keep their provider-native tool loops while Waypoint enforces repository authority, surfaces decisions, and records their structured activity.
 
 ## Coding and local CLI tools
 
-Trusted Autonomous Developer workspaces can run local terminal and installed CLI tools under the configured workspace/device policy and user deny list. Existing Git, GitHub CLI, Azure tooling, and similar local identities are preferred over duplicate credential storage. Receipts are bounded and redacted.
+Developer and Full agent profiles can run local terminal and installed CLI tools from the explicitly selected agent workspace under the configured approval, device policy, and user deny list. Structured file and provider web tools keep their profile scope. On Windows, approved shell and PowerShell commands have host filesystem and network authority rather than OS sandbox containment; Bypass has the same host authority without prompts. Existing Git, GitHub CLI, Azure tooling, and similar local identities are preferred over duplicate credential storage. Receipts are bounded and redacted.
+
+Codex and Claude provider-native approval or clarification requests appear in the active chat. The request shows the provider, action kind, bounded details, and available choices. A decision is scoped to one action unless the user explicitly allows it for the current provider session; unresolved requests expire when the run ends or Waypoint restarts.
 
 Commit and push can be permitted for a trusted workspace with visible notification. Pull requests and deployments require a direct user request. External accounts are never created merely because a CLI is installed.
+
+## Approval-gated automation planning
+
+Webhook configuration is model-directed in every root chat. A one-time request such as reviewing the current pull request uses the selected profile's ordinary tools; recurring or event-triggered intent such as whenever a pull request is created gives the model a bounded Waypoint automation-proposal tool. The model must ask a focused question when the intent is ambiguous. The tool prepares the Waypoint receiver and provider hook as one pending confirmation transaction and never provisions or enables either side before that confirmation. Codex, Claude, Grok, and OpenRouter retain the selected profile's normal file, shell, network, MCP, browser, and provider-native authority while deciding which tools are needed.
 
 ## Browser modes
 

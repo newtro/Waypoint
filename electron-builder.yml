@@ -6,9 +6,11 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - dist/**/*
   - dist-electron/electron/**/*
+  - '!dist-electron/electron/**/*.test.js'
   - dist-electron/node/relay/**/*.js
   - '!dist-electron/node/relay/**/*.test.js'
   - dist-electron/spikes/cli-capabilities.js
+  - '!node_modules/@anthropic-ai/claude-agent-sdk-*/**/*'
 extraResources:
   - from: vendor/voice/fast-local-staging
     to: fast-local
@@ -41,6 +43,9 @@ win:
   icon: build/icons/waypoint.png
 nsis:
   oneClick: false
-  allowToChangeInstallationDirectory: true
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: false
+  include: build/installer.nsh
   createDesktopShortcut: true
   createStartMenuShortcut: true

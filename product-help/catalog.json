@@ -14,7 +14,7 @@
       "id": "chat-models-attachments",
       "title": "Chat, models, and attachments",
       "summary": "Codex, Claude, OpenRouter, model routing, streaming, costs, attachments, and provider limitations.",
-      "keywords": ["chat", "codex", "claude", "openrouter", "model", "provider", "routing", "cost", "attachment", "image", "pdf", "docx"],
+      "keywords": ["chat", "codex", "claude", "openrouter", "model", "provider", "routing", "cost", "attachment", "image", "pdf", "docx", "repository", "working folder", "security profile", "approval", "session"],
       "file": "chat-models-attachments.md"
     },
     {

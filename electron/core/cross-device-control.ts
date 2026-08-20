@@ -4,6 +4,7 @@ export const CROSS_DEVICE_CAPABILITIES = [
   "waypoint.workspace_summary",
   "agent.codex",
   "agent.claude",
+  "agent.grok",
 ] as const;
 export type CrossDeviceCapability = (typeof CROSS_DEVICE_CAPABILITIES)[number];
 export function remotePolicyDigest(capability: CrossDeviceCapability) {
@@ -48,7 +49,7 @@ export function defaultWorkerPolicy(): WorkerPolicy {
     enabled: false,
     failover: false,
     allowedCapabilities: ["waypoint.workspace_summary"],
-    maxDurationMs: 60_000,
+    maxDurationMs: 0,
     maxConcurrency: 1,
   };
 }
@@ -65,8 +66,9 @@ export function validateWorkerPolicy(value: unknown): WorkerPolicy {
     typeof row.failover !== "boolean" ||
     row.maxConcurrency !== 1 ||
     !Number.isSafeInteger(row.maxDurationMs) ||
-    Number(row.maxDurationMs) < 5_000 ||
-    Number(row.maxDurationMs) > 300_000 ||
+    (Number(row.maxDurationMs) !== 0 &&
+      (Number(row.maxDurationMs) < 5_000 ||
+        Number(row.maxDurationMs) > 300_000)) ||
     caps.length < 1 ||
     caps.length > CROSS_DEVICE_CAPABILITIES.length ||
     new Set(caps).size !== caps.length ||
@@ -219,8 +221,8 @@ export function validateRemoteJob(value: unknown): RemoteJobEnvelope {
     !Number.isSafeInteger(input.keyEpoch) ||
     input.keyEpoch < 1 ||
     !Number.isSafeInteger(input.timeoutMs) ||
-    input.timeoutMs < 5_000 ||
-    input.timeoutMs > 300_000 ||
+    (input.timeoutMs !== 0 &&
+      (input.timeoutMs < 5_000 || input.timeoutMs > 300_000)) ||
     input.origin !== "user" ||
     !Number.isFinite(Date.parse(input.createdAt)) ||
     new Date(input.createdAt).toISOString() !== input.createdAt
@@ -275,7 +277,10 @@ export function issueJobLease(
   now = new Date(),
   targetProfileDigest=job.profileDigest,
 ): JobLease {
-  const expires = new Date(now.getTime() + Math.min(job.timeoutMs, 60_000));
+  const expires =
+    job.timeoutMs === 0
+      ? new Date("9999-12-31T23:59:59.999Z")
+      : new Date(now.getTime() + job.timeoutMs);
   return {
     version: 1,
     leaseId: randomUUID(),

@@ -7,5 +7,5 @@ export function sanitizeSyncStatus(raw:Record<string,unknown>):SanitizedSyncStat
   const conflicts=count(raw.conflicts),pending=count(raw.pendingMutations)+count(raw.pendingEnvelopes)
   const setup=raw.setupStatus==='device_pending_keys'?'device_pending_keys':'local_only'
   const state=conflicts>0?'conflicts':setup==='device_pending_keys'?'device_pending_keys':pending>0?'pending':'local_only'
-  return {state,pending,conflicts,conflictVariants:count(raw.conflictVariants),tombstones:count(raw.tombstones),enrollmentAvailable:false,connectionConfigured:false}
+  return {state,pending,conflicts,conflictVariants:count(raw.conflictVariants),tombstones:count(raw.tombstones),localOnlyAttachments:count(raw.localOnlyAttachments),enrollmentAvailable:false,connectionConfigured:false}
 }

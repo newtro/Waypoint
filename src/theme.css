@@ -164,6 +164,38 @@ html[data-theme="dark"] .message-action { color: #7f9187; }
 html[data-theme="dark"] .run-strip { border-color: #40564b; color: #8f9e96; }
 html[data-theme="dark"] .run-strip p { color: #dce5e0; }
 html[data-theme="dark"] .icon-button { color: #a0afa7; }
+html[data-theme="dark"] .automation-confirmation {
+  border-color: #365046;
+  background: #16231e;
+  color: #e5eee9;
+  box-shadow: 0 16px 38px #0005;
+}
+html[data-theme="dark"] .automation-confirmation small { color: #8da499; }
+html[data-theme="dark"] .automation-confirmation strong { color: #f0f5f2; }
+html[data-theme="dark"] .automation-confirmation p,
+html[data-theme="dark"] .automation-confirmation dd { color: #bdcbc3; }
+html[data-theme="dark"] .automation-confirmation dt { color: #82948a; }
+html[data-theme="dark"] .provider-request pre {
+  border-color: #31473d;
+  background: #0e1814;
+  color: #cbd8d1;
+  scrollbar-color: #52685d #17231e;
+}
+html[data-theme="dark"] .provider-request-summary > p b { color: #84988d; }
+html[data-theme="dark"] .provider-request-summary > p code,
+html[data-theme="dark"] .provider-request-summary > p span { color: #d6e1db; }
+html[data-theme="dark"] .provider-request-summary summary { color: #86b69e; }
+html[data-theme="dark"] .automation-confirmation-actions .secondary {
+  background: #293730;
+  color: #c5d0ca;
+}
+html[data-theme="dark"] .provider-question-list fieldset { border-color: #31473d; }
+html[data-theme="dark"] .provider-question-list legend,
+html[data-theme="dark"] .provider-question-list label { color: #91a49a; }
+html[data-theme="dark"] .provider-question-options button { border-color: #344a40; background: #101b16; color: #d7e2dc; }
+html[data-theme="dark"] .provider-question-options button[aria-pressed="true"] { border-color: #69b38d; background: #20372c; box-shadow: 0 0 0 2px #69b38d24; }
+html[data-theme="dark"] .provider-question-options button span { color: #8fa097; }
+html[data-theme="dark"] .provider-question-list input { border-color: #3a5045; background: #0c1511; color: #e1eae5; }
 
 html[data-theme="dark"] .composer-dock { background: linear-gradient(transparent, var(--night-void) 27%, var(--night-void)); }
 html[data-theme="dark"] .composer { position: relative; border-color: #34473d; background: #15201b; box-shadow: 0 22px 55px #0007, 0 2px 8px #0004; }
@@ -265,6 +297,8 @@ html[data-theme="dark"] .execution-timeline li { border-color: #25352d; }
 html[data-theme="dark"] .execution-timeline li::before { border-color: #567061; background: #17241e; }
 html[data-theme="dark"] .execution-live-text { border-color: #2c3d34; background: #131e19; }
 html[data-theme="dark"] .execution-live-text .chat-markdown { color: #aab8b0; }
+.execution-live-answer { margin-top: 10px; }
+.execution-live-label { display: block; margin-top: 8px; color: var(--muted); }
 
 html[data-theme="dark"] .chat-markdown blockquote { border-color: #4b6b5b; color: #aab8b0; }
 html[data-theme="dark"] .chat-markdown code { background: #1d2a24; color: #dcebe3; }

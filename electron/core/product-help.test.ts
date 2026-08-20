@@ -124,21 +124,29 @@ describe("Waypoint product Help", () => {
         readFileSync(linkedManifestPath, "utf8"),
       ) as { documents: Array<Record<string, unknown>> };
     writeFileSync(path.join(linked, "real.md"), "# safe");
-    symlinkSync(path.join(linked, "real.md"), path.join(linked, "linked.md"));
-    linkedManifest.documents[0] = {
-      ...linkedManifest.documents[0],
-      file: "linked.md",
-      bytes: 6,
-      sha256: createHash("sha256").update("# safe").digest("hex"),
-    };
-    writeFileSync(linkedManifestPath, JSON.stringify(linkedManifest));
-    expect(() => loadProductHelp(linked)).toThrow(/unsafe/);
+    let fileSymlinkCreated = true;
+    try {
+      symlinkSync(path.join(linked, "real.md"), path.join(linked, "linked.md"));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && ["EPERM", "EACCES"].includes(String(error.code)))) throw error;
+      fileSymlinkCreated = false;
+    }
+    if (fileSymlinkCreated) {
+      linkedManifest.documents[0] = {
+        ...linkedManifest.documents[0],
+        file: "linked.md",
+        bytes: 6,
+        sha256: createHash("sha256").update("# safe").digest("hex"),
+      };
+      writeFileSync(linkedManifestPath, JSON.stringify(linkedManifest));
+      expect(() => loadProductHelp(linked)).toThrow(/unsafe/);
+    }
 
     const actualRoot = bundle(),
       symlinkParent = mkdtempSync(path.join(tmpdir(), "waypoint-help-link-")),
       rootLink = path.join(symlinkParent, "root");
     temporary.push(symlinkParent);
-    symlinkSync(actualRoot, rootLink);
+    symlinkSync(actualRoot, rootLink, process.platform === "win32" ? "junction" : undefined);
     expect(() => loadProductHelp(rootLink)).toThrow(/root cannot be a symlink/);
 
     const sourceLinkParent = mkdtempSync(
@@ -146,7 +154,7 @@ describe("Waypoint product Help", () => {
       ),
       sourceLink = path.join(sourceLinkParent, "source");
     temporary.push(sourceLinkParent);
-    symlinkSync(sourceRoot, sourceLink);
+    symlinkSync(sourceRoot, sourceLink, process.platform === "win32" ? "junction" : undefined);
     expect(() => compileProductHelpSource(sourceLink)).toThrow(
       /source root cannot be a symlink/,
     );

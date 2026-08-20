@@ -23,4 +23,13 @@ describe("prompt date-time context", () => {
       true,
     );
   });
+  it("keeps an interactive slash skill at the start of the provider prompt", () => {
+    const composed = withCurrentDateTime(
+      "/auto-pr-review PR 42",
+      new Date("2026-08-07T15:30:00"),
+    );
+    expect(composed.startsWith("/auto-pr-review PR 42\n\n[Context]")).toBe(
+      true,
+    );
+  });
 });

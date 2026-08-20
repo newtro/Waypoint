@@ -72,7 +72,10 @@ describe("chat execution presentation", () => {
       "utf8",
     );
     expect(source).toContain("runsForSourceMessage");expect(source).toContain("executionHistory");
-    expect(source).toContain("execution-live-text");
+    expect(source).toContain("execution-live-answer");
+    expect(source).toContain('run.profileName ?? "Unknown authority profile"');
+    expect(source).toContain("profile = selectedProfileId");
+    expect(source).not.toContain('profile = String(data.get("profile")');
     expect(source).not.toContain('open={run.status === "running"}');
     expect(compact).not.toContain("{chatRuns.map((value)");
     expect(source).toContain(

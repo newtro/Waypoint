@@ -1,8 +1,26 @@
-export interface ExecutionRegistry { cancel(runId:string):boolean; cancelAll():void }
-export interface ExecutionOwnerStore { activeExecutionIds(workspaceId?:string,chatId?:string):string[]; deleteObject(workspaceId:string,kind:'document'|'chat'|'memory',objectId:string):void }
+export interface ExecutionRegistry {
+  cancel(runId:string):boolean
+  cancelAndWait(runId:string):Promise<boolean>
+  cancelAll():void
+}
+export interface ExecutionOwnerStore {
+  activeExecutionIds(workspaceId?:string,chatId?:string):string[]
+  cancelQueuedExecution?(workspaceId:string,runId:string):boolean
+  deleteObject(workspaceId:string,kind:'document'|'chat'|'memory',objectId:string):void
+}
 
-export function deleteWithExecutionCancellation(store:ExecutionOwnerStore,registry:ExecutionRegistry,workspaceId:string,kind:'document'|'chat'|'memory',objectId:string):void{
-  if(kind==='chat')for(const runId of store.activeExecutionIds(workspaceId,objectId))registry.cancel(runId)
+export async function deleteWithExecutionCancellation(store:ExecutionOwnerStore,registries:ExecutionRegistry|readonly ExecutionRegistry[],workspaceId:string,kind:'document'|'chat'|'memory',objectId:string):Promise<void>{
+  const available=Array.isArray(registries)?registries:[registries]
+  if(kind==='chat')for(const runId of store.activeExecutionIds(workspaceId,objectId)){
+    if(store.cancelQueuedExecution?.(workspaceId,runId))continue
+    let canceled=false
+    for(const registry of available){
+      canceled=await registry.cancelAndWait(runId)
+      if(canceled)break
+    }
+    if(!canceled)throw new Error('The active AI run could not be stopped, so the chat was not deleted')
+  }
+  if(kind==='chat'&&store.activeExecutionIds(workspaceId,objectId).length)throw new Error('New AI work reached the chat while deletion was waiting, so the chat was not deleted')
   store.deleteObject(workspaceId,kind,objectId)
 }
 

@@ -1,4 +1,54 @@
-import{mkdtempSync}from'node:fs';import os from'node:os';import path from'node:path';import{DatabaseSync}from'node:sqlite';import{describe,expect,it}from'vitest';import{WorkspaceStore}from'./store.js'
-describe('chat model preferences',()=>{
- it('migrates, persists unknown models per workspace, and cascades on workspace deletion',()=>{const root=mkdtempSync(path.join(os.tmpdir(),'waypoint-model-pref-')),database=path.join(root,'waypoint.sqlite'),store=new WorkspaceStore(database),first=store.createWorkspace('First',root),second=store.createWorkspace('Second',root);expect(store.chatModelPreferences(first.id)).toEqual({codex:'',claude:''});store.setChatModelPreference(first.id,'codex','historic-model');store.setChatModelPreference(first.id,'claude','');expect(store.chatModelPreferences(first.id)).toEqual({codex:'historic-model',claude:''});expect(store.chatModelPreferences(second.id)).toEqual({codex:'',claude:''});store.close();const reopened=new WorkspaceStore(database);expect(reopened.chatModelPreferences(first.id).codex).toBe('historic-model');reopened.close();const raw=new DatabaseSync(database);raw.exec('PRAGMA foreign_keys=ON');raw.prepare('DELETE FROM workspaces WHERE id=?').run(first.id);expect((raw.prepare('SELECT count(*) count FROM chat_model_preferences WHERE workspace_id=?').get(first.id)as{count:number}).count).toBe(0);raw.close()})
-})
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it } from "vitest";
+import { WorkspaceStore } from "./store.js";
+describe("chat model preferences", () => {
+  it("migrates, persists unknown models per workspace, and cascades on workspace deletion", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "waypoint-model-pref-")),
+      database = path.join(root, "waypoint.sqlite"),
+      store = new WorkspaceStore(database),
+      first = store.createWorkspace("First", root),
+      second = store.createWorkspace("Second", root);
+    expect(store.chatModelPreferences(first.id)).toEqual({
+      codex: "",
+      claude: "",
+      grok: "",
+    });
+    store.setChatModelPreference(first.id, "codex", "historic-model");
+    store.setChatModelPreference(first.id, "claude", "");
+    store.setChatModelPreference(first.id, "grok", "grok-4.6");
+    expect(store.chatModelPreferences(first.id)).toEqual({
+      codex: "historic-model",
+      claude: "",
+      grok: "grok-4.6",
+    });
+    expect(store.chatModelPreferences(second.id)).toEqual({
+      codex: "",
+      claude: "",
+      grok: "",
+    });
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(reopened.chatModelPreferences(first.id)).toEqual({
+      codex: "historic-model",
+      claude: "",
+      grok: "grok-4.6",
+    });
+    reopened.close();
+    const raw = new DatabaseSync(database);
+    raw.exec("PRAGMA foreign_keys=ON");
+    raw.prepare("DELETE FROM workspaces WHERE id=?").run(first.id);
+    expect(
+      (
+        raw
+          .prepare(
+            "SELECT count(*) count FROM chat_model_preferences WHERE workspace_id=?",
+          )
+          .get(first.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    raw.close();
+  });
+});

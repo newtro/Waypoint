@@ -1,255 +1,789 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer } from "electron";
 let currentWorkspaceId: string | undefined;
 
-contextBridge.exposeInMainWorld('waypoint', {
+contextBridge.exposeInMainWorld("waypoint", {
   platform: process.platform,
-  onScreenCaptureRequest:(listener:()=>void)=>{const handler=()=>listener();ipcRenderer.on('waypoint:screen-capture-request',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-request',handler)},
-  onScreenCaptureCompleted:(listener:(value:{status:'completed'|'failed'|'canceled';message:string;captureId?:string})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{status:'completed'|'failed'|'canceled';message:string;captureId?:string})=>listener(value);ipcRenderer.on('waypoint:screen-capture-completed',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-completed',handler)},
-  onWebhookEventsImported:(listener:(value:{workspaceId:string;imported:number})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;imported:number})=>listener(value);ipcRenderer.on('waypoint:webhook-events-imported',handler);return()=>ipcRenderer.removeListener('waypoint:webhook-events-imported',handler)},
-  onAutomationProposalCreated:(listener:(value:{workspaceId:string;chatId?:string;proposalId:string})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;chatId?:string;proposalId:string})=>listener(value);ipcRenderer.on('waypoint:automation-proposal-created',handler);return()=>ipcRenderer.removeListener('waypoint:automation-proposal-created',handler)},
-  onAutomationRunUpdated:(listener:(value:{workspaceId:string;runId:string})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;runId:string})=>listener(value);ipcRenderer.on('waypoint:automation-run-updated',handler);return()=>ipcRenderer.removeListener('waypoint:automation-run-updated',handler)},
-  onMeetingTranscriptionProgress:(listener:(value:{workspaceId:string;meetingId:string;runId:string;phase:'preparing'|'transcribing';completed:number;total?:number})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;meetingId:string;runId:string;phase:'preparing'|'transcribing';completed:number;total?:number})=>listener(value);ipcRenderer.on('waypoint:meeting-transcription-progress',handler);return()=>ipcRenderer.removeListener('waypoint:meeting-transcription-progress',handler)},
-  onScreenCaptureVisibility:(listener:(hidden:boolean)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{token:string;hidden:boolean})=>{listener(value.hidden);requestAnimationFrame(()=>requestAnimationFrame(()=>ipcRenderer.send('waypoint:screen-capture-visibility-ack',value)))};ipcRenderer.on('waypoint:screen-capture-visibility',handler);return()=>ipcRenderer.removeListener('waypoint:screen-capture-visibility',handler)},
-  screenCaptureReadiness:()=>ipcRenderer.invoke('waypoint:screen-capture-readiness'),
-  screenCaptureSettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-settings',{workspaceId}),
-  updateScreenCaptureSettings:(workspaceId:string,settings:unknown)=>ipcRenderer.invoke('waypoint:screen-capture-settings-update',{workspaceId,settings}),
-  setScreenCaptureShortcutRecording:(workspaceId:string,active:boolean)=>ipcRenderer.invoke('waypoint:screen-capture-shortcut-recording',{workspaceId,active}),
-  screenCaptureSources:(workspaceId:string,mode:'region'|'window'|'display')=>ipcRenderer.invoke('waypoint:screen-capture-sources',{workspaceId,mode}),
-  cancelScreenCaptureSources:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-cancel-sources',{workspaceId}),
-  createScreenCapture:(workspaceId:string,token:string)=>ipcRenderer.invoke('waypoint:screen-capture-create',{workspaceId,token}),
-  importBrowserScreenCapture:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-import-browser',{workspaceId}),
-  listScreenCaptures:(workspaceId:string)=>ipcRenderer.invoke('waypoint:screen-capture-list',{workspaceId}),
-  readScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-read',{workspaceId,captureId}),
-  updateScreenCapture:(workspaceId:string,captureId:string,layers:unknown,flattenedBytes?:Uint8Array)=>ipcRenderer.invoke('waypoint:screen-capture-update',{workspaceId,captureId,layers,flattenedBytes}),
-  copyScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-copy',{workspaceId,captureId}),
-  saveScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-save',{workspaceId,captureId}),
-  addScreenCaptureToChat:(workspaceId:string,captureId:string,chatId:string)=>ipcRenderer.invoke('waypoint:screen-capture-add-chat',{workspaceId,captureId,chatId}),
-  addScreenCaptureToKnowledge:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-add-knowledge',{workspaceId,captureId}),
-  deleteScreenCapture:(workspaceId:string,captureId:string)=>ipcRenderer.invoke('waypoint:screen-capture-delete',{workspaceId,captureId}),
-  bootstrap: () => ipcRenderer.invoke('waypoint:bootstrap'),
-  openExternal:(url:string)=>ipcRenderer.invoke('waypoint:open-external',{url}),
-  activityCaptureStatus:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-status',{workspaceId}),
-  reflectionRuns:(workspaceId:string)=>ipcRenderer.invoke('waypoint:reflection-runs',{workspaceId}),
-  reflectionProposals:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:reflection-proposals',{workspaceId,runId}),
-  startReflection:(workspaceId:string,sourceIds:string[],provider:'codex'|'claude')=>ipcRenderer.invoke('waypoint:reflection-start',{workspaceId,sourceIds,provider}),
-  cancelReflection:(workspaceId:string)=>ipcRenderer.invoke('waypoint:reflection-cancel',{workspaceId}),
-  resolveReflection:(workspaceId:string,proposalId:string,action:'accept'|'edit'|'reject'|'rollback',editedBody?:string)=>ipcRenderer.invoke('waypoint:reflection-resolve',{workspaceId,proposalId,action,editedBody}),
-  updateActivityCapture:(workspaceId:string,policy:unknown)=>ipcRenderer.invoke('waypoint:activity-capture-update',{workspaceId,policy}),
-  listActivitySnapshots:(workspaceId:string,query?:string)=>ipcRenderer.invoke('waypoint:activity-capture-list',{workspaceId,query}),
-  readActivitySnapshot:(workspaceId:string,snapshotId:string)=>ipcRenderer.invoke('waypoint:activity-capture-read',{workspaceId,snapshotId}),
-  deleteActivitySnapshot:(workspaceId:string,snapshotId:string)=>ipcRenderer.invoke('waypoint:activity-capture-delete',{workspaceId,snapshotId}),
-  deleteAllActivitySnapshots:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-delete-all',{workspaceId}),
-  purgeExpiredActivitySnapshots:(workspaceId:string)=>ipcRenderer.invoke('waypoint:activity-capture-purge',{workspaceId}),
-  createWorkspace: (name: string) => ipcRenderer.invoke('waypoint:create-workspace', { name }),
-  deleteWorkspace: (workspaceId: string) => ipcRenderer.invoke('waypoint:delete-workspace', { workspaceId }),
+  onScreenCaptureRequest: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("waypoint:screen-capture-request", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:screen-capture-request", handler);
+  },
+  onScreenCaptureCompleted: (
+    listener: (value: {
+      status: "completed" | "failed" | "canceled";
+      message: string;
+      captureId?: string;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: {
+        status: "completed" | "failed" | "canceled";
+        message: string;
+        captureId?: string;
+      },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:screen-capture-completed", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:screen-capture-completed", handler);
+  },
+  onWebhookEventsImported: (
+    listener: (value: { workspaceId: string; imported: number }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { workspaceId: string; imported: number },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:webhook-events-imported", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:webhook-events-imported", handler);
+  },
+  onAutomationProposalCreated: (
+    listener: (value: {
+      workspaceId: string;
+      chatId?: string;
+      proposalId: string;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { workspaceId: string; chatId?: string; proposalId: string },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:automation-proposal-created", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "waypoint:automation-proposal-created",
+        handler,
+      );
+  },
+  onAutomationRunUpdated: (
+    listener: (value: { workspaceId: string; runId: string }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { workspaceId: string; runId: string },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:automation-run-updated", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:automation-run-updated", handler);
+  },
+  onMeetingTranscriptionProgress: (
+    listener: (value: {
+      workspaceId: string;
+      meetingId: string;
+      runId: string;
+      phase: "preparing" | "transcribing";
+      completed: number;
+      total?: number;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: {
+        workspaceId: string;
+        meetingId: string;
+        runId: string;
+        phase: "preparing" | "transcribing";
+        completed: number;
+        total?: number;
+      },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:meeting-transcription-progress", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "waypoint:meeting-transcription-progress",
+        handler,
+      );
+  },
+  onScreenCaptureVisibility: (listener: (hidden: boolean) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { token: string; hidden: boolean },
+    ) => {
+      listener(value.hidden);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() =>
+          ipcRenderer.send("waypoint:screen-capture-visibility-ack", value),
+        ),
+      );
+    };
+    ipcRenderer.on("waypoint:screen-capture-visibility", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:screen-capture-visibility", handler);
+  },
+  screenCaptureReadiness: () =>
+    ipcRenderer.invoke("waypoint:screen-capture-readiness"),
+  screenCaptureSettings: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-settings", { workspaceId }),
+  updateScreenCaptureSettings: (workspaceId: string, settings: unknown) =>
+    ipcRenderer.invoke("waypoint:screen-capture-settings-update", {
+      workspaceId,
+      settings,
+    }),
+  setScreenCaptureShortcutRecording: (workspaceId: string, active: boolean) =>
+    ipcRenderer.invoke("waypoint:screen-capture-shortcut-recording", {
+      workspaceId,
+      active,
+    }),
+  screenCaptureSources: (
+    workspaceId: string,
+    mode: "region" | "window" | "display",
+  ) =>
+    ipcRenderer.invoke("waypoint:screen-capture-sources", {
+      workspaceId,
+      mode,
+    }),
+  cancelScreenCaptureSources: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-cancel-sources", {
+      workspaceId,
+    }),
+  createScreenCapture: (workspaceId: string, token: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-create", {
+      workspaceId,
+      token,
+    }),
+  importBrowserScreenCapture: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-import-browser", {
+      workspaceId,
+    }),
+  listScreenCaptures: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-list", { workspaceId }),
+  readScreenCapture: (workspaceId: string, captureId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-read", {
+      workspaceId,
+      captureId,
+    }),
+  updateScreenCapture: (
+    workspaceId: string,
+    captureId: string,
+    layers: unknown,
+    flattenedBytes?: Uint8Array,
+  ) =>
+    ipcRenderer.invoke("waypoint:screen-capture-update", {
+      workspaceId,
+      captureId,
+      layers,
+      flattenedBytes,
+    }),
+  copyScreenCapture: (workspaceId: string, captureId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-copy", {
+      workspaceId,
+      captureId,
+    }),
+  saveScreenCapture: (workspaceId: string, captureId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-save", {
+      workspaceId,
+      captureId,
+    }),
+  addScreenCaptureToChat: (
+    workspaceId: string,
+    captureId: string,
+    chatId: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:screen-capture-add-chat", {
+      workspaceId,
+      captureId,
+      chatId,
+    }),
+  addScreenCaptureToKnowledge: (workspaceId: string, captureId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-add-knowledge", {
+      workspaceId,
+      captureId,
+    }),
+  deleteScreenCapture: (workspaceId: string, captureId: string) =>
+    ipcRenderer.invoke("waypoint:screen-capture-delete", {
+      workspaceId,
+      captureId,
+    }),
+  bootstrap: () => ipcRenderer.invoke("waypoint:bootstrap"),
+  openExternal: (url: string) =>
+    ipcRenderer.invoke("waypoint:open-external", { url }),
+  activityCaptureStatus: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:activity-capture-status", { workspaceId }),
+  reflectionRuns: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:reflection-runs", { workspaceId }),
+  reflectionProposals: (workspaceId: string, runId: string) =>
+    ipcRenderer.invoke("waypoint:reflection-proposals", { workspaceId, runId }),
+  startReflection: (
+    workspaceId: string,
+    sourceIds: string[],
+    provider: "codex" | "claude" | "grok",
+  ) =>
+    ipcRenderer.invoke("waypoint:reflection-start", {
+      workspaceId,
+      sourceIds,
+      provider,
+    }),
+  cancelReflection: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:reflection-cancel", { workspaceId }),
+  resolveReflection: (
+    workspaceId: string,
+    proposalId: string,
+    action: "accept" | "edit" | "reject" | "rollback",
+    editedBody?: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:reflection-resolve", {
+      workspaceId,
+      proposalId,
+      action,
+      editedBody,
+    }),
+  updateActivityCapture: (workspaceId: string, policy: unknown) =>
+    ipcRenderer.invoke("waypoint:activity-capture-update", {
+      workspaceId,
+      policy,
+    }),
+  listActivitySnapshots: (workspaceId: string, query?: string) =>
+    ipcRenderer.invoke("waypoint:activity-capture-list", {
+      workspaceId,
+      query,
+    }),
+  readActivitySnapshot: (workspaceId: string, snapshotId: string) =>
+    ipcRenderer.invoke("waypoint:activity-capture-read", {
+      workspaceId,
+      snapshotId,
+    }),
+  deleteActivitySnapshot: (workspaceId: string, snapshotId: string) =>
+    ipcRenderer.invoke("waypoint:activity-capture-delete", {
+      workspaceId,
+      snapshotId,
+    }),
+  deleteAllActivitySnapshots: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:activity-capture-delete-all", { workspaceId }),
+  purgeExpiredActivitySnapshots: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:activity-capture-purge", { workspaceId }),
+  createWorkspace: (name: string) =>
+    ipcRenderer.invoke("waypoint:create-workspace", { name }),
+  chooseWorkspaceExecutionRoot: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:choose-workspace-execution-root", {
+      workspaceId,
+    }),
+  clearWorkspaceExecutionRoot: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:clear-workspace-execution-root", {
+      workspaceId,
+    }),
+  deleteWorkspace: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:delete-workspace", { workspaceId }),
   createDocument: (workspaceId: string, title: string, body: string) =>
-    ipcRenderer.invoke('waypoint:create-document', {
+    ipcRenderer.invoke("waypoint:create-document", {
       workspaceId,
       title,
       body,
     }),
   captureMessageAsDocument: (workspaceId: string, messageId: string) =>
-    ipcRenderer.invoke('waypoint:capture-message-as-document', {
+    ipcRenderer.invoke("waypoint:capture-message-as-document", {
       workspaceId,
       messageId,
     }),
-  updateDocument: (workspaceId: string, objectId: string, title: string, body: string) =>
-    ipcRenderer.invoke('waypoint:update-document', {
+  updateDocument: (
+    workspaceId: string,
+    objectId: string,
+    title: string,
+    body: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:update-document", {
       workspaceId,
       objectId,
       title,
       body,
     }),
-  listDocuments: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-documents', { workspaceId }),
-  importDocument:(workspaceId:string)=>ipcRenderer.invoke('waypoint:import-document',{workspaceId}),
-  reindexImportedDocument:(workspaceId:string,documentId:string)=>ipcRenderer.invoke('waypoint:reindex-imported-document',{workspaceId,documentId}),
-  documentIndexStatus:(workspaceId:string,documentId:string)=>ipcRenderer.invoke('waypoint:document-index-status',{workspaceId,documentId}),
-  rollbackDocumentIndex:(workspaceId:string,documentId:string)=>ipcRenderer.invoke('waypoint:rollback-document-index',{workspaceId,documentId}),
-  syncStatus: (workspaceId: string) => ipcRenderer.invoke('waypoint:sync-status', { workspaceId }),
-  desktopSyncStatus: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-status', { workspaceId }),
-  startDesktopSyncHost:(workspaceId:string)=>ipcRenderer.invoke('waypoint:desktop-sync-host-start',{workspaceId}),
-  stopDesktopSyncHost:(workspaceId:string)=>ipcRenderer.invoke('waypoint:desktop-sync-host-stop',{workspaceId}),
-  initializeDesktopSync: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-initialize', { workspaceId }),
+  listDocuments: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-documents", { workspaceId }),
+  importDocument: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:import-document", { workspaceId }),
+  reindexImportedDocument: (workspaceId: string, documentId: string) =>
+    ipcRenderer.invoke("waypoint:reindex-imported-document", {
+      workspaceId,
+      documentId,
+    }),
+  documentIndexStatus: (workspaceId: string, documentId: string) =>
+    ipcRenderer.invoke("waypoint:document-index-status", {
+      workspaceId,
+      documentId,
+    }),
+  rollbackDocumentIndex: (workspaceId: string, documentId: string) =>
+    ipcRenderer.invoke("waypoint:rollback-document-index", {
+      workspaceId,
+      documentId,
+    }),
+  syncStatus: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:sync-status", { workspaceId }),
+  desktopSyncStatus: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-status", { workspaceId }),
+  startDesktopSyncHost: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-host-start", { workspaceId }),
+  stopDesktopSyncHost: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-host-stop", { workspaceId }),
+  initializeDesktopSync: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-initialize", { workspaceId }),
   createSyncInvitation: (workspaceId: string) =>
-    ipcRenderer.invoke('waypoint:desktop-sync-create-invitation', {
+    ipcRenderer.invoke("waypoint:desktop-sync-create-invitation", {
       workspaceId,
     }),
-  submitSyncEnrollment: (token: string) => ipcRenderer.invoke('waypoint:desktop-sync-submit-enrollment', { token }),
+  submitSyncEnrollment: (token: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-submit-enrollment", { token }),
   completeSyncEnrollment: (workspaceId: string) =>
-    ipcRenderer.invoke('waypoint:desktop-sync-complete-enrollment', {
+    ipcRenderer.invoke("waypoint:desktop-sync-complete-enrollment", {
       workspaceId,
     }),
-  pendingSyncEnrollments: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-pending', { workspaceId }),
+  pendingSyncEnrollments: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-pending", { workspaceId }),
   approveSyncEnrollment: (workspaceId: string, requestId: string) =>
-    ipcRenderer.invoke('waypoint:desktop-sync-approve', {
+    ipcRenderer.invoke("waypoint:desktop-sync-approve", {
       workspaceId,
       requestId,
     }),
-  syncDevices: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-devices', { workspaceId }),
+  syncDevices: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-devices", { workspaceId }),
   revokeSyncDevice: (workspaceId: string, deviceId: string) =>
-    ipcRenderer.invoke('waypoint:desktop-sync-revoke', {
+    ipcRenderer.invoke("waypoint:desktop-sync-revoke", {
       workspaceId,
       deviceId,
     }),
   resumeSyncRotation: (workspaceId: string) =>
-    ipcRenderer.invoke('waypoint:desktop-sync-resume-rotation', {
+    ipcRenderer.invoke("waypoint:desktop-sync-resume-rotation", {
       workspaceId,
     }),
-  syncNow: (workspaceId: string) => ipcRenderer.invoke('waypoint:desktop-sync-now', { workspaceId }),
-  deviceControlStatus:(workspaceId:string)=>ipcRenderer.invoke('waypoint:device-control-status',{workspaceId}),
-  updateDeviceControl:(workspaceId:string,policy:unknown)=>ipcRenderer.invoke('waypoint:device-control-update',{workspaceId,policy}),
-  dispatchDeviceCommand:(workspaceId:string,targetDeviceId:string,instruction:string,idempotencyKey:string)=>ipcRenderer.invoke('waypoint:device-control-dispatch',{workspaceId,targetDeviceId,instruction,idempotencyKey}),
-  cancelDeviceCommand:(workspaceId:string,jobId:string)=>ipcRenderer.invoke('waypoint:device-control-cancel',{workspaceId,jobId}),
-  deleteDeviceCommand:(workspaceId:string,jobId:string)=>ipcRenderer.invoke('waypoint:device-control-delete',{workspaceId,jobId}),
-  webhookChannels:(workspaceId:string)=>ipcRenderer.invoke('waypoint:webhook-channels',{workspaceId}),
-  createWebhookChannel:(workspaceId:string,label:string,connectorId='generic')=>ipcRenderer.invoke('waypoint:webhook-channel-create',{workspaceId,label,connectorId}),
-  rotateWebhookChannel:(workspaceId:string,channelId:string)=>ipcRenderer.invoke('waypoint:webhook-channel-rotate',{workspaceId,channelId}),
-  revokeWebhookChannel:(workspaceId:string,channelId:string)=>ipcRenderer.invoke('waypoint:webhook-channel-revoke',{workspaceId,channelId}),
-  deleteWebhookChannel:(workspaceId:string,channelId:string)=>ipcRenderer.invoke('waypoint:webhook-channel-delete',{workspaceId,channelId}),
-  setWebhookKill:(workspaceId:string,active:boolean)=>ipcRenderer.invoke('waypoint:webhook-kill',{workspaceId,active}),
-  fetchWebhookEvents:(workspaceId:string)=>ipcRenderer.invoke('waypoint:webhook-fetch',{workspaceId}),
-  listWebhookEvents:(workspaceId:string)=>ipcRenderer.invoke('waypoint:webhook-events',{workspaceId}),
-  deleteWebhookEvent:(workspaceId:string,eventId:string)=>ipcRenderer.invoke('waypoint:webhook-event-delete',{workspaceId,eventId}),
-  webhookConnectors:()=>ipcRenderer.invoke('waypoint:webhook-connectors'),
-  automationProposals:(workspaceId:string,chatId?:string)=>ipcRenderer.invoke('waypoint:automation-proposals',{workspaceId,chatId}),
-  automationRulesAndRuns:(workspaceId:string)=>ipcRenderer.invoke('waypoint:automation-rules-runs',{workspaceId}),
-  setAutomationRuleEnabled:(workspaceId:string,ruleId:string,enabled:boolean)=>ipcRenderer.invoke('waypoint:automation-rule-status',{workspaceId,ruleId,enabled}),
-  cancelAutomationRun:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:automation-run-cancel',{workspaceId,runId}),
-  decideAutomationProposal:(workspaceId:string,proposalId:string,proposalDigest:string,decision:'approve'|'reject')=>ipcRenderer.invoke('waypoint:automation-proposal-decide',{workspaceId,proposalId,proposalDigest,decision}),
-  searchText: (workspaceId: string, query: string) => ipcRenderer.invoke('waypoint:search-text', { workspaceId, query }),
-  searchSemantic: (workspaceId: string, query: string) => ipcRenderer.invoke('waypoint:search-semantic', { workspaceId, query }),
-  indexDocument: (workspaceId: string, objectId: string) => ipcRenderer.invoke('waypoint:index-document', { workspaceId, objectId }),
-  deleteDocument: (workspaceId: string, objectId: string) => ipcRenderer.invoke('waypoint:delete-document', { workspaceId, objectId }),
+  syncNow: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-now", { workspaceId }),
+  deviceControlStatus: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:device-control-status", { workspaceId }),
+  updateDeviceControl: (workspaceId: string, policy: unknown) =>
+    ipcRenderer.invoke("waypoint:device-control-update", {
+      workspaceId,
+      policy,
+    }),
+  dispatchDeviceCommand: (
+    workspaceId: string,
+    targetDeviceId: string,
+    instruction: string,
+    idempotencyKey: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:device-control-dispatch", {
+      workspaceId,
+      targetDeviceId,
+      instruction,
+      idempotencyKey,
+    }),
+  cancelDeviceCommand: (workspaceId: string, jobId: string) =>
+    ipcRenderer.invoke("waypoint:device-control-cancel", {
+      workspaceId,
+      jobId,
+    }),
+  deleteDeviceCommand: (workspaceId: string, jobId: string) =>
+    ipcRenderer.invoke("waypoint:device-control-delete", {
+      workspaceId,
+      jobId,
+    }),
+  webhookChannels: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-channels", { workspaceId }),
+  createWebhookChannel: (
+    workspaceId: string,
+    label: string,
+    connectorId = "generic",
+  ) =>
+    ipcRenderer.invoke("waypoint:webhook-channel-create", {
+      workspaceId,
+      label,
+      connectorId,
+    }),
+  rotateWebhookChannel: (workspaceId: string, channelId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-channel-rotate", {
+      workspaceId,
+      channelId,
+    }),
+  revokeWebhookChannel: (workspaceId: string, channelId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-channel-revoke", {
+      workspaceId,
+      channelId,
+    }),
+  deleteWebhookChannel: (workspaceId: string, channelId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-channel-delete", {
+      workspaceId,
+      channelId,
+    }),
+  setWebhookKill: (workspaceId: string, active: boolean) =>
+    ipcRenderer.invoke("waypoint:webhook-kill", { workspaceId, active }),
+  fetchWebhookEvents: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-fetch", { workspaceId }),
+  listWebhookEvents: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-events", { workspaceId }),
+  deleteWebhookEvent: (workspaceId: string, eventId: string) =>
+    ipcRenderer.invoke("waypoint:webhook-event-delete", {
+      workspaceId,
+      eventId,
+    }),
+  webhookConnectors: () => ipcRenderer.invoke("waypoint:webhook-connectors"),
+  automationProposals: (workspaceId: string, chatId?: string) =>
+    ipcRenderer.invoke("waypoint:automation-proposals", {
+      workspaceId,
+      chatId,
+    }),
+  automationRulesAndRuns: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:automation-rules-runs", { workspaceId }),
+  setAutomationRuleEnabled: (
+    workspaceId: string,
+    ruleId: string,
+    enabled: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:automation-rule-status", {
+      workspaceId,
+      ruleId,
+      enabled,
+    }),
+  cancelAutomationRun: (workspaceId: string, runId: string) =>
+    ipcRenderer.invoke("waypoint:automation-run-cancel", {
+      workspaceId,
+      runId,
+    }),
+  decideAutomationProposal: (
+    workspaceId: string,
+    proposalId: string,
+    proposalDigest: string,
+    decision: "approve" | "reject",
+  ) =>
+    ipcRenderer.invoke("waypoint:automation-proposal-decide", {
+      workspaceId,
+      proposalId,
+      proposalDigest,
+      decision,
+    }),
+  searchText: (workspaceId: string, query: string) =>
+    ipcRenderer.invoke("waypoint:search-text", { workspaceId, query }),
+  searchSemantic: (workspaceId: string, query: string) =>
+    ipcRenderer.invoke("waypoint:search-semantic", { workspaceId, query }),
+  indexDocument: (workspaceId: string, objectId: string) =>
+    ipcRenderer.invoke("waypoint:index-document", { workspaceId, objectId }),
+  deleteDocument: (workspaceId: string, objectId: string) =>
+    ipcRenderer.invoke("waypoint:delete-document", { workspaceId, objectId }),
   deleteObject: (workspaceId: string, kind: string, objectId: string) =>
-    ipcRenderer.invoke('waypoint:delete-object', {
+    ipcRenderer.invoke("waypoint:delete-object", {
       workspaceId,
       kind,
       objectId,
     }),
-  attachDocument: (workspaceId: string, objectId: string) => ipcRenderer.invoke('waypoint:attach-document', { workspaceId, objectId }),
+  attachDocument: (workspaceId: string, objectId: string) =>
+    ipcRenderer.invoke("waypoint:attach-document", { workspaceId, objectId }),
   selectChatAttachments: (workspaceId: string, chatId: string) =>
-    ipcRenderer.invoke('waypoint:select-chat-attachments', {
+    ipcRenderer.invoke("waypoint:select-chat-attachments", {
       workspaceId,
       chatId,
     }),
   listChatAttachments: (workspaceId: string, chatId: string) =>
-    ipcRenderer.invoke('waypoint:list-chat-attachments', {
+    ipcRenderer.invoke("waypoint:list-chat-attachments", {
       workspaceId,
       chatId,
     }),
-  addPastedChatImage: (workspaceId: string, chatId: string, name: string, mediaType: string, bytes: Uint8Array) =>
-    ipcRenderer.invoke('waypoint:add-pasted-chat-image', { workspaceId, chatId, name, mediaType, bytes }),
-  attachmentImagePreview: (workspaceId: string, attachmentId: string, variant: 'thumbnail' | 'viewer') =>
-    ipcRenderer.invoke('waypoint:attachment-image-preview', { workspaceId, attachmentId, variant }),
+  addPastedChatImage: (
+    workspaceId: string,
+    chatId: string,
+    name: string,
+    mediaType: string,
+    bytes: Uint8Array,
+  ) =>
+    ipcRenderer.invoke("waypoint:add-pasted-chat-image", {
+      workspaceId,
+      chatId,
+      name,
+      mediaType,
+      bytes,
+    }),
+  attachmentImagePreview: (
+    workspaceId: string,
+    attachmentId: string,
+    variant: "thumbnail" | "viewer",
+  ) =>
+    ipcRenderer.invoke("waypoint:attachment-image-preview", {
+      workspaceId,
+      attachmentId,
+      variant,
+    }),
   deleteAttachment: (workspaceId: string, attachmentId: string) =>
-    ipcRenderer.invoke('waypoint:delete-attachment', {
+    ipcRenderer.invoke("waypoint:delete-attachment", {
       workspaceId,
       attachmentId,
     }),
-  graph: (workspaceId: string) => ipcRenderer.invoke('waypoint:graph', { workspaceId }),
-  activity: (workspaceId: string, filters?: { families?: string[]; query?: string; limit?: number }) => ipcRenderer.invoke('waypoint:activity', { workspaceId, ...filters }),
-  createMeeting: (workspaceId: string, title: string, consentAcknowledged: boolean) =>
-    ipcRenderer.invoke('waypoint:create-meeting', {
+  graph: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:graph", { workspaceId }),
+  activity: (
+    workspaceId: string,
+    filters?: { families?: string[]; query?: string; limit?: number },
+  ) => ipcRenderer.invoke("waypoint:activity", { workspaceId, ...filters }),
+  createMeeting: (
+    workspaceId: string,
+    title: string,
+    consentAcknowledged: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:create-meeting", {
       workspaceId,
       title,
       consentAcknowledged,
     }),
-  finalizeMeeting: (workspaceId: string, meetingId: string, mediaType: string, audio: Uint8Array) =>
-    ipcRenderer.invoke('waypoint:finalize-meeting', {
+  finalizeMeeting: (
+    workspaceId: string,
+    meetingId: string,
+    mediaType: string,
+    audio: Uint8Array,
+  ) =>
+    ipcRenderer.invoke("waypoint:finalize-meeting", {
       workspaceId,
       meetingId,
       mediaType,
       audio,
     }),
   failMeeting: (workspaceId: string, meetingId: string, failureCode: string) =>
-    ipcRenderer.invoke('waypoint:fail-meeting', {
+    ipcRenderer.invoke("waypoint:fail-meeting", {
       workspaceId,
       meetingId,
       failureCode,
     }),
-  listMeetings: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-meetings', { workspaceId }),
-  updateMeetingTranscript: (workspaceId: string, meetingId: string, transcript: string, reviewed: boolean) =>
-    ipcRenderer.invoke('waypoint:update-meeting-transcript', {
+  listMeetings: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-meetings", { workspaceId }),
+  updateMeetingTranscript: (
+    workspaceId: string,
+    meetingId: string,
+    transcript: string,
+    reviewed: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:update-meeting-transcript", {
       workspaceId,
       meetingId,
       transcript,
       reviewed,
     }),
   saveMeetingMemory: (workspaceId: string, meetingId: string) =>
-    ipcRenderer.invoke('waypoint:save-meeting-memory', {
+    ipcRenderer.invoke("waypoint:save-meeting-memory", {
       workspaceId,
       meetingId,
     }),
-  deleteMeeting: (workspaceId: string, meetingId: string) => ipcRenderer.invoke('waypoint:delete-meeting', { workspaceId, meetingId }),
+  deleteMeeting: (workspaceId: string, meetingId: string) =>
+    ipcRenderer.invoke("waypoint:delete-meeting", { workspaceId, meetingId }),
   readMeetingAudio: (workspaceId: string, meetingId: string) =>
-    ipcRenderer.invoke('waypoint:read-meeting-audio', {
+    ipcRenderer.invoke("waypoint:read-meeting-audio", {
       workspaceId,
       meetingId,
     }),
-  meetingPlaybackUrl:(workspaceId:string,meetingId:string)=>ipcRenderer.invoke('waypoint:meeting-playback-url',{workspaceId,meetingId}),
+  meetingPlaybackUrl: (workspaceId: string, meetingId: string) =>
+    ipcRenderer.invoke("waypoint:meeting-playback-url", {
+      workspaceId,
+      meetingId,
+    }),
   exportMeetingAudio: (workspaceId: string, meetingId: string) =>
-    ipcRenderer.invoke('waypoint:export-meeting-audio', {
+    ipcRenderer.invoke("waypoint:export-meeting-audio", {
       workspaceId,
       meetingId,
     }),
-  meetingTranscriptionCapability: () => ipcRenderer.invoke('waypoint:meeting-transcription-capability'),
-  startMeetingTranscription:(workspaceId:string,meetingId:string)=>ipcRenderer.invoke('waypoint:meeting-transcription-start',{workspaceId,meetingId}),
-  transcribeMeetingRecording:(workspaceId:string,meetingId:string,runId:string)=>ipcRenderer.invoke('waypoint:meeting-transcription-recording',{workspaceId,meetingId,runId}),
-  transcribeMeetingSegment:(workspaceId:string,meetingId:string,runId:string,index:number,audio:Uint8Array)=>ipcRenderer.invoke('waypoint:meeting-transcription-segment',{workspaceId,meetingId,runId,index,audio}),
-  finishMeetingTranscription:(workspaceId:string,meetingId:string,runId:string)=>ipcRenderer.invoke('waypoint:meeting-transcription-finish',{workspaceId,meetingId,runId}),
-  cancelMeetingTranscription:(workspaceId:string,meetingId:string,runId:string)=>ipcRenderer.invoke('waypoint:meeting-transcription-cancel',{workspaceId,meetingId,runId}),
-  createLocalWebhookFixture:(workspaceId:string,eventType:string,idempotencyKey:string,payload:Record<string,string|number|boolean|null>)=>ipcRenderer.invoke('waypoint:create-local-webhook-fixture',{workspaceId,eventType,idempotencyKey,payload}),
-  listLocalTriggerLab:(workspaceId:string)=>ipcRenderer.invoke('waypoint:list-local-trigger-lab',{workspaceId}),
-  approveLocalTriggerRule:(workspaceId:string,ruleId:string)=>ipcRenderer.invoke('waypoint:approve-local-trigger-rule',{workspaceId,ruleId}),
-  dryRunLocalTriggerRule:(workspaceId:string,ruleId:string,simulateFailure=false)=>ipcRenderer.invoke('waypoint:dry-run-local-trigger-rule',{workspaceId,ruleId,simulateFailure}),
-  setLocalTriggerKill:(workspaceId:string,enabled:boolean)=>ipcRenderer.invoke('waypoint:set-local-trigger-kill',{workspaceId,enabled}),
-  deleteLocalTriggerEvent:(workspaceId:string,eventId:string)=>ipcRenderer.invoke('waypoint:delete-local-trigger-event',{workspaceId,eventId}),
-  createFixturePlaybook: (workspaceId: string, title: string, timezone: string, hour: number, minute: number) =>
-    ipcRenderer.invoke('waypoint:create-fixture-playbook', {
+  meetingTranscriptionCapability: () =>
+    ipcRenderer.invoke("waypoint:meeting-transcription-capability"),
+  startMeetingTranscription: (workspaceId: string, meetingId: string) =>
+    ipcRenderer.invoke("waypoint:meeting-transcription-start", {
+      workspaceId,
+      meetingId,
+    }),
+  transcribeMeetingRecording: (
+    workspaceId: string,
+    meetingId: string,
+    runId: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:meeting-transcription-recording", {
+      workspaceId,
+      meetingId,
+      runId,
+    }),
+  transcribeMeetingSegment: (
+    workspaceId: string,
+    meetingId: string,
+    runId: string,
+    index: number,
+    audio: Uint8Array,
+  ) =>
+    ipcRenderer.invoke("waypoint:meeting-transcription-segment", {
+      workspaceId,
+      meetingId,
+      runId,
+      index,
+      audio,
+    }),
+  finishMeetingTranscription: (
+    workspaceId: string,
+    meetingId: string,
+    runId: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:meeting-transcription-finish", {
+      workspaceId,
+      meetingId,
+      runId,
+    }),
+  cancelMeetingTranscription: (
+    workspaceId: string,
+    meetingId: string,
+    runId: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:meeting-transcription-cancel", {
+      workspaceId,
+      meetingId,
+      runId,
+    }),
+  createLocalWebhookFixture: (
+    workspaceId: string,
+    eventType: string,
+    idempotencyKey: string,
+    payload: Record<string, string | number | boolean | null>,
+  ) =>
+    ipcRenderer.invoke("waypoint:create-local-webhook-fixture", {
+      workspaceId,
+      eventType,
+      idempotencyKey,
+      payload,
+    }),
+  listLocalTriggerLab: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-local-trigger-lab", { workspaceId }),
+  approveLocalTriggerRule: (workspaceId: string, ruleId: string) =>
+    ipcRenderer.invoke("waypoint:approve-local-trigger-rule", {
+      workspaceId,
+      ruleId,
+    }),
+  dryRunLocalTriggerRule: (
+    workspaceId: string,
+    ruleId: string,
+    simulateFailure = false,
+  ) =>
+    ipcRenderer.invoke("waypoint:dry-run-local-trigger-rule", {
+      workspaceId,
+      ruleId,
+      simulateFailure,
+    }),
+  setLocalTriggerKill: (workspaceId: string, enabled: boolean) =>
+    ipcRenderer.invoke("waypoint:set-local-trigger-kill", {
+      workspaceId,
+      enabled,
+    }),
+  deleteLocalTriggerEvent: (workspaceId: string, eventId: string) =>
+    ipcRenderer.invoke("waypoint:delete-local-trigger-event", {
+      workspaceId,
+      eventId,
+    }),
+  createFixturePlaybook: (
+    workspaceId: string,
+    title: string,
+    timezone: string,
+    hour: number,
+    minute: number,
+  ) =>
+    ipcRenderer.invoke("waypoint:create-fixture-playbook", {
       workspaceId,
       title,
       timezone,
       hour,
       minute,
     }),
-  listFixturePlaybooks: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-fixture-playbooks', { workspaceId }),
+  listFixturePlaybooks: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-fixture-playbooks", { workspaceId }),
   dryRunFixturePlaybook: (workspaceId: string, playbookId: string) =>
-    ipcRenderer.invoke('waypoint:dry-run-fixture-playbook', {
+    ipcRenderer.invoke("waypoint:dry-run-fixture-playbook", {
       workspaceId,
       playbookId,
     }),
-  runFixturePlaybook: (workspaceId: string, playbookId: string, dryRunDigest: string, simulateFailure = false) =>
-    ipcRenderer.invoke('waypoint:run-fixture-playbook', {
+  runFixturePlaybook: (
+    workspaceId: string,
+    playbookId: string,
+    dryRunDigest: string,
+    simulateFailure = false,
+  ) =>
+    ipcRenderer.invoke("waypoint:run-fixture-playbook", {
       workspaceId,
       playbookId,
       dryRunDigest,
       simulateFailure,
     }),
   killFixturePlaybook: (workspaceId: string, playbookId: string) =>
-    ipcRenderer.invoke('waypoint:kill-fixture-playbook', {
+    ipcRenderer.invoke("waypoint:kill-fixture-playbook", {
       workspaceId,
       playbookId,
     }),
   deleteFixturePlaybook: (workspaceId: string, playbookId: string) =>
-    ipcRenderer.invoke('waypoint:delete-fixture-playbook', {
+    ipcRenderer.invoke("waypoint:delete-fixture-playbook", {
       workspaceId,
       playbookId,
     }),
-  listChats: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-chats', { workspaceId }),
-  ensureChatTitle:(workspaceId:string,chatId:string)=>ipcRenderer.invoke('waypoint:ensure-chat-title',{workspaceId,chatId}),
-  renameChat:(workspaceId:string,chatId:string,title:string)=>ipcRenderer.invoke('waypoint:rename-chat',{workspaceId,chatId,title}),
-  cliCapabilities: () => ipcRenderer.invoke('waypoint:cli-capabilities'),
-  proposeChatRoute:(workspaceId:string,chatId:string,preferred:'codex'|'claude',securityProfileId:string,attachmentIds:string[]=[],allowFallback=false)=>ipcRenderer.invoke('waypoint:propose-chat-route',{workspaceId,chatId,preferred,securityProfileId,attachmentIds,allowFallback}),
-  listSecurityProfiles: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-security-profiles', { workspaceId }),
+  listChats: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-chats", { workspaceId }),
+  ensureChatTitle: (workspaceId: string, chatId: string) =>
+    ipcRenderer.invoke("waypoint:ensure-chat-title", { workspaceId, chatId }),
+  renameChat: (workspaceId: string, chatId: string, title: string) =>
+    ipcRenderer.invoke("waypoint:rename-chat", { workspaceId, chatId, title }),
+  cliCapabilities: () => ipcRenderer.invoke("waypoint:cli-capabilities"),
+  proposeChatRoute: (
+    workspaceId: string,
+    chatId: string,
+    preferred: "codex" | "claude" | "grok",
+    securityProfileId: string,
+    attachmentIds: string[] = [],
+    allowFallback = false,
+  ) =>
+    ipcRenderer.invoke("waypoint:propose-chat-route", {
+      workspaceId,
+      chatId,
+      preferred,
+      securityProfileId,
+      attachmentIds,
+      allowFallback,
+    }),
+  listSecurityProfiles: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-security-profiles", { workspaceId }),
+  listProviderSessions: (workspaceId: string, chatId?: string) =>
+    ipcRenderer.invoke("waypoint:list-provider-sessions", {
+      workspaceId,
+      chatId,
+    }),
+  resetProviderSession: (
+    workspaceId: string,
+    chatId: string,
+    provider: "codex" | "claude" | "grok",
+  ) =>
+    ipcRenderer.invoke("waypoint:reset-provider-session", {
+      workspaceId,
+      chatId,
+      provider,
+    }),
+  listProviderRequests: (workspaceId: string, chatId?: string) =>
+    ipcRenderer.invoke("waypoint:list-provider-requests", {
+      workspaceId,
+      chatId,
+    }),
+  resolveProviderRequest: (
+    workspaceId: string,
+    id: string,
+    status: "accepted" | "accepted_session" | "declined" | "canceled",
+    decision: Record<string, unknown> = {},
+  ) =>
+    ipcRenderer.invoke("waypoint:resolve-provider-request", {
+      workspaceId,
+      id,
+      status,
+      decision,
+    }),
   listExecutions: (workspaceId: string, chatId?: string) => {
     currentWorkspaceId = workspaceId;
-    return ipcRenderer.invoke('waypoint:list-executions', {
+    return ipcRenderer.invoke("waypoint:list-executions", {
       workspaceId,
       chatId,
     });
   },
-  runChat: (workspaceId: string, chatId: string, sourceMessageId: string, cli: 'codex' | 'claude', securityProfileId: string, prompt: string, model?: string, parentExecutionId?: string, attachmentIds: string[] = [],taskType?:'analyze'|'summarize'|'critique') =>
-    ipcRenderer.invoke('waypoint:run-chat', {
+  runChat: (
+    workspaceId: string,
+    chatId: string,
+    sourceMessageId: string,
+    cli: "codex" | "claude" | "grok",
+    securityProfileId: string,
+    prompt: string,
+    model?: string,
+    parentExecutionId?: string,
+    attachmentIds: string[] = [],
+    taskType?: "analyze" | "summarize" | "critique",
+  ) =>
+    ipcRenderer.invoke("waypoint:run-chat", {
       workspaceId,
       chatId,
       sourceMessageId,
@@ -262,155 +796,448 @@ contextBridge.exposeInMainWorld('waypoint', {
       taskType,
     }),
   cancelExecution: (runId: string) => {
-    if (!currentWorkspaceId) throw new Error('No active workspace');
-    return ipcRenderer.invoke('waypoint:cancel-execution', {
+    if (!currentWorkspaceId) throw new Error("No active workspace");
+    return ipcRenderer.invoke("waypoint:cancel-execution", {
       workspaceId: currentWorkspaceId,
       runId,
     });
   },
-  createChat: (workspaceId: string, title: string) => ipcRenderer.invoke('waypoint:create-chat', { workspaceId, title }),
-  captureChat: (workspaceId: string, title: string, body: string) => ipcRenderer.invoke('waypoint:capture-chat', { workspaceId, title, body }),
-  addMessage: (workspaceId: string, chatId: string, role: string, body: string, attachmentIds: string[] = []) =>
-    ipcRenderer.invoke('waypoint:add-message', {
+  createChat: (workspaceId: string, title: string) =>
+    ipcRenderer.invoke("waypoint:create-chat", { workspaceId, title }),
+  captureChat: (workspaceId: string, title: string, body: string) =>
+    ipcRenderer.invoke("waypoint:capture-chat", { workspaceId, title, body }),
+  addMessage: (
+    workspaceId: string,
+    chatId: string,
+    role: string,
+    body: string,
+    attachmentIds: string[] = [],
+  ) =>
+    ipcRenderer.invoke("waypoint:add-message", {
       workspaceId,
       chatId,
       role,
       body,
       attachmentIds,
     }),
-  listMemories: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-memories', { workspaceId }),
+  listMemories: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-memories", { workspaceId }),
   scanMemorySuggestions: (workspaceId: string, chatId?: string) =>
-    ipcRenderer.invoke('waypoint:scan-memory-suggestions', {
+    ipcRenderer.invoke("waypoint:scan-memory-suggestions", {
       workspaceId,
       chatId,
     }),
-  listMemorySuggestions: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-memory-suggestions', { workspaceId }),
-  resolveMemorySuggestion: (workspaceId: string, suggestionId: string, action: 'accept' | 'reject', title?: string, body?: string) =>
-    ipcRenderer.invoke('waypoint:resolve-memory-suggestion', {
+  listMemorySuggestions: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-memory-suggestions", { workspaceId }),
+  resolveMemorySuggestion: (
+    workspaceId: string,
+    suggestionId: string,
+    action: "accept" | "reject",
+    title?: string,
+    body?: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:resolve-memory-suggestion", {
       workspaceId,
       suggestionId,
       action,
       title,
       body,
     }),
-  listCommitments: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-commitments', { workspaceId }),
-  setCommitmentCompleted: (workspaceId: string, commitmentId: string, completed: boolean) =>
-    ipcRenderer.invoke('waypoint:set-commitment-completed', {
+  listCommitments: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-commitments", { workspaceId }),
+  setCommitmentCompleted: (
+    workspaceId: string,
+    commitmentId: string,
+    completed: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:set-commitment-completed", {
       workspaceId,
       commitmentId,
       completed,
     }),
   composeDailyBriefing: (workspaceId: string, timezone: string) =>
-    ipcRenderer.invoke('waypoint:compose-daily-briefing', {
+    ipcRenderer.invoke("waypoint:compose-daily-briefing", {
       workspaceId,
       timezone,
     }),
-  dismissBriefingItem: (workspaceId: string, sourceId: string, sourceKind: 'commitment' | 'document' | 'memory', localDay: string) =>
-    ipcRenderer.invoke('waypoint:dismiss-briefing-item', {
+  dismissBriefingItem: (
+    workspaceId: string,
+    sourceId: string,
+    sourceKind: "commitment" | "document" | "memory",
+    localDay: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:dismiss-briefing-item", {
       workspaceId,
       sourceId,
       sourceKind,
       localDay,
     }),
-  scanRuleSuggestions: (workspaceId: string) => ipcRenderer.invoke('waypoint:scan-rule-suggestions', { workspaceId }),
-  listRuleSuggestions: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-rule-suggestions', { workspaceId }),
+  scanRuleSuggestions: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:scan-rule-suggestions", { workspaceId }),
+  listRuleSuggestions: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-rule-suggestions", { workspaceId }),
   dryRunRuleSuggestion: (workspaceId: string, suggestionId: string) =>
-    ipcRenderer.invoke('waypoint:dry-run-rule-suggestion', {
+    ipcRenderer.invoke("waypoint:dry-run-rule-suggestion", {
       workspaceId,
       suggestionId,
     }),
-  resolveRuleSuggestion: (workspaceId: string, suggestionId: string, action: 'approve' | 'reject') =>
-    ipcRenderer.invoke('waypoint:resolve-rule-suggestion', {
+  resolveRuleSuggestion: (
+    workspaceId: string,
+    suggestionId: string,
+    action: "approve" | "reject",
+  ) =>
+    ipcRenderer.invoke("waypoint:resolve-rule-suggestion", {
       workspaceId,
       suggestionId,
       action,
     }),
-  listLearnedRules: (workspaceId: string) => ipcRenderer.invoke('waypoint:list-learned-rules', { workspaceId }),
-  setLearnedRuleEnabled: (workspaceId: string, ruleId: string, enabled: boolean) =>
-    ipcRenderer.invoke('waypoint:set-learned-rule-enabled', {
+  listLearnedRules: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:list-learned-rules", { workspaceId }),
+  setLearnedRuleEnabled: (
+    workspaceId: string,
+    ruleId: string,
+    enabled: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:set-learned-rule-enabled", {
       workspaceId,
       ruleId,
       enabled,
     }),
-  revertLearnedRule: (workspaceId: string, ruleId: string) => ipcRenderer.invoke('waypoint:revert-learned-rule', { workspaceId, ruleId }),
-  createMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string) =>
-    ipcRenderer.invoke('waypoint:create-memory', {
+  revertLearnedRule: (workspaceId: string, ruleId: string) =>
+    ipcRenderer.invoke("waypoint:revert-learned-rule", { workspaceId, ruleId }),
+  createMemory: (
+    workspaceId: string,
+    title: string,
+    body: string,
+    sourceObjectId?: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:create-memory", {
       workspaceId,
       title,
       body,
       sourceObjectId,
     }),
-  captureMemory: (workspaceId: string, title: string, body: string, sourceObjectId?: string, sourceOwned = false) =>
-    ipcRenderer.invoke('waypoint:capture-memory', {
+  captureMemory: (
+    workspaceId: string,
+    title: string,
+    body: string,
+    sourceObjectId?: string,
+    sourceOwned = false,
+  ) =>
+    ipcRenderer.invoke("waypoint:capture-memory", {
       workspaceId,
       title,
       body,
       sourceObjectId,
       sourceOwned,
     }),
-  createRelationship: (workspaceId: string, fromId: string, toId: string, type: string) =>
-    ipcRenderer.invoke('waypoint:create-relationship', {
+  createRelationship: (
+    workspaceId: string,
+    fromId: string,
+    toId: string,
+    type: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:create-relationship", {
       workspaceId,
       fromId,
       toId,
       type,
     }),
-  exportWorkspace: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-workspace', { workspaceId }),
-  verifyBackup: () => ipcRenderer.invoke('waypoint:verify-backup'),
-  drillBackup:()=>ipcRenderer.invoke('waypoint:drill-backup'),
-  restoreWorkspace: () => ipcRenderer.invoke('waypoint:restore-workspace'),
-  diagnostics: (workspaceId: string) => ipcRenderer.invoke('waypoint:diagnostics', { workspaceId }),
-  rebuildSearch: (workspaceId: string) => ipcRenderer.invoke('waypoint:rebuild-search', { workspaceId }),
-  exportDiagnostics: (workspaceId: string) => ipcRenderer.invoke('waypoint:export-diagnostics', { workspaceId }),
-  toolGatewayCapabilities:()=>ipcRenderer.invoke('waypoint:tool-gateway-capabilities'),
-  setWebSearchKey:(apiKey:string)=>ipcRenderer.invoke('waypoint:web-search-set-key',{apiKey}),
-  removeWebSearchKey:()=>ipcRenderer.invoke('waypoint:web-search-remove-key'),
-  updateWebTools:(workspaceId:string,value:{webFetchEnabled:boolean;webSearchEnabled:boolean})=>ipcRenderer.invoke('waypoint:web-tools-update',{workspaceId,...value}),
-  toolGatewaySettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-settings',{workspaceId}),
-  browserDiscovery:()=>ipcRenderer.invoke('waypoint:browser-discovery'),
-  importBrowserProfile:(workspaceId:string,browserId:string,profileId:string)=>ipcRenderer.invoke('waypoint:browser-profile-import',{workspaceId,browserId,profileId}),
-  removeBrowserProfile:(workspaceId:string)=>ipcRenderer.invoke('waypoint:browser-profile-remove',{workspaceId}),
-  inAppBrowserStatus:(workspaceId:string)=>ipcRenderer.invoke('waypoint:in-app-browser-status',{workspaceId}),
-  openInAppBrowser:(workspaceId:string,url:string,bounds:{x:number;y:number;width:number;height:number})=>ipcRenderer.invoke('waypoint:in-app-browser-open',{workspaceId,url,bounds}),
-  updateInAppBrowserBounds:(workspaceId:string,bounds:{x:number;y:number;width:number;height:number})=>ipcRenderer.invoke('waypoint:in-app-browser-bounds',{workspaceId,bounds}),
-  navigateInAppBrowser:(workspaceId:string,command:'back'|'forward'|'reload'|'stop')=>ipcRenderer.invoke('waypoint:in-app-browser-navigate',{workspaceId,command}),
-  closeInAppBrowser:(workspaceId:string)=>ipcRenderer.invoke('waypoint:in-app-browser-close',{workspaceId}),
-  hideInAppBrowser:(workspaceId:string)=>ipcRenderer.invoke('waypoint:in-app-browser-hide',{workspaceId}),
-  clearInAppBrowser:(workspaceId:string)=>ipcRenderer.invoke('waypoint:in-app-browser-clear',{workspaceId}),
-  onInAppBrowserState:(listener:(event:unknown)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:unknown)=>listener(value);ipcRenderer.on('waypoint:in-app-browser-state',handler);return()=>ipcRenderer.removeListener('waypoint:in-app-browser-state',handler)},
-  clearToolGatewayBrowserData:(workspaceId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-clear-browser-data',{workspaceId}),
-  updateToolGatewaySettings:(workspaceId:string,value:{stopped:boolean;denyPatterns:string[];suppressCommit:boolean;suppressPush:boolean;browserProfileMode:'existing'|'isolated';browserProfileName:string;browserAllowedDomains:string[]})=>ipcRenderer.invoke('waypoint:tool-gateway-update-settings',{workspaceId,...value}),
-  crossWorkspaceRollupSettings:(workspaceId:string)=>ipcRenderer.invoke('waypoint:cross-workspace-rollup-settings',{workspaceId}),
-  updateCrossWorkspaceRollupSettings:(workspaceId:string,value:unknown)=>ipcRenderer.invoke('waypoint:cross-workspace-rollup-update',{workspaceId,value}),
-  composeCrossWorkspaceRollup:(workspaceId:string,families?:string[])=>ipcRenderer.invoke('waypoint:cross-workspace-rollup-compose',{workspaceId,families}),
-  toolGatewayReceipts:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-gateway-receipts',{workspaceId,limit}),
-  toolFailures:(workspaceId:string,limit=100)=>ipcRenderer.invoke('waypoint:tool-failures',{workspaceId,limit}),
-  deleteToolFailure:(workspaceId:string,id:string)=>ipcRenderer.invoke('waypoint:delete-tool-failure',{workspaceId,id}),
-  openRouterStatus:()=>ipcRenderer.invoke('waypoint:openrouter-status'),
-  cliModelCatalog:()=>ipcRenderer.invoke('waypoint:cli-model-catalog'),
-  chatModelPreferences:(workspaceId:string)=>ipcRenderer.invoke('waypoint:chat-model-preferences',{workspaceId}),
-  setChatModelPreference:(workspaceId:string,provider:'codex'|'claude',model:string)=>ipcRenderer.invoke('waypoint:chat-model-preference',{workspaceId,provider,model}),
-  setOpenRouterKey:(apiKey:string)=>ipcRenderer.invoke('waypoint:openrouter-set-key',{apiKey}),
-  removeOpenRouterKey:()=>ipcRenderer.invoke('waypoint:openrouter-remove-key'),
-  updateOpenRouterSettings:(value:unknown)=>ipcRenderer.invoke('waypoint:openrouter-update-settings',value),
-  runOpenRouterChat:(value:unknown)=>ipcRenderer.invoke('waypoint:run-openrouter-chat',value),
-  cancelOpenRouterRun:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:cancel-openrouter-run',{workspaceId,runId}),
-  voiceCapability:()=>ipcRenderer.invoke('waypoint:voice-capability'),
-  voiceEngineStatus:(workspaceId:string)=>ipcRenderer.invoke('waypoint:voice-engine-status',{workspaceId}),
-  configureVoiceRuntime:()=>ipcRenderer.invoke('waypoint:voice-configure'),
-  voicePreferences:(workspaceId:string)=>ipcRenderer.invoke('waypoint:voice-preferences',{workspaceId}),
-  updateVoicePreferences:(workspaceId:string,value:{mode:'push_to_talk'|'hands_free';microphoneId:string;outputVoice:'system';engine:'fast_local'|'full_duplex_experimental'})=>ipcRenderer.invoke('waypoint:voice-update-preferences',{workspaceId,...value}),
-  removeVoiceRuntime:()=>ipcRenderer.invoke('waypoint:voice-remove-runtime'),
-  transcribeVoice:(workspaceId:string,chatId:string,mode:'push_to_talk'|'hands_free',audio:Uint8Array)=>ipcRenderer.invoke('waypoint:voice-transcribe',{workspaceId,chatId,mode,audio}),
-  speakVoice:(workspaceId:string,chatId:string,turnId:number,text:string)=>ipcRenderer.invoke('waypoint:voice-speak',{workspaceId,chatId,turnId,text}),
-  stopVoice:(workspaceId:string,chatId:string)=>ipcRenderer.invoke('waypoint:voice-stop',{workspaceId,chatId}),
-  voicePlaybackComplete:(workspaceId:string,chatId:string,turnId:number)=>ipcRenderer.invoke('waypoint:voice-playback-complete',{workspaceId,chatId,turnId}),
-  voicePlaybackStopped:(workspaceId:string,chatId:string,turnId:number)=>ipcRenderer.invoke('waypoint:voice-playback-stopped',{workspaceId,chatId,turnId}),
-  onVoiceAudioChunk:(listener:(event:{workspaceId:string;chatId:string;turnId:number;index:number;sampleRate:number;samples:Float32Array})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;chatId:string;turnId:number;index:number;sampleRate:number;samples:Float32Array})=>listener(value);ipcRenderer.on('waypoint:voice-audio-chunk',handler);return()=>ipcRenderer.removeListener('waypoint:voice-audio-chunk',handler)},
-  onVoiceAudioEnd:(listener:(event:{workspaceId:string;chatId:string;turnId:number})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;chatId:string;turnId:number})=>listener(value);ipcRenderer.on('waypoint:voice-audio-end',handler);return()=>ipcRenderer.removeListener('waypoint:voice-audio-end',handler)},
-  onVoiceAudioStop:(listener:(event:{workspaceId:string;chatId:string;turnId:number})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;chatId:string;turnId:number})=>listener(value);ipcRenderer.on('waypoint:voice-audio-stop',handler);return()=>ipcRenderer.removeListener('waypoint:voice-audio-stop',handler)},
-  onVoiceSpeechState:(listener:(event:{workspaceId:string;chatId:string;turnId:number;result:'completed'|'canceled'|'failed'})=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:{workspaceId:string;chatId:string;turnId:number;result:'completed'|'canceled'|'failed'})=>listener(value);ipcRenderer.on('waypoint:voice-speech-state',handler);return()=>ipcRenderer.removeListener('waypoint:voice-speech-state',handler)},
-  executeTool:(request:unknown)=>ipcRenderer.invoke('waypoint:tool-gateway-execute',request),
-  cancelTool:(workspaceId:string,runId:string)=>ipcRenderer.invoke('waypoint:tool-gateway-cancel',{workspaceId,runId}),
-  onToolProgress:(listener:(event:unknown)=>void)=>{const handler=(_event:Electron.IpcRendererEvent,value:unknown)=>listener(value);ipcRenderer.on('waypoint:tool-gateway-progress',handler);return()=>ipcRenderer.removeListener('waypoint:tool-gateway-progress',handler)},
+  exportWorkspace: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:export-workspace", { workspaceId }),
+  verifyBackup: () => ipcRenderer.invoke("waypoint:verify-backup"),
+  drillBackup: () => ipcRenderer.invoke("waypoint:drill-backup"),
+  restoreWorkspace: () => ipcRenderer.invoke("waypoint:restore-workspace"),
+  diagnostics: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:diagnostics", { workspaceId }),
+  rebuildSearch: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:rebuild-search", { workspaceId }),
+  exportDiagnostics: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:export-diagnostics", { workspaceId }),
+  toolGatewayCapabilities: () =>
+    ipcRenderer.invoke("waypoint:tool-gateway-capabilities"),
+  setWebSearchKey: (apiKey: string) =>
+    ipcRenderer.invoke("waypoint:web-search-set-key", { apiKey }),
+  removeWebSearchKey: () =>
+    ipcRenderer.invoke("waypoint:web-search-remove-key"),
+  updateWebTools: (
+    workspaceId: string,
+    value: { webFetchEnabled: boolean; webSearchEnabled: boolean },
+  ) =>
+    ipcRenderer.invoke("waypoint:web-tools-update", { workspaceId, ...value }),
+  toolGatewaySettings: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:tool-gateway-settings", { workspaceId }),
+  browserDiscovery: () => ipcRenderer.invoke("waypoint:browser-discovery"),
+  importBrowserProfile: (
+    workspaceId: string,
+    browserId: string,
+    profileId: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:browser-profile-import", {
+      workspaceId,
+      browserId,
+      profileId,
+    }),
+  removeBrowserProfile: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:browser-profile-remove", { workspaceId }),
+  inAppBrowserStatus: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-status", { workspaceId }),
+  openInAppBrowser: (
+    workspaceId: string,
+    url: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-open", {
+      workspaceId,
+      url,
+      bounds,
+    }),
+  updateInAppBrowserBounds: (
+    workspaceId: string,
+    bounds: { x: number; y: number; width: number; height: number },
+  ) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-bounds", {
+      workspaceId,
+      bounds,
+    }),
+  navigateInAppBrowser: (
+    workspaceId: string,
+    command: "back" | "forward" | "reload" | "stop",
+  ) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-navigate", {
+      workspaceId,
+      command,
+    }),
+  closeInAppBrowser: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-close", { workspaceId }),
+  hideInAppBrowser: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-hide", { workspaceId }),
+  clearInAppBrowser: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:in-app-browser-clear", { workspaceId }),
+  onInAppBrowserState: (listener: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      listener(value);
+    ipcRenderer.on("waypoint:in-app-browser-state", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:in-app-browser-state", handler);
+  },
+  clearToolGatewayBrowserData: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:tool-gateway-clear-browser-data", {
+      workspaceId,
+    }),
+  updateToolGatewaySettings: (
+    workspaceId: string,
+    value: {
+      stopped: boolean;
+      denyPatterns: string[];
+      suppressCommit: boolean;
+      suppressPush: boolean;
+      browserProfileMode: "existing" | "isolated";
+      browserProfileName: string;
+      browserAllowedDomains: string[];
+    },
+  ) =>
+    ipcRenderer.invoke("waypoint:tool-gateway-update-settings", {
+      workspaceId,
+      ...value,
+    }),
+  crossWorkspaceRollupSettings: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:cross-workspace-rollup-settings", {
+      workspaceId,
+    }),
+  updateCrossWorkspaceRollupSettings: (workspaceId: string, value: unknown) =>
+    ipcRenderer.invoke("waypoint:cross-workspace-rollup-update", {
+      workspaceId,
+      value,
+    }),
+  composeCrossWorkspaceRollup: (workspaceId: string, families?: string[]) =>
+    ipcRenderer.invoke("waypoint:cross-workspace-rollup-compose", {
+      workspaceId,
+      families,
+    }),
+  toolGatewayReceipts: (workspaceId: string, limit = 100) =>
+    ipcRenderer.invoke("waypoint:tool-gateway-receipts", {
+      workspaceId,
+      limit,
+    }),
+  toolFailures: (workspaceId: string, limit = 100) =>
+    ipcRenderer.invoke("waypoint:tool-failures", { workspaceId, limit }),
+  deleteToolFailure: (workspaceId: string, id: string) =>
+    ipcRenderer.invoke("waypoint:delete-tool-failure", { workspaceId, id }),
+  openRouterStatus: () => ipcRenderer.invoke("waypoint:openrouter-status"),
+  cliModelCatalog: () => ipcRenderer.invoke("waypoint:cli-model-catalog"),
+  chatModelPreferences: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:chat-model-preferences", { workspaceId }),
+  setChatModelPreference: (
+    workspaceId: string,
+    provider: "codex" | "claude" | "grok",
+    model: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:chat-model-preference", {
+      workspaceId,
+      provider,
+      model,
+    }),
+  setOpenRouterKey: (apiKey: string) =>
+    ipcRenderer.invoke("waypoint:openrouter-set-key", { apiKey }),
+  removeOpenRouterKey: () =>
+    ipcRenderer.invoke("waypoint:openrouter-remove-key"),
+  updateOpenRouterSettings: (value: unknown) =>
+    ipcRenderer.invoke("waypoint:openrouter-update-settings", value),
+  runOpenRouterChat: (value: unknown) =>
+    ipcRenderer.invoke("waypoint:run-openrouter-chat", value),
+  cancelOpenRouterRun: (workspaceId: string, runId: string) =>
+    ipcRenderer.invoke("waypoint:cancel-openrouter-run", {
+      workspaceId,
+      runId,
+    }),
+  voiceCapability: () => ipcRenderer.invoke("waypoint:voice-capability"),
+  voiceEngineStatus: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:voice-engine-status", { workspaceId }),
+  configureVoiceRuntime: () => ipcRenderer.invoke("waypoint:voice-configure"),
+  voicePreferences: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:voice-preferences", { workspaceId }),
+  updateVoicePreferences: (
+    workspaceId: string,
+    value: {
+      mode: "push_to_talk" | "hands_free";
+      microphoneId: string;
+      outputVoice: "system";
+      engine: "fast_local" | "full_duplex_experimental";
+    },
+  ) =>
+    ipcRenderer.invoke("waypoint:voice-update-preferences", {
+      workspaceId,
+      ...value,
+    }),
+  removeVoiceRuntime: () => ipcRenderer.invoke("waypoint:voice-remove-runtime"),
+  transcribeVoice: (
+    workspaceId: string,
+    chatId: string,
+    mode: "push_to_talk" | "hands_free",
+    audio: Uint8Array,
+  ) =>
+    ipcRenderer.invoke("waypoint:voice-transcribe", {
+      workspaceId,
+      chatId,
+      mode,
+      audio,
+    }),
+  speakVoice: (
+    workspaceId: string,
+    chatId: string,
+    turnId: number,
+    text: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:voice-speak", {
+      workspaceId,
+      chatId,
+      turnId,
+      text,
+    }),
+  stopVoice: (workspaceId: string, chatId: string) =>
+    ipcRenderer.invoke("waypoint:voice-stop", { workspaceId, chatId }),
+  voicePlaybackComplete: (
+    workspaceId: string,
+    chatId: string,
+    turnId: number,
+  ) =>
+    ipcRenderer.invoke("waypoint:voice-playback-complete", {
+      workspaceId,
+      chatId,
+      turnId,
+    }),
+  voicePlaybackStopped: (workspaceId: string, chatId: string, turnId: number) =>
+    ipcRenderer.invoke("waypoint:voice-playback-stopped", {
+      workspaceId,
+      chatId,
+      turnId,
+    }),
+  onVoiceAudioChunk: (
+    listener: (event: {
+      workspaceId: string;
+      chatId: string;
+      turnId: number;
+      index: number;
+      sampleRate: number;
+      samples: Float32Array;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: {
+        workspaceId: string;
+        chatId: string;
+        turnId: number;
+        index: number;
+        sampleRate: number;
+        samples: Float32Array;
+      },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:voice-audio-chunk", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:voice-audio-chunk", handler);
+  },
+  onVoiceAudioEnd: (
+    listener: (event: {
+      workspaceId: string;
+      chatId: string;
+      turnId: number;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { workspaceId: string; chatId: string; turnId: number },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:voice-audio-end", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:voice-audio-end", handler);
+  },
+  onVoiceAudioStop: (
+    listener: (event: {
+      workspaceId: string;
+      chatId: string;
+      turnId: number;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { workspaceId: string; chatId: string; turnId: number },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:voice-audio-stop", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:voice-audio-stop", handler);
+  },
+  onVoiceSpeechState: (
+    listener: (event: {
+      workspaceId: string;
+      chatId: string;
+      turnId: number;
+      result: "completed" | "canceled" | "failed";
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: {
+        workspaceId: string;
+        chatId: string;
+        turnId: number;
+        result: "completed" | "canceled" | "failed";
+      },
+    ) => listener(value);
+    ipcRenderer.on("waypoint:voice-speech-state", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:voice-speech-state", handler);
+  },
+  executeTool: (request: unknown) =>
+    ipcRenderer.invoke("waypoint:tool-gateway-execute", request),
+  cancelTool: (workspaceId: string, runId: string) =>
+    ipcRenderer.invoke("waypoint:tool-gateway-cancel", { workspaceId, runId }),
+  onToolProgress: (listener: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      listener(value);
+    ipcRenderer.on("waypoint:tool-gateway-progress", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:tool-gateway-progress", handler);
+  },
 });

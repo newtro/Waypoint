@@ -1,385 +1,1698 @@
-import { mkdtempSync, writeFileSync, existsSync, renameSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { DatabaseSync } from 'node:sqlite'
-import { WorkspaceStore } from './store.js'
-import {createExecutionBudget,serializeExecutionBudget} from './execution-budget.js'
-import {remotePolicyDigest} from './cross-device-control.js'
-import {archiveIntegrity} from './backup.js'
+import { mkdtempSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { WorkspaceStore } from "./store.js";
+import {
+  createExecutionBudget,
+  serializeExecutionBudget,
+} from "./execution-budget.js";
+import { remotePolicyDigest } from "./cross-device-control.js";
+import { archiveIntegrity } from "./backup.js";
 
 function fixture() {
-  const root = mkdtempSync(path.join(tmpdir(), 'waypoint-store-'))
-  const database = path.join(root, 'workspace.sqlite')
-  const store = new WorkspaceStore(database)
-  const workspace = store.createWorkspace('Personal', root)
-  return { root, database, store, workspace }
+  const root = mkdtempSync(path.join(tmpdir(), "waypoint-store-"));
+  const database = path.join(root, "workspace.sqlite");
+  const store = new WorkspaceStore(database);
+  const workspace = store.createWorkspace("Personal", root);
+  return { root, database, store, workspace };
 }
 
-const provenance = { provider: 'test', providerVersion: '1', model: 'fixture', modelDigest: 'digest', chunkingDigest: 'chunks-v1' }
-const receipt=(profile:ReturnType<WorkspaceStore['listSecurityProfiles']>[number],kind:'root'|'child',prompt:string)=>serializeExecutionBudget(createExecutionBudget({kind,profile,prompt,attachmentCount:0}))
+const provenance = {
+  provider: "test",
+  providerVersion: "1",
+  model: "fixture",
+  modelDigest: "digest",
+  chunkingDigest: "chunks-v1",
+};
+const receipt = (
+  profile: ReturnType<WorkspaceStore["listSecurityProfiles"]>[number],
+  kind: "root" | "child",
+  prompt: string,
+) =>
+  serializeExecutionBudget(
+    createExecutionBudget({ kind, profile, prompt, attachmentCount: 0 }),
+  );
 
-describe('durable local workspace', () => {
-  it('creates every required security profile before the new workspace is used', () => {
-    const { store, workspace } = fixture()
-    const profiles = store.listSecurityProfiles(workspace.id)
-    expect(profiles.map((profile) => profile.name)).toEqual(['Workspace — conservative', 'Autonomous developer'])
-    expect(profiles).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'Workspace — conservative', filesystem: 'read-only', tools: [] }),
-      expect.objectContaining({ name: 'Autonomous developer', filesystem: 'workspace-write', tools: ['tool-gateway', 'terminal', 'local-cli'] }),
-    ]))
-    store.close()
-  })
+describe("durable local workspace", () => {
+  it("creates every required security profile before the new workspace is used", () => {
+    const { store, workspace } = fixture();
+    const profiles = store.listSecurityProfiles(workspace.id);
+    expect(profiles.map((profile) => profile.name)).toEqual([
+      "Chat · read only",
+      "Developer · approve changes",
+      "Full agent · network enabled",
+      "Bypass permissions · no prompts",
+    ]);
+    expect(profiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Chat · read only",
+          filesystem: "read-only",
+          tools: ["provider-native"],
+        }),
+        expect.objectContaining({
+          name: "Developer · approve changes",
+          filesystem: "workspace-write",
+          network: "provider-only",
+        }),
+        expect.objectContaining({
+          name: "Full agent · network enabled",
+          filesystem: "workspace-write",
+          network: "enabled",
+        }),
+        expect.objectContaining({
+          name: "Bypass permissions · no prompts",
+          filesystem: "workspace-write",
+          network: "enabled",
+          approval: "never",
+        }),
+      ]),
+    );
+    store.close();
+  });
 
-  it('hard-deletes a non-last workspace and its attachment bytes while preserving other workspaces', () => {
+  it("hard-deletes a non-last workspace and its attachment bytes while preserving other workspaces", () => {
     const { root, store, workspace } = fixture();
-    const disposable = store.createWorkspace('Disposable QA', root);
-    const chat = store.createChat(disposable.id, 'QA chat');
-    const source = path.join(root, 'qa.txt');
-    writeFileSync(source, 'disposable attachment');
-    const attachmentId = store.addAttachment(disposable.id, chat, 'qa.txt', 'text/plain', source);
-    const storedPath = path.join(root, 'attachments', `${attachmentId}-qa.txt`);
-    store.createDocument(disposable.id, 'Disposable indexed note', 'workspace deletion sentinel');
-    const meeting = store.createMeeting(disposable.id, 'Disposable meeting');
-    store.finalizeMeetingAudio(disposable.id, meeting, 'audio/webm', Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1]));
+    const disposable = store.createWorkspace("Disposable QA", root);
+    const chat = store.createChat(disposable.id, "QA chat");
+    const source = path.join(root, "qa.txt");
+    writeFileSync(source, "disposable attachment");
+    const attachmentId = store.addAttachment(
+      disposable.id,
+      chat,
+      "qa.txt",
+      "text/plain",
+      source,
+    );
+    const storedPath = path.join(root, "attachments", `${attachmentId}-qa.txt`);
+    store.createDocument(
+      disposable.id,
+      "Disposable indexed note",
+      "workspace deletion sentinel",
+    );
+    const meeting = store.createMeeting(disposable.id, "Disposable meeting");
+    store.finalizeMeetingAudio(
+      disposable.id,
+      meeting,
+      "audio/webm",
+      Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1]),
+    );
     const meetingPath = store.meetingAudio(disposable.id, meeting).path;
     expect(existsSync(storedPath)).toBe(true);
     expect(existsSync(meetingPath)).toBe(true);
-    expect(store.searchText(disposable.id, 'sentinel')).toHaveLength(1);
-    expect(store.deleteWorkspace(disposable.id)).toMatchObject({ id: disposable.id, name: 'Disposable QA' });
-    expect(store.listWorkspaces()).toEqual([expect.objectContaining({ id: workspace.id })]);
+    expect(store.searchText(disposable.id, "sentinel")).toHaveLength(1);
+    expect(store.deleteWorkspace(disposable.id)).toMatchObject({
+      id: disposable.id,
+      name: "Disposable QA",
+    });
+    expect(store.listWorkspaces()).toEqual([
+      expect.objectContaining({ id: workspace.id }),
+    ]);
     expect(existsSync(storedPath)).toBe(false);
     expect(existsSync(meetingPath)).toBe(false);
-    expect(() => store.deleteWorkspace(workspace.id)).toThrow('at least one workspace');
+    expect(() => store.deleteWorkspace(workspace.id)).toThrow(
+      "at least one workspace",
+    );
     store.close();
   });
-  it('recognizes only durable execution capabilities', () => {
-    const { root, store, workspace } = fixture(), other = store.createWorkspace('Other', path.join(root, 'other'))
-    const chat = store.createChat(workspace.id, 'Scoped run'), profile = store.listSecurityProfiles(workspace.id)[0]
-    const run = store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'scoped',budgetReceipt:receipt(profile,'root','scoped')})
-    expect(store.executionExists(workspace.id,run)).toBe(true)
-    expect(store.executionExists(other.id,run)).toBe(false)
-    store.close()
-  })
+  it("recognizes only durable execution capabilities", () => {
+    const { root, store, workspace } = fixture(),
+      other = store.createWorkspace("Other", path.join(root, "other"));
+    const chat = store.createChat(workspace.id, "Scoped run"),
+      profile = store.listSecurityProfiles(workspace.id)[0];
+    const run = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      cli: "codex",
+      securityProfileId: profile.id,
+      prompt: "scoped",
+      budgetReceipt: receipt(profile, "root", "scoped"),
+    });
+    expect(store.executionExists(workspace.id, run)).toBe(true);
+    expect(store.executionExists(other.id, run)).toBe(false);
+    store.close();
+  });
 
-  it('persists the exact source message for historical retry provenance',()=>{
-    const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Retries'),profile=store.listSecurityProfiles(workspace.id)[0]
-    const first=store.addMessage(workspace.id,chat,'user','first prompt'),second=store.addMessage(workspace.id,chat,'user','second prompt')
-    const firstRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:first,cli:'codex',securityProfileId:profile.id,prompt:'first prompt',budgetReceipt:receipt(profile,'root','first prompt')})
-    const secondRun=store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:second,cli:'claude',securityProfileId:profile.id,prompt:'second prompt',budgetReceipt:receipt(profile,'root','second prompt')})
-    expect(store.listExecutions(workspace.id,chat)).toEqual([expect.objectContaining({id:secondRun,sourceMessageId:second}),expect.objectContaining({id:firstRun,sourceMessageId:first})])
-    expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,sourceMessageId:'missing',cli:'codex',securityProfileId:profile.id,prompt:'x',budgetReceipt:receipt(profile,'root','x')})).toThrow(/source message/)
-    store.close()
-  })
-  it('reconciles queued and running executions to durable interrupted failures on startup',()=>{
-    const {database,store,workspace}=fixture(),chat=store.createChat(workspace.id,'Interrupted'),profile=store.listSecurityProfiles(workspace.id)[0]
-    const queued=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'queued',budgetReceipt:receipt(profile,'root','queued')})
-    const running=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'running',budgetReceipt:receipt(profile,'root','running')});store.startExecution(running,workspace.id,'/trusted/claude','1')
-    store.close();const reopened=new WorkspaceStore(database)
-    expect(reopened.listExecutions(workspace.id,chat)).toEqual(expect.arrayContaining([expect.objectContaining({id:queued,status:'failed',errorCode:'interrupted'}),expect.objectContaining({id:running,status:'failed',errorCode:'interrupted'})]))
-    expect(reopened.listActivity(workspace.id).filter((event)=>event.action==='execution.failed')).toHaveLength(2)
-    reopened.close()
-  })
-  it('persists CLI detection and process startup failures before returning the error',()=>{
-    const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Unavailable CLI'),profile=store.listSecurityProfiles(workspace.id)[0]
-    const run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'claude',securityProfileId:profile.id,prompt:'test',budgetReceipt:receipt(profile,'root','test')})
-    store.failQueuedExecution(run,workspace.id,'claude was not found on PATH')
-    expect(store.listExecutions(workspace.id,chat)[0]).toMatchObject({id:run,status:'failed',errorCode:'startup_failed',errorMessage:'claude was not found on PATH'})
-    store.close()
-  })
-  it('persists complete execution provenance and cascades it with its chat', () => {
-    const { store, workspace } = fixture(), chat = store.createChat(workspace.id, 'Agent work')
-    const profile = store.listSecurityProfiles(workspace.id)[0]
-    expect(profile).toMatchObject({ name: 'Workspace — conservative', filesystem: 'read-only', tools: [], maxConcurrency: 1, peerEligible: false, secretNames: [] })
-    const budget=createExecutionBudget({kind:'root',profile,prompt:'private prompt',attachmentCount:0})
-    const root = store.createExecution({ workspaceId: workspace.id, chatId: chat, cli: 'codex', model: 'gpt-test', securityProfileId: profile.id, prompt: 'private prompt',budgetReceipt:serializeExecutionBudget(budget) })
-    store.startExecution(root, workspace.id, '/trusted/codex', '1.2.3')
-    store.appendExecutionEvent(root, workspace.id, { type:'text', text:'answer', rawType:'item.completed' })
-    store.finishExecution(root, workspace.id, { status:'completed', exitCode:0 })
-    const child = store.createExecution({ workspaceId: workspace.id, chatId: chat, parentExecutionId:root, depth:1, cli:'claude', securityProfileId:profile.id, prompt:'child work',budgetReceipt:receipt(profile,'child','child work') })
-    expect(store.listExecutions(workspace.id, chat)).toEqual(expect.arrayContaining([
-      expect.objectContaining({id:root,cli:'codex',cliVersion:'1.2.3',model:'gpt-test',device:'local',profileName:'Workspace — conservative',status:'completed',depth:0,budget:expect.objectContaining({version:1,maxAttempts:1,approvalOrigin:'explicit-chat-action'}),events:expect.arrayContaining([expect.objectContaining({type:'policy',name:'budget:local-v1'}),expect.objectContaining({type:'text',text:'answer'})])}),
-      expect.objectContaining({id:child,parentExecutionId:root,depth:1,status:'queued'}),
-    ]))
-    expect(JSON.stringify(store.listExecutions(workspace.id, chat))).not.toContain('private prompt')
-    expect(() => store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:root,depth:2,cli:'codex',securityProfileId:profile.id,prompt:'bad',budgetReceipt:receipt(profile,'child','bad')})).toThrow(/lineage/)
-    expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'bad',budgetReceipt:'{}'})).toThrow(/budget receipt/)
-    const wrongDuration={...createExecutionBudget({kind:'root',profile,prompt:'bad',attachmentCount:0}),maxDurationMs:30_000};expect(()=>store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'bad',budgetReceipt:JSON.stringify(wrongDuration)})).toThrow(/budget receipt/)
-    expect(store.executionIsQueued(workspace.id,child)).toBe(true);expect(store.cancelQueuedExecution(workspace.id,child)).toBe(true);expect(store.executionIsQueued(workspace.id,child)).toBe(false)
-    store.deleteObject(workspace.id, 'chat', chat)
-    expect(store.counts()).toMatchObject({ executions:0, execution_events:0 })
-    store.close()
-  })
-  it('migrates the pre-ownership memory schema without positional column corruption', () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'waypoint-old-schema-')), database = path.join(root, 'workspace.sqlite')
-    const legacy = new DatabaseSync(database)
-    legacy.exec('CREATE TABLE memories(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source_object_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)')
-    legacy.close()
-    const store = new WorkspaceStore(database), workspace = store.createWorkspace('Migrated', root)
-    const memoryId = store.createMemory(workspace.id, 'After migration', 'Body')
-    expect(store.listMemories(workspace.id)).toEqual([expect.objectContaining({ id: memoryId, ownership: 'workspace-owned' })])
-    store.close()
-  })
-  it('survives close and reopen with traceable text and semantic search', () => {
-    const { database, store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Deletion rules', 'Vectors and attachments disappear with their source document.')
-    store.indexEmbedding(workspace.id, { objectId: document.id, objectKind: 'document', revisionId: document.revisionId }, [1, 0, 0], provenance)
-    expect(store.searchText(workspace.id, 'attachments')[0]).toMatchObject({ objectId: document.id, revisionId: document.revisionId, method: 'text' })
-    expect(store.semanticSearch(workspace.id, [.9, .1, 0], provenance)[0]).toMatchObject({ objectId: document.id, revisionId: document.revisionId, method: 'semantic' })
-    expect(store.semanticSearch(workspace.id, [.9, .1, 0], { ...provenance, modelDigest: 'new-model-generation' })).toEqual([])
-    const next={...provenance,modelDigest:'new-model-generation'};store.indexEmbedding(workspace.id,{objectId:document.id,objectKind:'document',revisionId:document.revisionId},[0,1,0],next)
-    expect(store.semanticSearch(workspace.id,[1,0,0],provenance)[0].objectId).toBe(document.id)
-    expect(store.semanticSearch(workspace.id,[0,1,0],next)[0].objectId).toBe(document.id)
-    const newest={...provenance,modelDigest:'third-generation'};store.indexEmbedding(workspace.id,{objectId:document.id,objectKind:'document',revisionId:document.revisionId},[0,0,1],newest)
-    expect(store.semanticSearch(workspace.id,[1,0,0],provenance)).toEqual([])
-    store.close()
-    const reopened = new WorkspaceStore(database)
-    expect(reopened.searchText(workspace.id, 'attachments')[0].objectId).toBe(document.id)
-    expect(reopened.semanticSearch(workspace.id, [0, 1, 0], next)[0].objectId).toBe(document.id)
-    expect(reopened.semanticSearch(workspace.id, [0, 0, 1], newest)[0].objectId).toBe(document.id)
-    reopened.close()
-  })
+  it("persists the exact source message for historical retry provenance", () => {
+    const { store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Retries"),
+      profile = store.listSecurityProfiles(workspace.id)[0];
+    const first = store.addMessage(workspace.id, chat, "user", "first prompt"),
+      second = store.addMessage(workspace.id, chat, "user", "second prompt");
+    const firstRun = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      sourceMessageId: first,
+      cli: "codex",
+      securityProfileId: profile.id,
+      prompt: "first prompt",
+      budgetReceipt: receipt(profile, "root", "first prompt"),
+    });
+    const secondRun = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      sourceMessageId: second,
+      cli: "claude",
+      securityProfileId: profile.id,
+      prompt: "second prompt",
+      budgetReceipt: receipt(profile, "root", "second prompt"),
+    });
+    expect(store.listExecutions(workspace.id, chat)).toEqual([
+      expect.objectContaining({ id: secondRun, sourceMessageId: second }),
+      expect.objectContaining({ id: firstRun, sourceMessageId: first }),
+    ]);
+    expect(() =>
+      store.createExecution({
+        workspaceId: workspace.id,
+        chatId: chat,
+        sourceMessageId: "missing",
+        cli: "codex",
+        securityProfileId: profile.id,
+        prompt: "x",
+        budgetReceipt: receipt(profile, "root", "x"),
+      }),
+    ).toThrow(/source message/);
+    store.close();
+  });
+  it("reconciles queued and running executions to durable interrupted failures on startup", () => {
+    const { database, store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Interrupted"),
+      profile = store.listSecurityProfiles(workspace.id)[0];
+    const queued = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      cli: "codex",
+      securityProfileId: profile.id,
+      prompt: "queued",
+      budgetReceipt: receipt(profile, "root", "queued"),
+    });
+    const running = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      cli: "claude",
+      securityProfileId: profile.id,
+      prompt: "running",
+      budgetReceipt: receipt(profile, "root", "running"),
+    });
+    store.startExecution(running, workspace.id, "/trusted/claude", "1");
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(reopened.listExecutions(workspace.id, chat)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: queued,
+          status: "failed",
+          errorCode: "interrupted",
+        }),
+        expect.objectContaining({
+          id: running,
+          status: "failed",
+          errorCode: "interrupted",
+        }),
+      ]),
+    );
+    expect(
+      reopened
+        .listActivity(workspace.id)
+        .filter((event) => event.action === "execution.failed"),
+    ).toHaveLength(2);
+    reopened.close();
+  });
+  it("persists CLI detection and process startup failures before returning the error", () => {
+    const { store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Unavailable CLI"),
+      profile = store.listSecurityProfiles(workspace.id)[0];
+    const run = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      cli: "claude",
+      securityProfileId: profile.id,
+      prompt: "test",
+      budgetReceipt: receipt(profile, "root", "test"),
+    });
+    store.failQueuedExecution(
+      run,
+      workspace.id,
+      "claude was not found on PATH",
+    );
+    expect(store.listExecutions(workspace.id, chat)[0]).toMatchObject({
+      id: run,
+      status: "failed",
+      errorCode: "startup_failed",
+      errorMessage: "claude was not found on PATH",
+    });
+    store.close();
+  });
+  it("persists provider-authored partial text when a running execution fails", () => {
+    const { store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Partial answer"),
+      profile = store.listSecurityProfiles(workspace.id)[0],
+      source = store.addMessage(workspace.id, chat, "user", "do a long task");
+    const run = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      sourceMessageId: source,
+      cli: "claude",
+      securityProfileId: profile.id,
+      prompt: "do a long task",
+      budgetReceipt: receipt(profile, "root", "do a long task"),
+    });
+    store.startExecution(run, workspace.id, "claude", "1");
+    store.finishExecution(
+      run,
+      workspace.id,
+      { status: "failed", exitCode: null, error: "provider disconnected" },
+      "Useful partial response",
+    );
+    const view = store.listExecutions(workspace.id, chat)[0],
+      message = store
+        .listChats(workspace.id)
+        .find((item) => item.id === chat)
+        ?.messages.find((item) => item.id === view.assistantMessageId);
+    expect(view).toMatchObject({
+      status: "failed",
+      assistantMessageId: expect.any(String),
+    });
+    expect(message?.body).toBe("Useful partial response");
+    store.close();
+  });
+  it("persists complete execution provenance and cascades it with its chat", () => {
+    const { store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Agent work");
+    const profile = store.listSecurityProfiles(workspace.id)[0];
+    expect(profile).toMatchObject({
+      name: "Chat · read only",
+      filesystem: "read-only",
+      tools: ["provider-native"],
+      maxConcurrency: 1,
+      peerEligible: false,
+      secretNames: [],
+    });
+    const budget = createExecutionBudget({
+      kind: "root",
+      profile,
+      prompt: "private prompt",
+      attachmentCount: 0,
+    });
+    const root = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      cli: "codex",
+      model: "gpt-test",
+      securityProfileId: profile.id,
+      prompt: "private prompt",
+      budgetReceipt: serializeExecutionBudget(budget),
+    });
+    store.startExecution(root, workspace.id, "/trusted/codex", "1.2.3");
+    store.appendExecutionEvent(root, workspace.id, {
+      type: "text",
+      text: "answer",
+      rawType: "item.completed",
+    });
+    store.finishExecution(root, workspace.id, {
+      status: "completed",
+      exitCode: 0,
+    });
+    const child = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      parentExecutionId: root,
+      depth: 1,
+      cli: "claude",
+      securityProfileId: profile.id,
+      prompt: "child work",
+      budgetReceipt: receipt(profile, "child", "child work"),
+    });
+    expect(store.listExecutions(workspace.id, chat)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: root,
+          cli: "codex",
+          cliVersion: "1.2.3",
+          model: "gpt-test",
+          device: "local",
+          profileName: "Chat · read only",
+          status: "completed",
+          depth: 0,
+          budget: expect.objectContaining({
+            version: 2,
+            maxAttempts: 1,
+            approvalOrigin: "explicit-chat-action",
+          }),
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: "policy",
+              name: "budget:local-v2",
+            }),
+            expect.objectContaining({ type: "text", text: "answer" }),
+          ]),
+        }),
+        expect.objectContaining({
+          id: child,
+          parentExecutionId: root,
+          depth: 1,
+          status: "queued",
+        }),
+      ]),
+    );
+    expect(
+      JSON.stringify(store.listExecutions(workspace.id, chat)),
+    ).not.toContain("private prompt");
+    expect(() =>
+      store.createExecution({
+        workspaceId: workspace.id,
+        chatId: chat,
+        parentExecutionId: root,
+        depth: 2,
+        cli: "codex",
+        securityProfileId: profile.id,
+        prompt: "bad",
+        budgetReceipt: receipt(profile, "child", "bad"),
+      }),
+    ).toThrow(/lineage/);
+    expect(() =>
+      store.createExecution({
+        workspaceId: workspace.id,
+        chatId: chat,
+        cli: "codex",
+        securityProfileId: profile.id,
+        prompt: "bad",
+        budgetReceipt: "{}",
+      }),
+    ).toThrow(/budget receipt/);
+    const wrongDuration = {
+      ...createExecutionBudget({
+        kind: "root",
+        profile,
+        prompt: "bad",
+        attachmentCount: 0,
+      }),
+      maxDurationMs: 30_000,
+    };
+    expect(() =>
+      store.createExecution({
+        workspaceId: workspace.id,
+        chatId: chat,
+        cli: "codex",
+        securityProfileId: profile.id,
+        prompt: "bad",
+        budgetReceipt: JSON.stringify(wrongDuration),
+      }),
+    ).toThrow(/budget receipt/);
+    expect(store.executionIsQueued(workspace.id, child)).toBe(true);
+    expect(store.cancelQueuedExecution(workspace.id, child)).toBe(true);
+    expect(store.executionIsQueued(workspace.id, child)).toBe(false);
+    store.deleteObject(workspace.id, "chat", chat);
+    expect(store.counts()).toMatchObject({
+      executions: 0,
+      execution_events: 0,
+    });
+    store.close();
+  });
+  it("migrates the pre-ownership memory schema without positional column corruption", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "waypoint-old-schema-")),
+      database = path.join(root, "workspace.sqlite");
+    const legacy = new DatabaseSync(database);
+    legacy.exec(
+      "CREATE TABLE memories(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source_object_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    );
+    legacy.close();
+    const store = new WorkspaceStore(database),
+      workspace = store.createWorkspace("Migrated", root);
+    const memoryId = store.createMemory(
+      workspace.id,
+      "After migration",
+      "Body",
+    );
+    expect(store.listMemories(workspace.id)).toEqual([
+      expect.objectContaining({ id: memoryId, ownership: "workspace-owned" }),
+    ]);
+    store.close();
+  });
+  it("survives close and reopen with traceable text and semantic search", () => {
+    const { database, store, workspace } = fixture();
+    const document = store.createDocument(
+      workspace.id,
+      "Deletion rules",
+      "Vectors and attachments disappear with their source document.",
+    );
+    store.indexEmbedding(
+      workspace.id,
+      {
+        objectId: document.id,
+        objectKind: "document",
+        revisionId: document.revisionId,
+      },
+      [1, 0, 0],
+      provenance,
+    );
+    expect(store.searchText(workspace.id, "attachments")[0]).toMatchObject({
+      objectId: document.id,
+      revisionId: document.revisionId,
+      method: "text",
+    });
+    expect(
+      store.semanticSearch(workspace.id, [0.9, 0.1, 0], provenance)[0],
+    ).toMatchObject({
+      objectId: document.id,
+      revisionId: document.revisionId,
+      method: "semantic",
+    });
+    expect(
+      store.semanticSearch(workspace.id, [0.9, 0.1, 0], {
+        ...provenance,
+        modelDigest: "new-model-generation",
+      }),
+    ).toEqual([]);
+    const next = { ...provenance, modelDigest: "new-model-generation" };
+    store.indexEmbedding(
+      workspace.id,
+      {
+        objectId: document.id,
+        objectKind: "document",
+        revisionId: document.revisionId,
+      },
+      [0, 1, 0],
+      next,
+    );
+    expect(
+      store.semanticSearch(workspace.id, [1, 0, 0], provenance)[0].objectId,
+    ).toBe(document.id);
+    expect(
+      store.semanticSearch(workspace.id, [0, 1, 0], next)[0].objectId,
+    ).toBe(document.id);
+    const newest = { ...provenance, modelDigest: "third-generation" };
+    store.indexEmbedding(
+      workspace.id,
+      {
+        objectId: document.id,
+        objectKind: "document",
+        revisionId: document.revisionId,
+      },
+      [0, 0, 1],
+      newest,
+    );
+    expect(store.semanticSearch(workspace.id, [1, 0, 0], provenance)).toEqual(
+      [],
+    );
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(reopened.searchText(workspace.id, "attachments")[0].objectId).toBe(
+      document.id,
+    );
+    expect(
+      reopened.semanticSearch(workspace.id, [0, 1, 0], next)[0].objectId,
+    ).toBe(document.id);
+    expect(
+      reopened.semanticSearch(workspace.id, [0, 0, 1], newest)[0].objectId,
+    ).toBe(document.id);
+    reopened.close();
+  });
 
-  it('persists chats, messages, memories and navigable typed graph edges', () => {
-    const { store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Routing', 'Show the selected execution device.')
-    const chat = store.createChat(workspace.id, 'Routing discussion')
-    store.addMessage(workspace.id, chat, 'user', 'Which device ran this task?')
-    const memory = store.createMemory(workspace.id, 'Visible agency', 'Always expose execution provenance.', document.id)
-    store.createRelationship(workspace.id, document.id, memory, 'supports')
-    store.createRelationship(workspace.id, chat, memory, 'discusses')
-    const graph = store.graph(workspace.id)
-    expect(graph.nodes.map((node) => node.kind).sort()).toEqual(['chat', 'document', 'memory'])
-    expect(graph.edges).toHaveLength(2)
-    expect(store.searchText(workspace.id, 'device')).toHaveLength(2)
-    store.close()
-  })
+  it("persists chats, messages, memories and navigable typed graph edges", () => {
+    const { store, workspace } = fixture();
+    const document = store.createDocument(
+      workspace.id,
+      "Routing",
+      "Show the selected execution device.",
+    );
+    const chat = store.createChat(workspace.id, "Routing discussion");
+    store.addMessage(workspace.id, chat, "user", "Which device ran this task?");
+    const memory = store.createMemory(
+      workspace.id,
+      "Visible agency",
+      "Always expose execution provenance.",
+      document.id,
+    );
+    store.createRelationship(workspace.id, document.id, memory, "supports");
+    store.createRelationship(workspace.id, chat, memory, "discusses");
+    const graph = store.graph(workspace.id);
+    expect(graph.nodes.map((node) => node.kind).sort()).toEqual([
+      "chat",
+      "document",
+      "memory",
+    ]);
+    expect(graph.edges).toHaveLength(2);
+    expect(store.searchText(workspace.id, "device")).toHaveLength(2);
+    store.close();
+  });
 
-  it('accepts only explicit text attachment types and stores by generated path', () => {
-    const { root, store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Attached', 'A source file follows.')
-    const source = path.join(root, 'source.md')
-    writeFileSync(source, '# Durable source')
-    const attachmentId = store.addAttachment(workspace.id, document.id, 'source.md', 'text/markdown', source)
-    expect(attachmentId).toBeTruthy()
-    expect(store.counts().attachments).toBe(1)
-    expect(() => store.addAttachment(workspace.id, document.id, 'image.png', 'image/png', source)).toThrow(/signature/)
-    store.close()
-  })
+  it("accepts only explicit text attachment types and stores by generated path", () => {
+    const { root, store, workspace } = fixture();
+    const document = store.createDocument(
+      workspace.id,
+      "Attached",
+      "A source file follows.",
+    );
+    const source = path.join(root, "source.md");
+    writeFileSync(source, "# Durable source");
+    const attachmentId = store.addAttachment(
+      workspace.id,
+      document.id,
+      "source.md",
+      "text/markdown",
+      source,
+    );
+    expect(attachmentId).toBeTruthy();
+    expect(store.counts().attachments).toBe(1);
+    expect(() =>
+      store.addAttachment(
+        workspace.id,
+        document.id,
+        "image.png",
+        "image/png",
+        source,
+      ),
+    ).toThrow(/signature/);
+    store.close();
+  });
 
-  it('moves queued chat attachments to the durable message and deletes them independently', () => {
-    const { root, store, workspace } = fixture(), chat = store.createChat(workspace.id, 'Attachment route')
-    const source = path.join(root, 'context.md'); writeFileSync(source, '# local context')
-    const attachment = store.addAttachment(workspace.id, chat, 'context.md', 'text/markdown', source)
-    expect(store.listChatAttachments(workspace.id, chat)).toEqual([expect.objectContaining({ id: attachment, ownerId: chat, ownerKind: 'chat' })])
-    const message = store.addMessage(workspace.id, chat, 'user', 'Use the attachment', [attachment])
-    expect(store.listChatAttachments(workspace.id, chat)).toEqual([expect.objectContaining({ id: attachment, ownerId: message, ownerKind: 'message' })])
-    store.deleteAttachment(workspace.id, attachment)
-    expect(store.listChatAttachments(workspace.id, chat)).toEqual([])
-    expect(store.counts().attachments).toBe(0)
-    store.close()
-  })
+  it("moves queued chat attachments to the durable message and deletes them independently", () => {
+    const { root, store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Attachment route");
+    const source = path.join(root, "context.md");
+    writeFileSync(source, "# local context");
+    const attachment = store.addAttachment(
+      workspace.id,
+      chat,
+      "context.md",
+      "text/markdown",
+      source,
+    );
+    expect(store.listChatAttachments(workspace.id, chat)).toEqual([
+      expect.objectContaining({
+        id: attachment,
+        ownerId: chat,
+        ownerKind: "chat",
+      }),
+    ]);
+    const message = store.addMessage(
+      workspace.id,
+      chat,
+      "user",
+      "Use the attachment",
+      [attachment],
+    );
+    expect(store.listChatAttachments(workspace.id, chat)).toEqual([
+      expect.objectContaining({
+        id: attachment,
+        ownerId: message,
+        ownerKind: "message",
+      }),
+    ]);
+    store.deleteAttachment(workspace.id, attachment);
+    expect(store.listChatAttachments(workspace.id, chat)).toEqual([]);
+    expect(store.counts().attachments).toBe(0);
+    store.close();
+  });
 
-  it('rejects attaching another chat queue to a message without partial persistence', () => {
-    const { root, store, workspace } = fixture(), first = store.createChat(workspace.id, 'First'), second = store.createChat(workspace.id, 'Second')
-    const source = path.join(root, 'private.txt'); writeFileSync(source, 'private')
-    const attachment = store.addAttachment(workspace.id, first, 'private.txt', 'text/plain', source)
-    const before = store.counts().messages
-    expect(() => store.addMessage(workspace.id, second, 'user', 'Cross-chat attempt', [attachment])).toThrow(/Pending chat attachment/)
-    expect(store.counts().messages).toBe(before)
-    expect(store.listChatAttachments(workspace.id, first)[0]).toMatchObject({ ownerId: first })
-    store.close()
-  })
+  it("rejects attaching another chat queue to a message without partial persistence", () => {
+    const { root, store, workspace } = fixture(),
+      first = store.createChat(workspace.id, "First"),
+      second = store.createChat(workspace.id, "Second");
+    const source = path.join(root, "private.txt");
+    writeFileSync(source, "private");
+    const attachment = store.addAttachment(
+      workspace.id,
+      first,
+      "private.txt",
+      "text/plain",
+      source,
+    );
+    const before = store.counts().messages;
+    expect(() =>
+      store.addMessage(workspace.id, second, "user", "Cross-chat attempt", [
+        attachment,
+      ]),
+    ).toThrow(/Pending chat attachment/);
+    expect(store.counts().messages).toBe(before);
+    expect(store.listChatAttachments(workspace.id, first)[0]).toMatchObject({
+      ownerId: first,
+    });
+    store.close();
+  });
 
-  it('cascade-deletes a document, derived data, edges, attachments and queued indexes without leaking content into activity', () => {
-    const { root, store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Secret title', 'secret-body-needle')
-    const memory = store.createMemory(workspace.id, 'Related', 'Safe memory')
-    store.createRelationship(workspace.id, document.id, memory, 'supports')
-    store.indexEmbedding(workspace.id, { objectId: document.id, objectKind: 'document', revisionId: document.revisionId }, [1, 0], provenance)
-    const source = path.join(root, 'owned.txt'); writeFileSync(source, 'secret-attachment-needle')
-    store.addAttachment(workspace.id, document.id, 'owned.txt', 'text/plain', source)
-    store.deleteObject(workspace.id, 'document', document.id)
-    const counts = store.counts()
-    expect(counts).toMatchObject({ documents: 0, revisions: 0, relationships: 0, attachments: 0, embeddings: 0, search_fts: 1, tombstones: 1 })
-    expect(store.searchText(workspace.id, 'secret')).toEqual([])
-    expect(JSON.stringify(store.listActivity(workspace.id))).not.toContain('secret-body-needle')
-    expect(JSON.stringify(store.listActivity(workspace.id))).not.toContain('secret-attachment-needle')
-    expect(store.graph(workspace.id).edges).toEqual([])
-    expect(existsSync(path.join(root, 'attachments'))).toBe(true)
-    store.close()
-  })
+  it("cascade-deletes a document, derived data, edges, attachments and queued indexes without leaking content into activity", () => {
+    const { root, store, workspace } = fixture();
+    const document = store.createDocument(
+      workspace.id,
+      "Secret title",
+      "secret-body-needle",
+    );
+    const memory = store.createMemory(workspace.id, "Related", "Safe memory");
+    store.createRelationship(workspace.id, document.id, memory, "supports");
+    store.indexEmbedding(
+      workspace.id,
+      {
+        objectId: document.id,
+        objectKind: "document",
+        revisionId: document.revisionId,
+      },
+      [1, 0],
+      provenance,
+    );
+    const source = path.join(root, "owned.txt");
+    writeFileSync(source, "secret-attachment-needle");
+    store.addAttachment(
+      workspace.id,
+      document.id,
+      "owned.txt",
+      "text/plain",
+      source,
+    );
+    store.deleteObject(workspace.id, "document", document.id);
+    const counts = store.counts();
+    expect(counts).toMatchObject({
+      documents: 0,
+      revisions: 0,
+      relationships: 0,
+      attachments: 0,
+      embeddings: 0,
+      search_fts: 1,
+      tombstones: 1,
+    });
+    expect(store.searchText(workspace.id, "secret")).toEqual([]);
+    expect(JSON.stringify(store.listActivity(workspace.id))).not.toContain(
+      "secret-body-needle",
+    );
+    expect(JSON.stringify(store.listActivity(workspace.id))).not.toContain(
+      "secret-attachment-needle",
+    );
+    expect(store.graph(workspace.id).edges).toEqual([]);
+    expect(existsSync(path.join(root, "attachments"))).toBe(true);
+    store.close();
+  });
 
-  it('cascades source-owned memories and detaches workspace-owned memories when a source is deleted', () => {
-    const { store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Source', 'Body')
-    const retained = store.createMemory(workspace.id, 'Retained', 'Workspace knowledge', document.id)
-    const dependent = store.createMemory(workspace.id, 'Dependent', 'Source knowledge', document.id, 'source-owned')
-    store.createRelationship(workspace.id, document.id, retained, 'supports')
-    store.createRelationship(workspace.id, document.id, dependent, 'supports')
-    store.deleteObject(workspace.id, 'document', document.id)
-    expect(store.listMemories(workspace.id)).toEqual([expect.objectContaining({ id: retained, ownership: 'workspace-owned', sourceObjectId: null })])
-    expect(store.counts()).toMatchObject({ memories: 1, relationships: 0, tombstones: 2 })
-    store.close()
-  })
+  it("cascades source-owned memories and detaches workspace-owned memories when a source is deleted", () => {
+    const { store, workspace } = fixture();
+    const document = store.createDocument(workspace.id, "Source", "Body");
+    const retained = store.createMemory(
+      workspace.id,
+      "Retained",
+      "Workspace knowledge",
+      document.id,
+    );
+    const dependent = store.createMemory(
+      workspace.id,
+      "Dependent",
+      "Source knowledge",
+      document.id,
+      "source-owned",
+    );
+    store.createRelationship(workspace.id, document.id, retained, "supports");
+    store.createRelationship(workspace.id, document.id, dependent, "supports");
+    store.deleteObject(workspace.id, "document", document.id);
+    expect(store.listMemories(workspace.id)).toEqual([
+      expect.objectContaining({
+        id: retained,
+        ownership: "workspace-owned",
+        sourceObjectId: null,
+      }),
+    ]);
+    expect(store.counts()).toMatchObject({
+      memories: 1,
+      relationships: 0,
+      tombstones: 2,
+    });
+    store.close();
+  });
 
-  it('cascade-deletes chat messages and their full-text entries', () => {
-    const { store, workspace } = fixture()
-    const chat = store.createChat(workspace.id, 'Disposable chat')
-    const message = store.addMessage(workspace.id, chat, 'user', 'ephemeral-message-needle')
-    const memory = store.createMemory(workspace.id, 'Related memory', 'Remains')
-    store.createRelationship(workspace.id, message, memory, 'mentions')
-    store.indexEmbedding(workspace.id, { objectId: message, objectKind: 'message' }, [1, 0], provenance)
-    store.deleteObject(workspace.id, 'chat', chat)
-    expect(store.counts()).toMatchObject({ chats: 0, messages: 0, relationships: 0, embeddings: 0, search_fts: 1, tombstones: 1 })
-    expect(store.searchText(workspace.id, 'ephemeral')).toEqual([])
-    store.close()
-  })
+  it("cascade-deletes chat messages and their full-text entries", () => {
+    const { store, workspace } = fixture();
+    const chat = store.createChat(workspace.id, "Disposable chat");
+    const message = store.addMessage(
+      workspace.id,
+      chat,
+      "user",
+      "ephemeral-message-needle",
+    );
+    const memory = store.createMemory(
+      workspace.id,
+      "Related memory",
+      "Remains",
+    );
+    store.createRelationship(workspace.id, message, memory, "mentions");
+    store.indexEmbedding(
+      workspace.id,
+      { objectId: message, objectKind: "message" },
+      [1, 0],
+      provenance,
+    );
+    store.deleteObject(workspace.id, "chat", chat);
+    expect(store.counts()).toMatchObject({
+      chats: 0,
+      messages: 0,
+      relationships: 0,
+      embeddings: 0,
+      search_fts: 1,
+      tombstones: 1,
+    });
+    expect(store.searchText(workspace.id, "ephemeral")).toEqual([]);
+    store.close();
+  });
 
-  it('captures assistant knowledge from conversation without a manual entry form',()=>{
-    const {store,workspace}=fixture(),chat=store.createChat(workspace.id,'Research'),assistant=store.addMessage(workspace.id,chat,'assistant','Durable conclusion')
-    const document=store.captureMessageAsDocument(workspace.id,assistant)
-    expect(store.listDocuments(workspace.id)).toEqual([expect.objectContaining({id:document.id,title:'From Research',body:'Durable conclusion'})])
-    expect(store.exportWorkspace(workspace.id).objects.relationships).toEqual([expect.objectContaining({from_id:assistant,to_id:document.id,type:'captured_as'})])
-    expect(()=>store.captureMessageAsDocument(workspace.id,store.addMessage(workspace.id,chat,'user','not eligible'))).toThrow(/Assistant message/)
-    store.close()
-  })
+  it("captures assistant knowledge from conversation without a manual entry form", () => {
+    const { store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "Research"),
+      assistant = store.addMessage(
+        workspace.id,
+        chat,
+        "assistant",
+        "Durable conclusion",
+      );
+    const document = store.captureMessageAsDocument(workspace.id, assistant);
+    expect(store.listDocuments(workspace.id)).toEqual([
+      expect.objectContaining({
+        id: document.id,
+        title: "From Research",
+        body: "Durable conclusion",
+      }),
+    ]);
+    expect(store.exportWorkspace(workspace.id).objects.relationships).toEqual([
+      expect.objectContaining({
+        from_id: assistant,
+        to_id: document.id,
+        type: "captured_as",
+      }),
+    ]);
+    expect(() =>
+      store.captureMessageAsDocument(
+        workspace.id,
+        store.addMessage(workspace.id, chat, "user", "not eligible"),
+      ),
+    ).toThrow(/Assistant message/);
+    store.close();
+  });
 
-  it('never returns text or semantic results from another workspace', () => {
-    const { root, store, workspace } = fixture()
-    const other = store.createWorkspace('Other', path.join(root, 'other'))
-    const hidden = store.createDocument(other.id, 'Private elsewhere', 'cross-workspace-needle')
-    store.indexEmbedding(other.id, { objectId: hidden.id, objectKind: 'document', revisionId: hidden.revisionId }, [1, 0], provenance)
-    expect(store.searchText(workspace.id, 'cross-workspace')).toEqual([])
-    expect(store.semanticSearch(workspace.id, [1, 0], provenance)).toEqual([])
-    expect(() => store.indexEmbedding(workspace.id, { objectId: hidden.id, objectKind: 'document' }, [1, 0], provenance)).toThrow(/not found in workspace/)
-    expect(() => store.deleteObject(workspace.id, 'document', hidden.id)).toThrow(/not found in workspace/)
-    const local = store.createMemory(workspace.id, 'Local', 'Only here')
-    expect(() => store.createRelationship(workspace.id, hidden.id, local, 'crosses')).toThrow(/not found in workspace/)
-    expect(() => store.updateDocument(workspace.id, hidden.id, 'Changed', 'Changed')).toThrow(/not found in workspace/)
-    expect(() => store.createMemory(workspace.id, 'Leaky source', 'No', hidden.id)).toThrow(/not found in workspace/)
-    const otherChat = store.createChat(other.id, 'Other chat')
-    expect(() => store.addMessage(workspace.id, otherChat, 'user', 'No')).toThrow(/not found in workspace/)
-    expect(store.searchText(other.id, 'cross-workspace')).toHaveLength(1)
-    store.close()
-  })
+  it("never returns text or semantic results from another workspace", () => {
+    const { root, store, workspace } = fixture();
+    const other = store.createWorkspace("Other", path.join(root, "other"));
+    const hidden = store.createDocument(
+      other.id,
+      "Private elsewhere",
+      "cross-workspace-needle",
+    );
+    store.indexEmbedding(
+      other.id,
+      {
+        objectId: hidden.id,
+        objectKind: "document",
+        revisionId: hidden.revisionId,
+      },
+      [1, 0],
+      provenance,
+    );
+    expect(store.searchText(workspace.id, "cross-workspace")).toEqual([]);
+    expect(store.semanticSearch(workspace.id, [1, 0], provenance)).toEqual([]);
+    expect(() =>
+      store.indexEmbedding(
+        workspace.id,
+        { objectId: hidden.id, objectKind: "document" },
+        [1, 0],
+        provenance,
+      ),
+    ).toThrow(/not found in workspace/);
+    expect(() =>
+      store.deleteObject(workspace.id, "document", hidden.id),
+    ).toThrow(/not found in workspace/);
+    const local = store.createMemory(workspace.id, "Local", "Only here");
+    expect(() =>
+      store.createRelationship(workspace.id, hidden.id, local, "crosses"),
+    ).toThrow(/not found in workspace/);
+    expect(() =>
+      store.updateDocument(workspace.id, hidden.id, "Changed", "Changed"),
+    ).toThrow(/not found in workspace/);
+    expect(() =>
+      store.createMemory(workspace.id, "Leaky source", "No", hidden.id),
+    ).toThrow(/not found in workspace/);
+    const otherChat = store.createChat(other.id, "Other chat");
+    expect(() =>
+      store.addMessage(workspace.id, otherChat, "user", "No"),
+    ).toThrow(/not found in workspace/);
+    expect(store.searchText(other.id, "cross-workspace")).toHaveLength(1);
+    store.close();
+  });
 
-  it('round-trips representative authored data into new object identities and rebuilds indexes', () => {
-    const { root, store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Exported note', 'restore-search-needle')
-    const chat = store.createChat(workspace.id, 'Exported chat')
-    store.addMessage(workspace.id, chat, 'assistant', 'restored-message-needle')
-    const profile=store.listSecurityProfiles(workspace.id)[0],archivedBudget=createExecutionBudget({kind:'root',profile,prompt:'archived task',attachmentCount:0}),run=store.createExecution({workspaceId:workspace.id,chatId:chat,cli:'codex',securityProfileId:profile.id,prompt:'archived task',budgetReceipt:serializeExecutionBudget(archivedBudget)})
-    store.startExecution(run,workspace.id,'/trusted/codex','1.2.3');store.appendExecutionEvent(run,workspace.id,{type:'text',text:'archived answer'});store.finishExecution(run,workspace.id,{status:'completed',exitCode:0})
-    const child=store.createExecution({workspaceId:workspace.id,chatId:chat,parentExecutionId:run,depth:1,cli:'claude',securityProfileId:profile.id,prompt:'critique it',taskType:'critique',budgetReceipt:receipt(profile,'child','critique it')})
-    const memory = store.createMemory(workspace.id, 'Exported memory', 'remember this', document.id)
-    store.createRelationship(workspace.id, document.id, memory, 'supports')
-    store.indexEmbedding(workspace.id, { objectId: document.id, objectKind: 'document', revisionId: document.revisionId }, [1, 0], provenance)
-    const attachmentSource = path.join(root, 'exported.md'); writeFileSync(attachmentSource, '# restored attachment')
-    store.addAttachment(workspace.id, document.id, 'exported.md', 'text/markdown', attachmentSource)
-    const deleted = store.createDocument(workspace.id, 'Deleted before export', 'Gone')
-    store.deleteObject(workspace.id, 'document', deleted.id)
-    const originalActivityCount = store.listActivity(workspace.id).length
-    const archive = store.exportWorkspace(workspace.id)
-    const restored = store.restoreWorkspace(archive, 'Restored', path.join(root, 'restored'))
-    expect(restored.id).not.toBe(workspace.id)
-    expect(store.searchText(workspace.id, 'restore-search')).toHaveLength(1)
-    expect(store.searchText(restored.id, 'restore-search')).toHaveLength(1)
-    expect(store.searchText(workspace.id, 'restored-message')).toHaveLength(1)
-    expect(store.searchText(restored.id, 'restored-message')).toHaveLength(1)
-    expect(archive.version).toBe(3)
-    expect(store.listSecurityProfiles(restored.id)[0]).toMatchObject({name:'Workspace — conservative',filesystem:'read-only'})
-    const restoredExecutions=store.listExecutions(restored.id)
-    const restoredParent=restoredExecutions.find((execution)=>execution.depth===0)
-    const restoredChild=restoredExecutions.find((execution)=>execution.depth===1)
-    expect(restoredParent).toMatchObject({cli:'codex',cliVersion:'1.2.3',status:'completed',budget:expect.objectContaining({approvalOrigin:'explicit-chat-action',maxAttempts:1}),events:expect.arrayContaining([expect.objectContaining({type:'policy',name:'budget:local-v1'}),expect.objectContaining({type:'text',text:'archived answer'})])})
-    expect(restoredChild).toMatchObject({cli:'claude',status:'failed',parentExecutionId:restoredParent?.id,budget:expect.objectContaining({kind:'child',approvalOrigin:'explicit-delegate-action',maxChildren:0}),events:expect.arrayContaining([expect.objectContaining({type:'policy',name:'budget:local-v1'}),expect.objectContaining({type:'agent',name:'task:critique',rawType:'bounded-child-v1'})])})
-    expect(restoredChild?.id).not.toBe(child)
-    expect(store.graph(restored.id)).toMatchObject({ edges: [{ type: 'supports' }] })
-    expect(store.counts().embeddings).toBe(1)
-    expect(store.counts().attachments).toBe(2)
-    expect(store.counts().tombstones).toBe(2)
-    expect(store.listActivity(restored.id)).toHaveLength(originalActivityCount + 1)
-    expect(store.listActivity(restored.id).some((event) => event.action === 'workspace.restored')).toBe(true)
-    store.close()
-  })
+  it("round-trips representative authored data into new object identities and rebuilds indexes", () => {
+    const { root, store, workspace } = fixture();
+    const document = store.createDocument(
+      workspace.id,
+      "Exported note",
+      "restore-search-needle",
+    );
+    const chat = store.createChat(workspace.id, "Exported chat");
+    store.addMessage(
+      workspace.id,
+      chat,
+      "assistant",
+      "restored-message-needle",
+    );
+    const profile = store.listSecurityProfiles(workspace.id)[0],
+      archivedBudget = createExecutionBudget({
+        kind: "root",
+        profile,
+        prompt: "archived task",
+        attachmentCount: 0,
+      }),
+      run = store.createExecution({
+        workspaceId: workspace.id,
+        chatId: chat,
+        cli: "codex",
+        securityProfileId: profile.id,
+        prompt: "archived task",
+        budgetReceipt: serializeExecutionBudget(archivedBudget),
+      });
+    store.startExecution(run, workspace.id, "/trusted/codex", "1.2.3");
+    store.appendExecutionEvent(run, workspace.id, {
+      type: "text",
+      text: "archived answer",
+    });
+    store.finishExecution(run, workspace.id, {
+      status: "completed",
+      exitCode: 0,
+    });
+    const child = store.createExecution({
+      workspaceId: workspace.id,
+      chatId: chat,
+      parentExecutionId: run,
+      depth: 1,
+      cli: "claude",
+      securityProfileId: profile.id,
+      prompt: "critique it",
+      taskType: "critique",
+      budgetReceipt: receipt(profile, "child", "critique it"),
+    });
+    const memory = store.createMemory(
+      workspace.id,
+      "Exported memory",
+      "remember this",
+      document.id,
+    );
+    store.createRelationship(workspace.id, document.id, memory, "supports");
+    store.indexEmbedding(
+      workspace.id,
+      {
+        objectId: document.id,
+        objectKind: "document",
+        revisionId: document.revisionId,
+      },
+      [1, 0],
+      provenance,
+    );
+    const attachmentSource = path.join(root, "exported.md");
+    writeFileSync(attachmentSource, "# restored attachment");
+    store.addAttachment(
+      workspace.id,
+      document.id,
+      "exported.md",
+      "text/markdown",
+      attachmentSource,
+    );
+    const deleted = store.createDocument(
+      workspace.id,
+      "Deleted before export",
+      "Gone",
+    );
+    store.deleteObject(workspace.id, "document", deleted.id);
+    const originalActivityCount = store.listActivity(workspace.id).length;
+    const archive = store.exportWorkspace(workspace.id);
+    const restored = store.restoreWorkspace(
+      archive,
+      "Restored",
+      path.join(root, "restored"),
+    );
+    expect(restored.id).not.toBe(workspace.id);
+    expect(store.searchText(workspace.id, "restore-search")).toHaveLength(1);
+    expect(store.searchText(restored.id, "restore-search")).toHaveLength(1);
+    expect(store.searchText(workspace.id, "restored-message")).toHaveLength(1);
+    expect(store.searchText(restored.id, "restored-message")).toHaveLength(1);
+    expect(archive.version).toBe(3);
+    expect(store.listSecurityProfiles(restored.id)[0]).toMatchObject({
+      name: "Chat · read only",
+      filesystem: "read-only",
+    });
+    const restoredExecutions = store.listExecutions(restored.id);
+    const restoredParent = restoredExecutions.find(
+      (execution) => execution.depth === 0,
+    );
+    const restoredChild = restoredExecutions.find(
+      (execution) => execution.depth === 1,
+    );
+    expect(restoredParent).toMatchObject({
+      cli: "codex",
+      cliVersion: "1.2.3",
+      status: "completed",
+      budget: expect.objectContaining({
+        approvalOrigin: "explicit-chat-action",
+        maxAttempts: 1,
+      }),
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: "policy", name: "budget:local-v2" }),
+        expect.objectContaining({ type: "text", text: "archived answer" }),
+      ]),
+    });
+    expect(restoredChild).toMatchObject({
+      cli: "claude",
+      status: "failed",
+      parentExecutionId: restoredParent?.id,
+      budget: expect.objectContaining({
+        kind: "child",
+        approvalOrigin: "explicit-delegate-action",
+        maxChildren: 0,
+      }),
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: "policy", name: "budget:local-v2" }),
+        expect.objectContaining({
+          type: "agent",
+          name: "task:critique",
+          rawType: "bounded-child-v1",
+        }),
+      ]),
+    });
+    expect(restoredChild?.id).not.toBe(child);
+    expect(store.graph(restored.id)).toMatchObject({
+      edges: [{ type: "supports" }],
+    });
+    expect(store.counts().embeddings).toBe(1);
+    expect(store.counts().attachments).toBe(2);
+    expect(store.counts().tombstones).toBe(2);
+    expect(store.listActivity(restored.id)).toHaveLength(
+      originalActivityCount + 1,
+    );
+    expect(
+      store
+        .listActivity(restored.id)
+        .some((event) => event.action === "workspace.restored"),
+    ).toBe(true);
+    store.close();
+  });
 
-  it('backfills required profiles when restoring a legacy archive without changing archived profile authority', () => {
-    const { root, store, workspace } = fixture()
-    const archive = structuredClone(store.exportWorkspace(workspace.id))
-    const conservative = archive.objects.security_profiles.find((value) => (value as Record<string, unknown>).name === 'Workspace — conservative') as Record<string, unknown>
-    conservative.filesystem = 'workspace-write'
-    conservative.approval = 'on-write'
-    archive.objects.security_profiles = [conservative]
-    archive.integrity = archiveIntegrity({ version: archive.version, exportedAt: archive.exportedAt, workspace: archive.workspace, objects: archive.objects })
+  it("normalizes reserved built-in profiles when restoring a legacy archive", () => {
+    const { root, store, workspace } = fixture();
+    const archive = structuredClone(store.exportWorkspace(workspace.id));
+    const conservative = archive.objects.security_profiles.find(
+      (value) => (value as Record<string, unknown>).name === "Chat · read only",
+    ) as Record<string, unknown>;
+    conservative.filesystem = "workspace-write";
+    conservative.approval = "on-write";
+    archive.objects.security_profiles = [conservative];
+    archive.integrity = archiveIntegrity({
+      version: archive.version,
+      exportedAt: archive.exportedAt,
+      workspace: archive.workspace,
+      objects: archive.objects,
+    });
 
-    const restored = store.restoreWorkspace(archive, 'Legacy restore', path.join(root, 'legacy-restored'))
+    const restored = store.restoreWorkspace(
+      archive,
+      "Legacy restore",
+      path.join(root, "legacy-restored"),
+    );
     expect(store.listSecurityProfiles(restored.id)).toEqual([
-      expect.objectContaining({ name: 'Workspace — conservative', filesystem: 'workspace-write', approval: 'on-write' }),
-      expect.objectContaining({ name: 'Autonomous developer', filesystem: 'workspace-write', approval: 'on-write' }),
-    ])
-    store.close()
-  })
+      expect.objectContaining({
+        name: "Chat · read only",
+        filesystem: "read-only",
+        network: "provider-only",
+        tools: ["provider-native"],
+        approval: "always",
+      }),
+      expect.objectContaining({
+        name: "Developer · approve changes",
+        filesystem: "workspace-write",
+        network: "provider-only",
+        tools: [
+          "provider-native",
+          "terminal",
+          "local-cli",
+          "mcp",
+          "skills",
+          "subagents",
+        ],
+        approval: "on-write",
+      }),
+      expect.objectContaining({
+        name: "Full agent · network enabled",
+        filesystem: "workspace-write",
+        network: "enabled",
+        tools: [
+          "provider-native",
+          "terminal",
+          "local-cli",
+          "mcp",
+          "skills",
+          "subagents",
+          "web",
+          "browser",
+          "waypoint",
+        ],
+        approval: "on-write",
+      }),
+      expect.objectContaining({
+        name: "Bypass permissions · no prompts",
+        filesystem: "workspace-write",
+        network: "enabled",
+        tools: [
+          "provider-native",
+          "terminal",
+          "local-cli",
+          "mcp",
+          "skills",
+          "subagents",
+          "web",
+          "browser",
+          "waypoint",
+        ],
+        approval: "never",
+      }),
+    ]);
+    store.close();
+  });
 
-  it('rolls back a failed relationship transaction without activity residue', () => {
-    const { store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'One', 'Body')
-    const memory = store.createMemory(workspace.id, 'Two', 'Body')
-    store.createRelationship(workspace.id, document.id, memory, 'supports')
-    const before = store.counts()
-    expect(() => store.createRelationship(workspace.id, document.id, memory, 'supports')).toThrow()
-    expect(store.counts()).toEqual(before)
-    store.close()
-  })
+  it("rolls back a failed relationship transaction without activity residue", () => {
+    const { store, workspace } = fixture();
+    const document = store.createDocument(workspace.id, "One", "Body");
+    const memory = store.createMemory(workspace.id, "Two", "Body");
+    store.createRelationship(workspace.id, document.id, memory, "supports");
+    const before = store.counts();
+    expect(() =>
+      store.createRelationship(workspace.id, document.id, memory, "supports"),
+    ).toThrow();
+    expect(store.counts()).toEqual(before);
+    store.close();
+  });
 
-  it('captures initial chats and connected memories as atomic logical operations', () => {
-    const { store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Source', 'Body')
-    store.captureChat(workspace.id, 'Atomic chat', 'First message')
-    store.captureMemory(workspace.id, 'Atomic memory', 'Connected', document.id)
-    expect(store.counts()).toMatchObject({ chats: 1, messages: 1, memories: 1, relationships: 1 })
-    const before = store.counts()
-    expect(() => store.captureChat('missing-workspace', 'No chat', 'No message')).toThrow()
-    expect(() => store.captureMemory(workspace.id, 'No memory', 'No relation', 'missing-source')).toThrow()
-    expect(store.counts()).toEqual(before)
-    store.close()
-  })
+  it("captures initial chats and connected memories as atomic logical operations", () => {
+    const { store, workspace } = fixture();
+    const document = store.createDocument(workspace.id, "Source", "Body");
+    store.captureChat(workspace.id, "Atomic chat", "First message");
+    store.captureMemory(
+      workspace.id,
+      "Atomic memory",
+      "Connected",
+      document.id,
+    );
+    expect(store.counts()).toMatchObject({
+      chats: 1,
+      messages: 1,
+      memories: 1,
+      relationships: 1,
+    });
+    const before = store.counts();
+    expect(() =>
+      store.captureChat("missing-workspace", "No chat", "No message"),
+    ).toThrow();
+    expect(() =>
+      store.captureMemory(
+        workspace.id,
+        "No memory",
+        "No relation",
+        "missing-source",
+      ),
+    ).toThrow();
+    expect(store.counts()).toEqual(before);
+    store.close();
+  });
 
-  it('rolls back the workspace and copied files when archive restore integrity fails', () => {
-    const { root, store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Archive', 'Body')
-    const source = path.join(root, 'archive.txt'); writeFileSync(source, 'valid bytes')
-    store.addAttachment(workspace.id, document.id, 'archive.txt', 'text/plain', source)
-    const archive = structuredClone(store.exportWorkspace(workspace.id))
-    ;(archive.objects.attachments[0] as Record<string, unknown>).data_base64 = Buffer.from('tampered').toString('base64')
-    const before = store.counts()
-    expect(() => store.restoreWorkspace(archive, 'Broken restore', path.join(root, 'broken'))).toThrow(/integrity/)
-    expect(store.counts()).toEqual(before)
-    store.close()
-  })
+  it("rolls back the workspace and copied files when archive restore integrity fails", () => {
+    const { root, store, workspace } = fixture();
+    const document = store.createDocument(workspace.id, "Archive", "Body");
+    const source = path.join(root, "archive.txt");
+    writeFileSync(source, "valid bytes");
+    store.addAttachment(
+      workspace.id,
+      document.id,
+      "archive.txt",
+      "text/plain",
+      source,
+    );
+    const archive = structuredClone(store.exportWorkspace(workspace.id));
+    (archive.objects.attachments[0] as Record<string, unknown>).data_base64 =
+      Buffer.from("tampered").toString("base64");
+    const before = store.counts();
+    expect(() =>
+      store.restoreWorkspace(
+        archive,
+        "Broken restore",
+        path.join(root, "broken"),
+      ),
+    ).toThrow(/integrity/);
+    expect(store.counts()).toEqual(before);
+    store.close();
+  });
 
-  it('reconciles interrupted attachment add/delete states on startup', () => {
-    const { root, database, store, workspace } = fixture()
-    const document = store.createDocument(workspace.id, 'Recovery', 'Body')
-    const source = path.join(root, 'recover.txt'); writeFileSync(source, 'recoverable')
-    store.addAttachment(workspace.id, document.id, 'recover.txt', 'text/plain', source)
-    const archive = store.exportWorkspace(workspace.id), relative = String((archive.objects.attachments[0] as Record<string, unknown>).relative_path)
-    const attached = path.join(root, 'attachments', relative), staged = `${attached}.deleting-00000000-0000-4000-8000-000000000000`
-    renameSync(attached, staged)
-    writeFileSync(path.join(root, 'attachments', 'orphan.txt'), 'incomplete add')
-    store.close()
-    const reopened = new WorkspaceStore(database)
-    expect(existsSync(attached)).toBe(true)
-    expect(existsSync(staged)).toBe(false)
-    expect(existsSync(path.join(root, 'attachments', 'orphan.txt'))).toBe(false)
-    reopened.close()
-  })
-  it('persists bounded tool policy and new workstation receipts through backup while workspace deletion cascades',()=>{const{root,database,store,workspace}=fixture();store.setToolGatewaySettings(workspace.id,{stopped:false,denyPatterns:['rm\\s+-rf'],suppressCommit:false,suppressPush:true});store.saveToolReceipt({id:'tool_receipt_123456',version:1,workspaceId:workspace.id,origin:'ai',tool:'workspace.search',capabilityVersion:'1.0.0',device:'local',profileName:'Autonomous developer',policyDigest:'a'.repeat(64),status:'completed',summary:'Found bounded matches',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),durationMs:2,outputBytes:4,truncated:false});expect(store.listToolReceipts(workspace.id)).toEqual([expect.objectContaining({id:'tool_receipt_123456',tool:'workspace.search',status:'completed',outputBytes:4})]);const archive=store.exportWorkspace(workspace.id);expect(archive.objects.tool_gateway_receipts).toHaveLength(1);const restored=store.restoreWorkspace(archive,'Restored',path.join(root,'restored'));expect(store.toolGatewaySettings(restored.id)).toMatchObject({stopped:false,denyPatterns:['rm\\s+-rf'],suppressPush:true});expect(store.listToolReceipts(restored.id)).toEqual([expect.objectContaining({tool:'workspace.search',status:'completed',summary:'Found bounded matches'})]);store.close();const raw=new DatabaseSync(database);raw.exec('PRAGMA foreign_keys=ON');raw.prepare('DELETE FROM workspaces WHERE id=?').run(restored.id);expect((raw.prepare('SELECT count(*) count FROM tool_gateway_receipts').get() as {count:number}).count).toBe(1);expect((raw.prepare('SELECT count(*) count FROM tool_gateway_settings').get() as {count:number}).count).toBe(1);raw.close()})
-  it('reconciles a durable running tool receipt after restart',()=>{const{database,store,workspace}=fixture(),startedAt=new Date(Date.now()-1000).toISOString();store.saveToolReceipt({id:'tool_running_123456',version:1,workspaceId:workspace.id,origin:'ai',tool:'terminal.run',capabilityVersion:'1.0.0',device:'local',profileName:'Autonomous developer',policyDigest:'b'.repeat(64),status:'running',summary:'terminal.run',startedAt,outputBytes:0,truncated:false});store.close();const reopened=new WorkspaceStore(database);expect(reopened.listToolReceipts(workspace.id)).toEqual([expect.objectContaining({id:'tool_running_123456',status:'failed',code:'interrupted'})]);reopened.close()})
-  it('learns, isolates, supersedes, backs up, restores, and cascades tool failure knowledge',()=>{const{root,database,store,workspace}=fixture(),other=store.createWorkspace('Other',root),request={version:1 as const,workspaceId:workspace.id,origin:'ui' as const,tool:'terminal.run' as const,arguments:{command:'private raw command'}},identity={tool:'terminal.run' as const,capabilityVersion:'1.0.0',parameterFingerprint:'a'.repeat(64),contextDigest:'b'.repeat(64)},failedReceipt={id:'tool_failed_123456',version:1 as const,workspaceId:workspace.id,origin:'ui' as const,tool:'terminal.run' as const,capabilityVersion:'1.0.0',device:'local' as const,profileName:'Autonomous developer',policyDigest:'c'.repeat(64),status:'failed' as const,summary:'Command failed',code:'nonzero_exit',startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),durationMs:1,outputBytes:0,truncated:false};store.saveToolReceipt(failedReceipt);store.recordToolOutcome(request,identity,{receipt:failedReceipt},undefined,'Run the local repair first');expect(store.findToolFailure(workspace.id,identity)).toMatchObject({errorClass:'nonzero_exit',remediation:'Run the local repair first'});expect(store.findToolFailure(other.id,identity)).toBeUndefined();expect(JSON.stringify(store.listToolFailures(workspace.id))).not.toContain('private raw command');const archive=store.exportWorkspace(workspace.id);expect(archive.objects.tool_failure_knowledge).toHaveLength(1);const restored=store.restoreWorkspace(archive,'Restored failure',path.join(root,'restored-failure'));expect(store.listToolFailures(restored.id)).toEqual([expect.objectContaining({tool:'terminal.run',outcome:'active'})]);const completed={...failedReceipt,id:'tool_success_123456',status:'completed' as const,summary:'Command completed',code:undefined};store.saveToolReceipt(completed);store.recordToolOutcome(request,identity,{receipt:completed},'Changed the broken local configuration');expect(store.findToolFailure(workspace.id,identity)).toBeUndefined();expect(store.listToolFailures(workspace.id)[0]).toMatchObject({outcome:'superseded',hadOverride:1});store.deleteToolReceipt(workspace.id,failedReceipt.id);expect(store.listToolFailures(workspace.id)).toHaveLength(0);store.close();const raw=new DatabaseSync(database);raw.exec('PRAGMA foreign_keys=ON');raw.prepare('DELETE FROM workspaces WHERE id=?').run(restored.id);expect((raw.prepare('SELECT count(*) count FROM tool_failure_knowledge WHERE workspace_id=?').get(restored.id) as {count:number}).count).toBe(0);raw.close()})
-  it('expires and bounds failure knowledge while emitting minimized sync mutations',()=>{const{store,workspace}=fixture(),timestamp=new Date().toISOString(),request={version:1 as const,workspaceId:workspace.id,origin:'ui' as const,tool:'terminal.run' as const,arguments:{command:'opaque'}},receipt={id:'failure_receipt_base',version:1 as const,workspaceId:workspace.id,origin:'ui' as const,tool:'terminal.run' as const,capabilityVersion:'1.0.0',device:'local' as const,profileName:'Autonomous developer',policyDigest:'d'.repeat(64),status:'failed' as const,summary:'failed',code:'nonzero_exit',startedAt:timestamp,finishedAt:timestamp,durationMs:1,outputBytes:0,truncated:false};for(let index=0;index<55;index++){const current={...receipt,id:`failure_receipt_${String(index).padStart(3,'0')}`};store.saveToolReceipt(current);store.recordToolOutcome(request,{tool:'terminal.run',capabilityVersion:'1.0.0',parameterFingerprint:index.toString(16).padStart(64,'0'),contextDigest:'e'.repeat(64)},{receipt:current})}expect(store.listToolFailures(workspace.id,100)).toHaveLength(50);const identity={tool:'terminal.run' as const,capabilityVersion:'1.0.0',parameterFingerprint:(54).toString(16).padStart(64,'0'),contextDigest:'e'.repeat(64)};expect(store.findToolFailure(workspace.id,identity,new Date(Date.now()+8*24*60*60*1000).toISOString())).toBeUndefined();const sync=store.pendingSyncChanges(workspace.id).filter((item)=>item.objectKind==='tool_failure');expect(sync.length).toBeGreaterThan(0);expect(JSON.stringify(sync)).not.toContain('opaque');store.close()})
-  it('includes completed supersession provenance in full sync snapshots',()=>{const{store,workspace}=fixture(),timestamp=new Date().toISOString(),request={version:1 as const,workspaceId:workspace.id,origin:'ui' as const,tool:'terminal.run' as const,arguments:{command:'not synced'}},identity={tool:'terminal.run' as const,capabilityVersion:'1.0.0',parameterFingerprint:'f'.repeat(64),contextDigest:'1'.repeat(64)},failed={id:'snapshot_failure_receipt',version:1 as const,workspaceId:workspace.id,origin:'ui' as const,tool:'terminal.run' as const,capabilityVersion:'1.0.0',device:'local' as const,profileName:'Autonomous developer',policyDigest:'2'.repeat(64),status:'failed' as const,summary:'failed',code:'nonzero_exit',startedAt:timestamp,finishedAt:timestamp,durationMs:1,outputBytes:0,truncated:false};store.saveToolReceipt(failed);store.recordToolOutcome(request,identity,{receipt:failed});const success={...failed,id:'snapshot_success_receipt',status:'completed' as const,summary:'completed',code:undefined};store.saveToolReceipt(success);store.recordToolOutcome(request,identity,{receipt:success},'Changed the local tool version');for(const mutation of store.pendingSyncChanges(workspace.id))store.markSyncChangeRelayed(workspace.id,mutation.id);store.queueFullSyncSnapshot(workspace.id);const mutation=store.pendingSyncChanges(workspace.id).find((item)=>item.objectKind==='tool_failure');expect(mutation?.payload).toMatchObject({outcome:'superseded',supersededByReceiptId:'snapshot_success_receipt',supersededReceiptTool:'terminal.run',supersededReceiptStatus:'completed',supersededReceiptCapabilityVersion:'1.0.0'});expect(JSON.stringify(mutation)).not.toContain('not synced');store.close()})
-  it('persists minimized provider usage through backup and cascades it with workspace deletion',()=>{const{root,database,store,workspace}=fixture(),timestamp='2026-08-03T12:00:00.000Z';store.setOpenRouterSettings({enabled:true,liveRequestsEnabled:false,strategicModel:'moonshot/kimi-k3',everydayModel:'deepseek/v4-flash',attachmentModel:'moonshotai/kimi-k3',fallbackProvider:'codex',monthlyCapMicros:1_000_000,ytdCapMicros:5_000_000,warningPercent:80});store.saveProviderUsage({id:'provider_receipt_fixture',workspaceId:workspace.id,provider:'openrouter',model:'deepseek/v4-flash',role:'everyday',status:'completed',costMicros:125,promptTokens:4,completionTokens:2,requestDigest:'a'.repeat(64),responseId:'gen-fixture',startedAt:timestamp,finishedAt:timestamp});expect(store.providerUsage(workspace.id).summary.monthMicros).toBe(125);const archive=store.exportWorkspace(workspace.id);expect(JSON.stringify(archive)).not.toContain('api-key');const restored=store.restoreWorkspace(archive,'Restored usage',path.join(root,'restored-usage'));expect(store.providerUsage(restored.id).receipts).toEqual([expect.objectContaining({costMicros:125,model:'deepseek/v4-flash'})]);store.close();const raw=new DatabaseSync(database);raw.exec('PRAGMA foreign_keys=ON');raw.prepare('DELETE FROM workspaces WHERE id=?').run(restored.id);expect((raw.prepare('SELECT count(*) count FROM provider_usage_receipts WHERE workspace_id=?').get(restored.id) as {count:number}).count).toBe(0);raw.close()})
-  it('enforces remote job policy, lease exclusivity, lifecycle, backup safety, and deletion',()=>{const{root,store,workspace}=fixture(),digest=remotePolicyDigest('waypoint.workspace_summary');store.setDeviceControlPolicy(workspace.id,{version:1,enabled:true,failover:false,allowedCapabilities:['waypoint.workspace_summary'],maxDurationMs:60_000,maxConcurrency:1});const job=store.createRemoteJobRecord({workspaceId:workspace.id,controllerDeviceId:'controller',targetDeviceId:'worker',capability:'waypoint.workspace_summary',instruction:'Return summary',idempotencyKey:'request-00000001',profileDigest:digest,keyEpoch:2,timeoutMs:60_000});expect(store.claimRemoteJob(workspace.id,'other',2,digest)).toBeUndefined();const claim=store.claimRemoteJob(workspace.id,'worker',2,digest)!;expect(store.claimRemoteJob(workspace.id,'worker',2,digest)).toBeUndefined();store.startRemoteJob(workspace.id,job.id,claim.leaseId);store.finishRemoteJob(workspace.id,job.id,claim.leaseId,'completed','Summary completed');expect(store.listRemoteJobs(workspace.id)[0]).toMatchObject({status:'completed',resultSummary:'Summary completed'});const archive=store.exportWorkspace(workspace.id);const restored=store.restoreWorkspace(archive,'Restored remote history',path.join(root,'remote-restored'));expect(store.deviceControlPolicy(restored.id).enabled).toBe(false);expect(store.listRemoteJobs(restored.id)[0]).toMatchObject({status:'completed'});store.deleteRemoteJob(workspace.id,job.id);expect(store.listRemoteJobs(workspace.id)).toHaveLength(0);expect(store.pendingSyncChanges(workspace.id).some((item)=>item.objectKind==='remote_job'&&item.operation==='delete')).toBe(true);store.close()})
-  it('automatically titles exactly once, preserves manual rename, syncs, and retries an interrupted claim',()=>{const{database,store,workspace}=fixture(),chat=store.createChat(workspace.id,'New chat');store.addMessage(workspace.id,chat,'user','Plan the Windows acceptance pass');expect(store.autoTitleCandidate(workspace.id,chat)).toBeUndefined();store.addMessage(workspace.id,chat,'assistant','I will create a careful test plan.');expect(store.autoTitleCandidate(workspace.id,chat)).toEqual(expect.objectContaining({user:'Plan the Windows acceptance pass'}));expect(store.claimAutoTitle(workspace.id,chat)).toBe(true);expect(store.claimAutoTitle(workspace.id,chat)).toBe(false);store.close();const reopened=new WorkspaceStore(database);expect(reopened.autoTitleCandidate(workspace.id,chat)).toBeTruthy();expect(reopened.claimAutoTitle(workspace.id,chat)).toBe(true);expect(reopened.completeAutoTitle(workspace.id,chat,'Windows Acceptance Plan','local','deterministic-v1','fixture')).toBe(true);reopened.renameChat(workspace.id,chat,'My Windows Test');expect(reopened.listChats(workspace.id)[0]).toMatchObject({title:'My Windows Test',titleOrigin:'manual',titleStatus:'complete'});expect(reopened.completeAutoTitle(workspace.id,chat,'Must not overwrite','claude','fable','late')).toBe(false);expect(reopened.pendingSyncChanges(workspace.id).some((item)=>item.objectKind==='chat'&&JSON.stringify(item.payload).includes('My Windows Test'))).toBe(true);reopened.close()})
-})
+  it("reconciles interrupted attachment add/delete states on startup", () => {
+    const { root, database, store, workspace } = fixture();
+    const document = store.createDocument(workspace.id, "Recovery", "Body");
+    const source = path.join(root, "recover.txt");
+    writeFileSync(source, "recoverable");
+    store.addAttachment(
+      workspace.id,
+      document.id,
+      "recover.txt",
+      "text/plain",
+      source,
+    );
+    const archive = store.exportWorkspace(workspace.id),
+      relative = String(
+        (archive.objects.attachments[0] as Record<string, unknown>)
+          .relative_path,
+      );
+    const attached = path.join(root, "attachments", relative),
+      staged = `${attached}.deleting-00000000-0000-4000-8000-000000000000`;
+    renameSync(attached, staged);
+    writeFileSync(
+      path.join(root, "attachments", "orphan.txt"),
+      "incomplete add",
+    );
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(existsSync(attached)).toBe(true);
+    expect(existsSync(staged)).toBe(false);
+    expect(existsSync(path.join(root, "attachments", "orphan.txt"))).toBe(
+      false,
+    );
+    reopened.close();
+  });
+  it("persists bounded tool policy and new workstation receipts through backup while workspace deletion cascades", () => {
+    const { root, database, store, workspace } = fixture();
+    store.setToolGatewaySettings(workspace.id, {
+      stopped: false,
+      denyPatterns: ["rm\\s+-rf"],
+      suppressCommit: false,
+      suppressPush: true,
+    });
+    store.saveToolReceipt({
+      id: "tool_receipt_123456",
+      version: 1,
+      workspaceId: workspace.id,
+      origin: "ai",
+      tool: "workspace.search",
+      capabilityVersion: "1.0.0",
+      device: "local",
+      profileName: "Autonomous developer",
+      policyDigest: "a".repeat(64),
+      status: "completed",
+      summary: "Found bounded matches",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: 2,
+      outputBytes: 4,
+      truncated: false,
+    });
+    expect(store.listToolReceipts(workspace.id)).toEqual([
+      expect.objectContaining({
+        id: "tool_receipt_123456",
+        tool: "workspace.search",
+        status: "completed",
+        outputBytes: 4,
+      }),
+    ]);
+    const archive = store.exportWorkspace(workspace.id);
+    expect(archive.objects.tool_gateway_receipts).toHaveLength(1);
+    const restored = store.restoreWorkspace(
+      archive,
+      "Restored",
+      path.join(root, "restored"),
+    );
+    expect(store.toolGatewaySettings(restored.id)).toMatchObject({
+      stopped: false,
+      denyPatterns: ["rm\\s+-rf"],
+      suppressPush: true,
+    });
+    expect(store.listToolReceipts(restored.id)).toEqual([
+      expect.objectContaining({
+        tool: "workspace.search",
+        status: "completed",
+        summary: "Found bounded matches",
+      }),
+    ]);
+    store.close();
+    const raw = new DatabaseSync(database);
+    raw.exec("PRAGMA foreign_keys=ON");
+    raw.prepare("DELETE FROM workspaces WHERE id=?").run(restored.id);
+    expect(
+      (
+        raw
+          .prepare("SELECT count(*) count FROM tool_gateway_receipts")
+          .get() as { count: number }
+      ).count,
+    ).toBe(1);
+    expect(
+      (
+        raw
+          .prepare("SELECT count(*) count FROM tool_gateway_settings")
+          .get() as { count: number }
+      ).count,
+    ).toBe(1);
+    raw.close();
+  });
+  it("reconciles a durable running tool receipt after restart", () => {
+    const { database, store, workspace } = fixture(),
+      startedAt = new Date(Date.now() - 1000).toISOString();
+    store.saveToolReceipt({
+      id: "tool_running_123456",
+      version: 1,
+      workspaceId: workspace.id,
+      origin: "ai",
+      tool: "terminal.run",
+      capabilityVersion: "1.0.0",
+      device: "local",
+      profileName: "Autonomous developer",
+      policyDigest: "b".repeat(64),
+      status: "running",
+      summary: "terminal.run",
+      startedAt,
+      outputBytes: 0,
+      truncated: false,
+    });
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(reopened.listToolReceipts(workspace.id)).toEqual([
+      expect.objectContaining({
+        id: "tool_running_123456",
+        status: "failed",
+        code: "interrupted",
+      }),
+    ]);
+    reopened.close();
+  });
+  it("learns, isolates, supersedes, backs up, restores, and cascades tool failure knowledge", () => {
+    const { root, database, store, workspace } = fixture(),
+      other = store.createWorkspace("Other", root),
+      request = {
+        version: 1 as const,
+        workspaceId: workspace.id,
+        origin: "ui" as const,
+        tool: "terminal.run" as const,
+        arguments: { command: "private raw command" },
+      },
+      identity = {
+        tool: "terminal.run" as const,
+        capabilityVersion: "1.0.0",
+        parameterFingerprint: "a".repeat(64),
+        contextDigest: "b".repeat(64),
+      },
+      failedReceipt = {
+        id: "tool_failed_123456",
+        version: 1 as const,
+        workspaceId: workspace.id,
+        origin: "ui" as const,
+        tool: "terminal.run" as const,
+        capabilityVersion: "1.0.0",
+        device: "local" as const,
+        profileName: "Autonomous developer",
+        policyDigest: "c".repeat(64),
+        status: "failed" as const,
+        summary: "Command failed",
+        code: "nonzero_exit",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 1,
+        outputBytes: 0,
+        truncated: false,
+      };
+    store.saveToolReceipt(failedReceipt);
+    store.recordToolOutcome(
+      request,
+      identity,
+      { receipt: failedReceipt },
+      undefined,
+      "Run the local repair first",
+    );
+    expect(store.findToolFailure(workspace.id, identity)).toMatchObject({
+      errorClass: "nonzero_exit",
+      remediation: "Run the local repair first",
+    });
+    expect(store.findToolFailure(other.id, identity)).toBeUndefined();
+    expect(JSON.stringify(store.listToolFailures(workspace.id))).not.toContain(
+      "private raw command",
+    );
+    const archive = store.exportWorkspace(workspace.id);
+    expect(archive.objects.tool_failure_knowledge).toHaveLength(1);
+    const restored = store.restoreWorkspace(
+      archive,
+      "Restored failure",
+      path.join(root, "restored-failure"),
+    );
+    expect(store.listToolFailures(restored.id)).toEqual([
+      expect.objectContaining({ tool: "terminal.run", outcome: "active" }),
+    ]);
+    const completed = {
+      ...failedReceipt,
+      id: "tool_success_123456",
+      status: "completed" as const,
+      summary: "Command completed",
+      code: undefined,
+    };
+    store.saveToolReceipt(completed);
+    store.recordToolOutcome(
+      request,
+      identity,
+      { receipt: completed },
+      "Changed the broken local configuration",
+    );
+    expect(store.findToolFailure(workspace.id, identity)).toBeUndefined();
+    expect(store.listToolFailures(workspace.id)[0]).toMatchObject({
+      outcome: "superseded",
+      hadOverride: 1,
+    });
+    store.deleteToolReceipt(workspace.id, failedReceipt.id);
+    expect(store.listToolFailures(workspace.id)).toHaveLength(0);
+    store.close();
+    const raw = new DatabaseSync(database);
+    raw.exec("PRAGMA foreign_keys=ON");
+    raw.prepare("DELETE FROM workspaces WHERE id=?").run(restored.id);
+    expect(
+      (
+        raw
+          .prepare(
+            "SELECT count(*) count FROM tool_failure_knowledge WHERE workspace_id=?",
+          )
+          .get(restored.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    raw.close();
+  });
+  it("expires and bounds failure knowledge while emitting minimized sync mutations", () => {
+    const { store, workspace } = fixture(),
+      timestamp = new Date().toISOString(),
+      request = {
+        version: 1 as const,
+        workspaceId: workspace.id,
+        origin: "ui" as const,
+        tool: "terminal.run" as const,
+        arguments: { command: "opaque" },
+      },
+      receipt = {
+        id: "failure_receipt_base",
+        version: 1 as const,
+        workspaceId: workspace.id,
+        origin: "ui" as const,
+        tool: "terminal.run" as const,
+        capabilityVersion: "1.0.0",
+        device: "local" as const,
+        profileName: "Autonomous developer",
+        policyDigest: "d".repeat(64),
+        status: "failed" as const,
+        summary: "failed",
+        code: "nonzero_exit",
+        startedAt: timestamp,
+        finishedAt: timestamp,
+        durationMs: 1,
+        outputBytes: 0,
+        truncated: false,
+      };
+    for (let index = 0; index < 55; index++) {
+      const current = {
+        ...receipt,
+        id: `failure_receipt_${String(index).padStart(3, "0")}`,
+      };
+      store.saveToolReceipt(current);
+      store.recordToolOutcome(
+        request,
+        {
+          tool: "terminal.run",
+          capabilityVersion: "1.0.0",
+          parameterFingerprint: index.toString(16).padStart(64, "0"),
+          contextDigest: "e".repeat(64),
+        },
+        { receipt: current },
+      );
+    }
+    expect(store.listToolFailures(workspace.id, 100)).toHaveLength(50);
+    const identity = {
+      tool: "terminal.run" as const,
+      capabilityVersion: "1.0.0",
+      parameterFingerprint: (54).toString(16).padStart(64, "0"),
+      contextDigest: "e".repeat(64),
+    };
+    expect(
+      store.findToolFailure(
+        workspace.id,
+        identity,
+        new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
+      ),
+    ).toBeUndefined();
+    const sync = store
+      .pendingSyncChanges(workspace.id)
+      .filter((item) => item.objectKind === "tool_failure");
+    expect(sync.length).toBeGreaterThan(0);
+    expect(JSON.stringify(sync)).not.toContain("opaque");
+    store.close();
+  });
+  it("includes completed supersession provenance in full sync snapshots", () => {
+    const { store, workspace } = fixture(),
+      timestamp = new Date().toISOString(),
+      request = {
+        version: 1 as const,
+        workspaceId: workspace.id,
+        origin: "ui" as const,
+        tool: "terminal.run" as const,
+        arguments: { command: "not synced" },
+      },
+      identity = {
+        tool: "terminal.run" as const,
+        capabilityVersion: "1.0.0",
+        parameterFingerprint: "f".repeat(64),
+        contextDigest: "1".repeat(64),
+      },
+      failed = {
+        id: "snapshot_failure_receipt",
+        version: 1 as const,
+        workspaceId: workspace.id,
+        origin: "ui" as const,
+        tool: "terminal.run" as const,
+        capabilityVersion: "1.0.0",
+        device: "local" as const,
+        profileName: "Autonomous developer",
+        policyDigest: "2".repeat(64),
+        status: "failed" as const,
+        summary: "failed",
+        code: "nonzero_exit",
+        startedAt: timestamp,
+        finishedAt: timestamp,
+        durationMs: 1,
+        outputBytes: 0,
+        truncated: false,
+      };
+    store.saveToolReceipt(failed);
+    store.recordToolOutcome(request, identity, { receipt: failed });
+    const success = {
+      ...failed,
+      id: "snapshot_success_receipt",
+      status: "completed" as const,
+      summary: "completed",
+      code: undefined,
+    };
+    store.saveToolReceipt(success);
+    store.recordToolOutcome(
+      request,
+      identity,
+      { receipt: success },
+      "Changed the local tool version",
+    );
+    for (const mutation of store.pendingSyncChanges(workspace.id))
+      store.markSyncChangeRelayed(workspace.id, mutation.id);
+    store.queueFullSyncSnapshot(workspace.id);
+    const mutation = store
+      .pendingSyncChanges(workspace.id)
+      .find((item) => item.objectKind === "tool_failure");
+    expect(mutation?.payload).toMatchObject({
+      outcome: "superseded",
+      supersededByReceiptId: "snapshot_success_receipt",
+      supersededReceiptTool: "terminal.run",
+      supersededReceiptStatus: "completed",
+      supersededReceiptCapabilityVersion: "1.0.0",
+    });
+    expect(JSON.stringify(mutation)).not.toContain("not synced");
+    store.close();
+  });
+  it("persists minimized provider usage through backup and cascades it with workspace deletion", () => {
+    const { root, database, store, workspace } = fixture(),
+      timestamp = "2026-08-03T12:00:00.000Z";
+    store.setOpenRouterSettings({
+      enabled: true,
+      liveRequestsEnabled: false,
+      strategicModel: "moonshot/kimi-k3",
+      everydayModel: "deepseek/v4-flash",
+      attachmentModel: "moonshotai/kimi-k3",
+      fallbackProvider: "grok",
+      monthlyCapMicros: 1_000_000,
+      ytdCapMicros: 5_000_000,
+      warningPercent: 80,
+    });
+    store.saveProviderUsage({
+      id: "provider_receipt_fixture",
+      workspaceId: workspace.id,
+      provider: "openrouter",
+      model: "deepseek/v4-flash",
+      role: "everyday",
+      status: "completed",
+      costMicros: 125,
+      promptTokens: 4,
+      completionTokens: 2,
+      requestDigest: "a".repeat(64),
+      responseId: "gen-fixture",
+      fallbackProvider: "grok",
+      startedAt: timestamp,
+      finishedAt: timestamp,
+    });
+    expect(store.openRouterSettings().fallbackProvider).toBe("grok");
+    expect(store.providerUsage(workspace.id).summary.monthMicros).toBe(125);
+    const archive = store.exportWorkspace(workspace.id);
+    expect(JSON.stringify(archive)).not.toContain("api-key");
+    const restored = store.restoreWorkspace(
+      archive,
+      "Restored usage",
+      path.join(root, "restored-usage"),
+    );
+    expect(store.providerUsage(restored.id).receipts).toEqual([
+      expect.objectContaining({
+        costMicros: 125,
+        model: "deepseek/v4-flash",
+        fallbackProvider: "grok",
+      }),
+    ]);
+    store.close();
+    const raw = new DatabaseSync(database);
+    raw.exec("PRAGMA foreign_keys=ON");
+    raw.prepare("DELETE FROM workspaces WHERE id=?").run(restored.id);
+    expect(
+      (
+        raw
+          .prepare(
+            "SELECT count(*) count FROM provider_usage_receipts WHERE workspace_id=?",
+          )
+          .get(restored.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    raw.close();
+  });
+  it("enforces remote job policy, lease exclusivity, lifecycle, backup safety, and deletion", () => {
+    const { root, store, workspace } = fixture(),
+      digest = remotePolicyDigest("waypoint.workspace_summary");
+    store.setDeviceControlPolicy(workspace.id, {
+      version: 1,
+      enabled: true,
+      failover: false,
+      allowedCapabilities: ["waypoint.workspace_summary"],
+      maxDurationMs: 60_000,
+      maxConcurrency: 1,
+    });
+    const job = store.createRemoteJobRecord({
+      workspaceId: workspace.id,
+      controllerDeviceId: "controller",
+      targetDeviceId: "worker",
+      capability: "waypoint.workspace_summary",
+      instruction: "Return summary",
+      idempotencyKey: "request-00000001",
+      profileDigest: digest,
+      keyEpoch: 2,
+      timeoutMs: 60_000,
+    });
+    expect(
+      store.claimRemoteJob(workspace.id, "other", 2, digest),
+    ).toBeUndefined();
+    const claim = store.claimRemoteJob(workspace.id, "worker", 2, digest)!;
+    expect(
+      store.claimRemoteJob(workspace.id, "worker", 2, digest),
+    ).toBeUndefined();
+    store.startRemoteJob(workspace.id, job.id, claim.leaseId);
+    store.finishRemoteJob(
+      workspace.id,
+      job.id,
+      claim.leaseId,
+      "completed",
+      "Summary completed",
+    );
+    expect(store.listRemoteJobs(workspace.id)[0]).toMatchObject({
+      status: "completed",
+      resultSummary: "Summary completed",
+    });
+    const archive = store.exportWorkspace(workspace.id);
+    const restored = store.restoreWorkspace(
+      archive,
+      "Restored remote history",
+      path.join(root, "remote-restored"),
+    );
+    expect(store.deviceControlPolicy(restored.id).enabled).toBe(false);
+    expect(store.listRemoteJobs(restored.id)[0]).toMatchObject({
+      status: "completed",
+    });
+    store.deleteRemoteJob(workspace.id, job.id);
+    expect(store.listRemoteJobs(workspace.id)).toHaveLength(0);
+    expect(
+      store
+        .pendingSyncChanges(workspace.id)
+        .some(
+          (item) =>
+            item.objectKind === "remote_job" && item.operation === "delete",
+        ),
+    ).toBe(true);
+    store.close();
+  });
+  it("automatically titles exactly once, preserves manual rename, syncs, and retries an interrupted claim", () => {
+    const { database, store, workspace } = fixture(),
+      chat = store.createChat(workspace.id, "New chat");
+    store.addMessage(
+      workspace.id,
+      chat,
+      "user",
+      "Plan the Windows acceptance pass",
+    );
+    expect(store.autoTitleCandidate(workspace.id, chat)).toBeUndefined();
+    store.addMessage(
+      workspace.id,
+      chat,
+      "assistant",
+      "I will create a careful test plan.",
+    );
+    expect(store.autoTitleCandidate(workspace.id, chat)).toEqual(
+      expect.objectContaining({ user: "Plan the Windows acceptance pass" }),
+    );
+    expect(store.claimAutoTitle(workspace.id, chat)).toBe(true);
+    expect(store.claimAutoTitle(workspace.id, chat)).toBe(false);
+    store.close();
+    const reopened = new WorkspaceStore(database);
+    expect(reopened.autoTitleCandidate(workspace.id, chat)).toBeTruthy();
+    expect(reopened.claimAutoTitle(workspace.id, chat)).toBe(true);
+    expect(
+      reopened.completeAutoTitle(
+        workspace.id,
+        chat,
+        "Windows Acceptance Plan",
+        "local",
+        "deterministic-v1",
+        "fixture",
+      ),
+    ).toBe(true);
+    reopened.renameChat(workspace.id, chat, "My Windows Test");
+    expect(reopened.listChats(workspace.id)[0]).toMatchObject({
+      title: "My Windows Test",
+      titleOrigin: "manual",
+      titleStatus: "complete",
+    });
+    expect(
+      reopened.completeAutoTitle(
+        workspace.id,
+        chat,
+        "Must not overwrite",
+        "claude",
+        "fable",
+        "late",
+      ),
+    ).toBe(false);
+    expect(
+      reopened
+        .pendingSyncChanges(workspace.id)
+        .some(
+          (item) =>
+            item.objectKind === "chat" &&
+            JSON.stringify(item.payload).includes("My Windows Test"),
+        ),
+    ).toBe(true);
+    reopened.close();
+  });
+});

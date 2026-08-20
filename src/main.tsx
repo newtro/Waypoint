@@ -2,6 +2,8 @@ import {
   type ClipboardEvent,
   FormEvent,
   Fragment,
+  lazy,
+  Suspense,
   StrictMode,
   useEffect,
   useRef,
@@ -16,7 +18,11 @@ import type {
   WorkspaceSummary,
 } from "../electron/core/types";
 import type { DiagnosticsReport } from "../electron/core/diagnostics";
-import { failureAdvice, type ExecutionRunView } from "./ai-workbench-ui";
+import {
+  executionAnswerText,
+  failureAdvice,
+  type ExecutionRunView,
+} from "./ai-workbench-ui";
 import { reconcileSelectedChatId, RefreshGate } from "./chat-selection";
 import { groupChatHistory, type HistorySort } from "./chat-history";
 import { HotkeyRecorder } from "./hotkey-recorder";
@@ -43,6 +49,10 @@ import "./in-app-browser.css";
 import "./execution-timeline-polish.css";
 import "./main-tabs.css";
 import "./settings-workspace.css";
+import {
+  providerFormField,
+  providerFormRequiredReady,
+} from "./provider-form.js";
 import "./theme.css";
 import {
   BrowserPcmCapture,
@@ -50,14 +60,20 @@ import {
   BrowserVoicePlayer,
 } from "./voice-capture";
 import { cancelLateVoiceRun } from "./voice-run-cancellation";
-import { openRouterImageModelChoices, openRouterModelChoices } from "../electron/core/openrouter-model-catalog";
+import {
+  openRouterImageModelChoices,
+  openRouterModelChoices,
+} from "../electron/core/openrouter-model-catalog";
 import {
   responseNoticeAfterRuns,
   runsForSourceMessage,
   uniqueChatRuns,
   uniqueExecutionEvents,
 } from "./chat-run-presentation";
-import { subscriptionFallbackModel, withLegacyModel } from "./provider-model-choices";
+import {
+  subscriptionFallbackModel,
+  withLegacyModel,
+} from "./provider-model-choices";
 import { nextOpenRouterActivation } from "./openrouter-activation";
 import {
   formatProviderMicros,
@@ -81,6 +97,12 @@ import {
   resolveAppearance,
   type AppearancePreference,
 } from "./theme";
+import {
+  dispatchOfficeWorkOrder as dispatchConfirmedOfficeWorkOrder,
+  refreshAfterOfficeDispatch,
+  type OfficeProviderOption,
+  type OfficeWorkOrder,
+} from "./office/office-work-order";
 
 const appearanceMediaQuery = window.matchMedia("(prefers-color-scheme: dark)"),
   initialAppearance = readAppearance(window.localStorage);
@@ -88,6 +110,12 @@ applyAppearance(
   document.documentElement,
   initialAppearance,
   appearanceMediaQuery.matches,
+);
+
+const OfficeCommandCenter = lazy(() =>
+  import("./office/OfficeCommandCenter").then((module) => ({
+    default: module.OfficeCommandCenter,
+  })),
 );
 
 type VoiceMode = "push_to_talk" | "hands_free";
@@ -130,8 +158,12 @@ type WebhookChannels = Awaited<
 type WebhookEvent = Awaited<
   ReturnType<Window["waypoint"]["listWebhookEvents"]>
 >[number];
-type AutomationProposal = Awaited<ReturnType<Window["waypoint"]["automationProposals"]>>[number];
-type AutomationRuntime = Awaited<ReturnType<Window["waypoint"]["automationRulesAndRuns"]>>;
+type AutomationProposal = Awaited<
+  ReturnType<Window["waypoint"]["automationProposals"]>
+>[number];
+type AutomationRuntime = Awaited<
+  ReturnType<Window["waypoint"]["automationRulesAndRuns"]>
+>;
 type ToolSettings = Awaited<
   ReturnType<Window["waypoint"]["toolGatewaySettings"]>
 >;
@@ -165,9 +197,13 @@ type ActivityCaptureStatus = Awaited<
 type ActivitySnapshot = Awaited<
   ReturnType<Window["waypoint"]["listActivitySnapshots"]>
 >[number];
+type ProviderRequest = Awaited<
+  ReturnType<Window["waypoint"]["listProviderRequests"]>
+>[number];
 type Drawer = WorkspaceView | undefined;
 
 const workspaceViewTitles: Record<WorkspaceView, string> = {
+  office: "Command Center",
   briefing: "Briefing",
   knowledge: "Knowledge",
   reflection: "Reflection",
@@ -180,33 +216,550 @@ const workspaceViewTitles: Record<WorkspaceView, string> = {
   browser: "In-App Browser",
 };
 
-type AttachmentViewer = { id: string; workspaceId: string; chatId: string; name: string; dataUrl: string; width: number; height: number };
+type AttachmentViewer = {
+  id: string;
+  workspaceId: string;
+  chatId: string;
+  name: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+};
+const profilePreferenceKey = (
+  workspaceId: string,
+  chatId: string | undefined,
+  provider: string,
+) =>
+  `waypoint:authority-profile:v1:${workspaceId}:${chatId ?? "new"}:${provider}`;
 
-function ChatAttachmentPreview({ workspaceId, chatId, attachment, queued, onOpen, onRemove }: { workspaceId: string; chatId: string; attachment: AttachmentMetadata; queued?: boolean; onOpen(viewer: AttachmentViewer): void; onRemove?: () => void }) {
-  const [preview, setPreview] = useState<{ dataUrl: string; width: number; height: number }>(), [failed, setFailed] = useState(false);
+function ChatAttachmentPreview({
+  workspaceId,
+  chatId,
+  attachment,
+  queued,
+  onOpen,
+  onRemove,
+}: {
+  workspaceId: string;
+  chatId: string;
+  attachment: AttachmentMetadata;
+  queued?: boolean;
+  onOpen(viewer: AttachmentViewer): void;
+  onRemove?: () => void;
+}) {
+  const [preview, setPreview] = useState<{
+      dataUrl: string;
+      width: number;
+      height: number;
+    }>(),
+    [failed, setFailed] = useState(false);
   const image = attachment.mediaType.startsWith("image/");
+  const storageLabel = attachment.syncEligible
+    ? "stored locally · cross-device eligible"
+    : `stored locally only · ${attachment.localOnlyReason === "transport_file_size" ? "over 25 MiB transport limit" : attachment.localOnlyReason === "transport_owner_count" ? "attachment count transport limit" : "workspace transport limit"}`;
   useEffect(() => {
     if (!image) return;
     let active = true;
-    void window.waypoint.attachmentImagePreview(workspaceId, attachment.id, "thumbnail").then((result) => {
-      if (active) setPreview({ dataUrl: `data:${result.mediaType};base64,${result.dataBase64}`, width: result.width, height: result.height });
-    }).catch(() => { if (active) setFailed(true); });
-    return () => { active = false; };
+    void window.waypoint
+      .attachmentImagePreview(workspaceId, attachment.id, "thumbnail")
+      .then((result) => {
+        if (active)
+          setPreview({
+            dataUrl: `data:${result.mediaType};base64,${result.dataBase64}`,
+            width: result.width,
+            height: result.height,
+          });
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+    };
   }, [attachment.id, image, workspaceId]);
-  if (!image) return <span className="attachment-file-chip">▧ <b>{attachment.name}</b><small>{queued ? `${Math.ceil(attachment.bytes / 1024)} KiB` : "stored locally"}</small>{onRemove && <button type="button" aria-label={`Remove ${attachment.name}`} onClick={onRemove}>×</button>}</span>;
+  if (!image)
+    return (
+      <span className="attachment-file-chip" title={storageLabel}>
+        ▧ <b>{attachment.name}</b>
+        <small>
+          {queued
+            ? `${Math.ceil(attachment.bytes / 1024)} KiB · ${storageLabel}`
+            : storageLabel}
+        </small>
+        {onRemove && (
+          <button
+            type="button"
+            aria-label={`Remove ${attachment.name}`}
+            onClick={onRemove}
+          >
+            ×
+          </button>
+        )}
+      </span>
+    );
   async function open() {
     try {
-      const result = await window.waypoint.attachmentImagePreview(workspaceId, attachment.id, "viewer");
-      onOpen({ id: attachment.id, workspaceId, chatId, name: attachment.name, dataUrl: `data:${result.mediaType};base64,${result.dataBase64}`, width: result.width, height: result.height });
-    } catch { setFailed(true); }
+      const result = await window.waypoint.attachmentImagePreview(
+        workspaceId,
+        attachment.id,
+        "viewer",
+      );
+      onOpen({
+        id: attachment.id,
+        workspaceId,
+        chatId,
+        name: attachment.name,
+        dataUrl: `data:${result.mediaType};base64,${result.dataBase64}`,
+        width: result.width,
+        height: result.height,
+      });
+    } catch {
+      setFailed(true);
+    }
   }
-  return <figure className={`attachment-image-card${failed ? " failed" : ""}`}>
-    <button type="button" className="attachment-image-open" aria-label={`Open full image ${attachment.name}`} onClick={() => void open()} disabled={failed}>
-      {preview ? <img src={preview.dataUrl} width={preview.width} height={preview.height} alt={`Image attachment: ${attachment.name}`} /> : <span className="attachment-image-state">{failed ? "Preview unavailable" : "Loading image preview…"}</span>}
-    </button>
-    <figcaption><span title={attachment.name}>{attachment.name}</span><small>{failed ? "Image missing or corrupt" : queued ? `${Math.ceil(attachment.bytes / 1024)} KiB` : "stored locally"}</small></figcaption>
-    {onRemove && <button type="button" className="attachment-image-remove" aria-label={`Remove ${attachment.name}`} onClick={onRemove}>×</button>}
-  </figure>;
+  return (
+    <figure className={`attachment-image-card${failed ? " failed" : ""}`}>
+      <button
+        type="button"
+        className="attachment-image-open"
+        aria-label={`Open full image ${attachment.name}`}
+        onClick={() => void open()}
+        disabled={failed}
+      >
+        {preview ? (
+          <img
+            src={preview.dataUrl}
+            width={preview.width}
+            height={preview.height}
+            alt={`Image attachment: ${attachment.name}`}
+          />
+        ) : (
+          <span className="attachment-image-state">
+            {failed ? "Preview unavailable" : "Loading image preview…"}
+          </span>
+        )}
+      </button>
+      <figcaption>
+        <span title={attachment.name}>{attachment.name}</span>
+        <small>
+          {failed
+            ? "Image missing or corrupt"
+            : queued
+              ? `${Math.ceil(attachment.bytes / 1024)} KiB · ${storageLabel}`
+              : storageLabel}
+        </small>
+      </figcaption>
+      {onRemove && (
+        <button
+          type="button"
+          className="attachment-image-remove"
+          aria-label={`Remove ${attachment.name}`}
+          onClick={onRemove}
+        >
+          ×
+        </button>
+      )}
+    </figure>
+  );
+}
+
+function ProviderRequestCard({
+  request,
+  onDecision,
+}: {
+  request: ProviderRequest;
+  onDecision: (
+    status: "accepted" | "accepted_session" | "declined" | "canceled",
+    decision?: Record<string, unknown>,
+  ) => Promise<void>;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({}),
+    [elicitation, setElicitation] = useState<
+      Record<string, string | number | boolean | string[]>
+    >({}),
+    questions =
+      request.kind === "question" && Array.isArray(request.detail.questions)
+        ? request.detail.questions.map((item) =>
+            item && typeof item === "object"
+              ? (item as Record<string, unknown>)
+              : {},
+          )
+        : [];
+  if (request.kind === "mcp_elicitation") {
+    const schema =
+        request.detail.requestedSchema &&
+        typeof request.detail.requestedSchema === "object"
+          ? (request.detail.requestedSchema as Record<string, unknown>)
+          : {},
+      properties =
+        schema.properties && typeof schema.properties === "object"
+          ? (schema.properties as Record<string, unknown>)
+          : {},
+      required = Array.isArray(schema.required)
+        ? schema.required.map(String)
+        : [],
+      mode = String(request.detail.mode ?? "form"),
+      url =
+        typeof request.detail.url === "string" ? request.detail.url : undefined,
+      ready =
+        mode === "url" || providerFormRequiredReady(required, elicitation);
+    return (
+      <section
+        className="automation-confirmation provider-request provider-question-request"
+        role="group"
+        aria-labelledby={`provider-request-${request.id}`}
+      >
+        <div>
+          <small>{request.provider} · MCP elicitation · waiting</small>
+          <strong id={`provider-request-${request.id}`}>{request.title}</strong>
+          {mode === "url" && url ? (
+            <div className="provider-elicitation-link">
+              <p>
+                This MCP server needs you to finish a browser step. Waypoint
+                will not enter credentials for you.
+              </p>
+              <button
+                type="button"
+                onClick={() => void window.waypoint.openExternal(url)}
+              >
+                Open secure browser step
+              </button>
+              <code>{url}</code>
+            </div>
+          ) : (
+            <div className="provider-question-list">
+              {Object.entries(properties).map(([key, value]) => {
+                const field =
+                    value && typeof value === "object"
+                      ? (value as Record<string, unknown>)
+                      : {},
+                  { options, multiple } = providerFormField(field),
+                  selected = Array.isArray(elicitation[key])
+                    ? (elicitation[key] as string[])
+                    : [];
+                return (
+                  <fieldset key={key}>
+                    <legend>
+                      {String(field.title ?? key)}
+                      {required.includes(key) ? " · required" : ""}
+                      {multiple ? " · choose any" : ""}
+                    </legend>
+                    {field.description != null && (
+                      <p>{String(field.description)}</p>
+                    )}
+                    {field.type === "boolean" ? (
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={elicitation[key] === true}
+                          onChange={(event) =>
+                            setElicitation((current) => ({
+                              ...current,
+                              [key]: event.target.checked,
+                            }))
+                          }
+                        />{" "}
+                        Yes
+                      </label>
+                    ) : options.length && multiple ? (
+                      <div className="provider-question-options">
+                        {options.map((option) => (
+                          <button
+                            type="button"
+                            key={option}
+                            aria-pressed={selected.includes(option)}
+                            onClick={() =>
+                              setElicitation((current) => ({
+                                ...current,
+                                [key]: selected.includes(option)
+                                  ? selected.filter((item) => item !== option)
+                                  : [...selected, option],
+                              }))
+                            }
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
+                    ) : options.length ? (
+                      <select
+                        value={String(elicitation[key] ?? "")}
+                        onChange={(event) =>
+                          setElicitation((current) => ({
+                            ...current,
+                            [key]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Choose…</option>
+                        {options.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={
+                          field.type === "number" || field.type === "integer"
+                            ? "number"
+                            : field.format === "password" ||
+                                field.writeOnly === true
+                              ? "password"
+                              : "text"
+                        }
+                        autoComplete="off"
+                        value={String(elicitation[key] ?? "")}
+                        onChange={(event) =>
+                          setElicitation((current) => ({
+                            ...current,
+                            [key]:
+                              field.type === "number" ||
+                              field.type === "integer"
+                                ? Number(event.target.value)
+                                : event.target.value,
+                          }))
+                        }
+                      />
+                    )}
+                  </fieldset>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="automation-confirmation-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onDecision("declined")}
+          >
+            Decline
+          </button>
+          <button
+            type="button"
+            disabled={!ready}
+            onClick={() =>
+              void onDecision("accepted", {
+                content: mode === "url" ? null : elicitation,
+              })
+            }
+          >
+            {mode === "url" ? "I finished the browser step" : "Submit securely"}
+          </button>
+        </div>
+      </section>
+    );
+  }
+  if (request.kind !== "question") {
+    const input =
+        request.detail.input && typeof request.detail.input === "object"
+          ? (request.detail.input as Record<string, unknown>)
+          : request.detail,
+      filePath = [input.file_path, input.path, request.detail.grantRoot].find(
+        (item) => typeof item === "string",
+      ) as string | undefined,
+      command = [request.detail.command, input.command].find(
+        (item) => typeof item === "string",
+      ) as string | undefined,
+      payload = [input.content, input.patch, request.detail.patch].find(
+        (item) => typeof item === "string",
+      ) as string | undefined,
+      fullDetail = JSON.stringify(request.detail, null, 2),
+      operation =
+        request.kind === "file_change"
+          ? "File change"
+          : request.kind === "command"
+            ? "Shell command"
+            : request.kind.replace("_", " ");
+    return (
+      <section
+        className="automation-confirmation provider-request"
+        role="group"
+        aria-labelledby={`provider-request-${request.id}`}
+      >
+        <div className="provider-request-summary">
+          <small>
+            {request.provider} · {operation} · waiting
+          </small>
+          <strong id={`provider-request-${request.id}`}>{request.title}</strong>
+          {filePath && (
+            <p>
+              <b>Path</b>
+              <code>{filePath}</code>
+            </p>
+          )}
+          {command && (
+            <p>
+              <b>Command</b>
+              <code>
+                {command.length > 600 ? `${command.slice(0, 600)}…` : command}
+              </code>
+            </p>
+          )}
+          {payload && (
+            <p>
+              <b>Payload</b>
+              <span>
+                {new TextEncoder().encode(payload).byteLength.toLocaleString()}{" "}
+                bytes
+              </span>
+            </p>
+          )}
+          <details>
+            <summary>Review full request details</summary>
+            <pre>{fullDetail}</pre>
+          </details>
+        </div>
+        <div className="automation-confirmation-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void onDecision("declined")}
+          >
+            Decline
+          </button>
+          <button type="button" onClick={() => void onDecision("accepted")}>
+            Allow once
+          </button>
+          <button
+            type="button"
+            onClick={() => void onDecision("accepted_session")}
+          >
+            Allow for session
+          </button>
+        </div>
+      </section>
+    );
+  }
+  const ready =
+    questions.length > 0 &&
+    questions.every((question) => {
+      const answer = answers[String(question.id)];
+      return Array.isArray(answer)
+        ? answer.length > 0
+        : Boolean(answer?.trim());
+    });
+  return (
+    <section
+      className="automation-confirmation provider-request provider-question-request"
+      role="group"
+      aria-labelledby={`provider-request-${request.id}`}
+    >
+      <div>
+        <small>{request.provider} · question · waiting</small>
+        <strong id={`provider-request-${request.id}`}>{request.title}</strong>
+        <div className="provider-question-list">
+          {questions.map((question, index) => {
+            const id = String(question.id ?? `question-${index}`),
+              options = Array.isArray(question.options)
+                ? question.options.map((option) =>
+                    option && typeof option === "object"
+                      ? (option as Record<string, unknown>)
+                      : { label: String(option) },
+                  )
+                : [],
+              allowInput = question.isOther === true || options.length === 0,
+              multiple = question.multiSelect === true,
+              selected = Array.isArray(answers[id])
+                ? (answers[id] as string[])
+                : typeof answers[id] === "string"
+                  ? [answers[id] as string]
+                  : [];
+            return (
+              <fieldset key={id}>
+                <legend>
+                  {String(question.header ?? `Question ${index + 1}`)}
+                  {multiple ? " · choose any" : ""}
+                </legend>
+                <p>{String(question.question ?? "Choose an answer")}</p>
+                {options.length > 0 && (
+                  <div className="provider-question-options">
+                    {options.map((option, optionIndex) => {
+                      const label = String(
+                        option.label ?? `Option ${optionIndex + 1}`,
+                      );
+                      return (
+                        <button
+                          type="button"
+                          aria-pressed={selected.includes(label)}
+                          key={`${id}-${label}`}
+                          onClick={() =>
+                            setAnswers((current) => ({
+                              ...current,
+                              [id]: multiple
+                                ? selected.includes(label)
+                                  ? selected.filter((item) => item !== label)
+                                  : [...selected, label]
+                                : label,
+                            }))
+                          }
+                        >
+                          <b>{label}</b>
+                          {option.description != null && (
+                            <span>{String(option.description)}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {allowInput && (
+                  <label>
+                    <span>
+                      {question.isSecret === true
+                        ? "Private answer"
+                        : "Your answer"}
+                    </span>
+                    <input
+                      type={question.isSecret === true ? "password" : "text"}
+                      autoComplete="off"
+                      value={
+                        typeof answers[id] === "string"
+                          ? (answers[id] as string)
+                          : ""
+                      }
+                      onChange={(event) =>
+                        setAnswers((current) => ({
+                          ...current,
+                          [id]: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                )}
+              </fieldset>
+            );
+          })}
+        </div>
+      </div>
+      <div className="automation-confirmation-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => void onDecision("declined")}
+        >
+          Decline
+        </button>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() =>
+            void onDecision("accepted", {
+              answers: Object.fromEntries(
+                Object.entries(answers).map(([id, answer]) => [
+                  id,
+                  Array.isArray(answer) ? answer : [answer],
+                ]),
+              ),
+            })
+          }
+        >
+          Submit answers
+        </button>
+      </div>
+    </section>
+  );
 }
 
 export function App() {
@@ -228,23 +781,39 @@ export function App() {
   const [profiles, setProfiles] = useState<
       Awaited<ReturnType<Window["waypoint"]["listSecurityProfiles"]>>
     >([]),
+    [providerSessions, setProviderSessions] = useState<
+      Awaited<ReturnType<Window["waypoint"]["listProviderSessions"]>>
+    >([]),
+    [providerRequests, setProviderRequests] = useState<
+      Awaited<ReturnType<Window["waypoint"]["listProviderRequests"]>>
+    >([]),
     [runs, setRuns] = useState<Array<Record<string, unknown>>>([]),
     [capabilities, setCapabilities] = useState<
       Awaited<ReturnType<Window["waypoint"]["cliCapabilities"]>>
     >([]),
     [cliModels, setCliModels] = useState<CliModelCatalog>([]),
-    [chatModels, setChatModels] = useState<Record<"codex" | "claude", string>>({
+    [providerRefreshBusy, setProviderRefreshBusy] = useState(false),
+    [chatModels, setChatModels] = useState<
+      Record<"codex" | "claude" | "grok", string>
+    >({
       codex: "",
       claude: "",
+      grok: "",
     });
   const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]),
     [attachmentBusy, setAttachmentBusy] = useState(false),
     [attachmentViewer, setAttachmentViewer] = useState<AttachmentViewer>(),
-    [chatCli, setChatCli] = useState<"codex" | "claude" | "openrouter">(
-      "codex",
-    ),
+    [chatCli, setChatCli] = useState<
+      "codex" | "claude" | "grok" | "openrouter"
+    >("codex"),
     [selectedProfileId, setSelectedProfileId] = useState("");
-  const attachmentContextRef = useRef<{ workspaceId?: string; chatId?: string }>({}), pasteAttemptRef = useRef(0), attachmentOperationsRef = useRef(0), viewerReturnFocusRef = useRef<HTMLElement | null>(null);
+  const attachmentContextRef = useRef<{
+      workspaceId?: string;
+      chatId?: string;
+    }>({}),
+    pasteAttemptRef = useRef(0),
+    attachmentOperationsRef = useRef(0),
+    viewerReturnFocusRef = useRef<HTMLElement | null>(null);
   const [documentIndexes, setDocumentIndexes] = useState<
       Record<
         string,
@@ -256,7 +825,7 @@ export function App() {
     [mainTabs, setMainTabs] = useState<MainTab[]>([]),
     [activeMainTabId, setActiveMainTabId] = useState<string>(),
     [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number }>(),
-    [screenCaptureOpen,setScreenCaptureOpen]=useState(false),
+    [screenCaptureOpen, setScreenCaptureOpen] = useState(false),
     [sidebarOpen, setSidebarOpen] = useState(false),
     [historyQuery, setHistoryQuery] = useState(""),
     [historySort, setHistorySort] = useState<HistorySort>("recent"),
@@ -265,7 +834,84 @@ export function App() {
     [diagnostics, setDiagnostics] = useState<DiagnosticsReport>(),
     [checking, setChecking] = useState(false),
     [syncStatus, setSyncStatus] = useState<SanitizedSyncStatus>();
-  const tabsWorkspaceRef = useRef<string | undefined>(undefined);
+  const tabsWorkspaceRef = useRef<string | undefined>(undefined),
+    providerRefreshTaskRef = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    if (!workspace || !profiles.length) return;
+    let active = true;
+    const stored = localStorage.getItem(
+      profilePreferenceKey(workspace.id, selectedChatId, chatCli),
+    );
+    if (stored && profiles.some((item) => item.id === stored))
+      queueMicrotask(() => {
+        if (active) setSelectedProfileId(stored);
+      });
+    return () => {
+      active = false;
+    };
+  }, [workspace, selectedChatId, chatCli, profiles]);
+
+  async function authorizeSecurityProfile(profileId: string) {
+    if (!workspace) return false;
+    const next = profiles.find((item) => item.id === profileId);
+    if (!next) return false;
+    if (
+      next.approval === "never" &&
+      localStorage.getItem(`waypoint:bypass-warning:v1:${workspace.id}`) !==
+        "accepted"
+    ) {
+      const accepted = await confirmModal({
+        title: "Enable Bypass permissions?",
+        message:
+          "This mode gives the selected provider no-prompt engineering authority. On Windows, shell and PowerShell commands are not sandbox-contained and may affect files, processes, accounts, or external systems beyond the selected repository. Waypoint will keep audit history and Stop/Cancel, but it will not ask before each operation.",
+        okLabel: "Enable bypass",
+        cancelLabel: "Keep approvals",
+        danger: true,
+      });
+      if (!accepted) return false;
+      localStorage.setItem(
+        `waypoint:bypass-warning:v1:${workspace.id}`,
+        "accepted",
+      );
+    }
+    return true;
+  }
+  async function selectSecurityProfile(profileId: string) {
+    if (!workspace || !(await authorizeSecurityProfile(profileId))) return;
+    localStorage.setItem(
+      profilePreferenceKey(workspace.id, selectedChatId, chatCli),
+      profileId,
+    );
+    setSelectedProfileId(profileId);
+  }
+
+  async function refreshCliProviders(announce = false) {
+    if (providerRefreshTaskRef.current) {
+      await providerRefreshTaskRef.current;
+      if (announce)
+        setNotice("Provider installation and sign-in status refreshed.");
+      return;
+    }
+    setProviderRefreshBusy(true);
+    const task = Promise.all([
+      window.waypoint.cliCapabilities(),
+      window.waypoint.cliModelCatalog(),
+    ]).then(([nextCapabilities, nextModels]) => {
+      setCapabilities(nextCapabilities);
+      setCliModels(nextModels);
+    });
+    providerRefreshTaskRef.current = task;
+    try {
+      await task;
+      if (announce)
+        setNotice("Provider installation and sign-in status refreshed.");
+    } finally {
+      if (providerRefreshTaskRef.current === task) {
+        providerRefreshTaskRef.current = null;
+        setProviderRefreshBusy(false);
+      }
+    }
+  }
   const [desktopSync, setDesktopSync] =
       useState<Awaited<ReturnType<Window["waypoint"]["desktopSyncStatus"]>>>(),
     [syncDevices, setSyncDevices] = useState<
@@ -291,8 +937,14 @@ export function App() {
     [activityKnowledgeTarget, setActivityKnowledgeTarget] = useState<string>();
   const [activityCapture, setActivityCapture] =
       useState<ActivityCaptureStatus>(),
-    [manualCaptureSettings,setManualCaptureSettings]=useState<Awaited<ReturnType<Window['waypoint']['screenCaptureSettings']>>>(),
-    [manualCaptureReadiness,setManualCaptureReadiness]=useState<Awaited<ReturnType<Window['waypoint']['screenCaptureReadiness']>>>(),
+    [manualCaptureSettings, setManualCaptureSettings] =
+      useState<
+        Awaited<ReturnType<Window["waypoint"]["screenCaptureSettings"]>>
+      >(),
+    [manualCaptureReadiness, setManualCaptureReadiness] =
+      useState<
+        Awaited<ReturnType<Window["waypoint"]["screenCaptureReadiness"]>>
+      >(),
     [activitySnapshots, setActivitySnapshots] = useState<ActivitySnapshot[]>(
       [],
     ),
@@ -310,9 +962,9 @@ export function App() {
       Awaited<ReturnType<Window["waypoint"]["reflectionProposals"]>>
     >([]),
     [reflectionSources, setReflectionSources] = useState<string[]>([]),
-    [reflectionProvider, setReflectionProvider] = useState<"codex" | "claude">(
-      "codex",
-    ),
+    [reflectionProvider, setReflectionProvider] = useState<
+      "codex" | "claude" | "grok"
+    >("codex"),
     [reflectionActive, setReflectionActive] = useState(false);
   const [meetings, setMeetings] = useState<Meeting[]>([]),
     [meetingConsent, setMeetingConsent] = useState(false),
@@ -337,8 +989,13 @@ export function App() {
     }>();
   const [webhookChannels, setWebhookChannels] = useState<WebhookChannels>(),
     [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([]),
-    [automationProposals, setAutomationProposals] = useState<AutomationProposal[]>([]),
-    [automationRuntime,setAutomationRuntime]=useState<AutomationRuntime>({rules:[],runs:[]});
+    [automationProposals, setAutomationProposals] = useState<
+      AutomationProposal[]
+    >([]),
+    [automationRuntime, setAutomationRuntime] = useState<AutomationRuntime>({
+      rules: [],
+      runs: [],
+    });
   const [toolSettings, setToolSettings] = useState<ToolSettings>(),
     [toolReceipts, setToolReceipts] = useState<ToolReceipt[]>([]),
     [toolFailures, setToolFailures] = useState<ToolFailure[]>([]),
@@ -707,7 +1364,8 @@ export function App() {
       if (!openRouter) return;
       const imageRoute = attachments.some(
           (item) =>
-            item.ownerId === selectedChatId && item.mediaType.startsWith("image/"),
+            item.ownerId === selectedChatId &&
+            item.mediaType.startsWith("image/"),
         ),
         next = {
           ...openRouter.settings,
@@ -743,16 +1401,35 @@ export function App() {
       setWebhookChannels(undefined);
       setWebhookEvents([]);
     }
-    const [proposals,runtime]=await Promise.all([window.waypoint.automationProposals(workspace.id),window.waypoint.automationRulesAndRuns(workspace.id)]);setAutomationProposals(proposals);setAutomationRuntime(runtime);
+    const [proposals, runtime] = await Promise.all([
+      window.waypoint.automationProposals(workspace.id),
+      window.waypoint.automationRulesAndRuns(workspace.id),
+    ]);
+    setAutomationProposals(proposals);
+    setAutomationRuntime(runtime);
     setSidebarOpen(false);
     openViewTab("automations");
   }
   async function createWebhookChannel() {
     if (!workspace) return;
-    const connectors=await window.waypoint.webhookConnectors(),connectorId=(await promptModal({title:"Webhook connector",message:"Enter generic, github, or azure_devops. Stripe and Resend require signing-secret import that is not available yet.",defaultValue:"generic",okLabel:"Continue"}))?.trim().toLowerCase() as (typeof connectors)[number]['id']|undefined;
-    if(!connectorId)return;
-    const connector=connectors.find((item)=>item.id===connectorId);
-    if(!connector||connectorId==='stripe'||connectorId==='resend')throw new Error("Choose generic, github, or azure_devops. Stripe and Resend setup is unavailable until provider signing-secret import is implemented.");
+    const connectors = await window.waypoint.webhookConnectors(),
+      connectorId = (
+        await promptModal({
+          title: "Webhook connector",
+          message:
+            "Enter generic, github, or azure_devops. Stripe and Resend require signing-secret import that is not available yet.",
+          defaultValue: "generic",
+          okLabel: "Continue",
+        })
+      )
+        ?.trim()
+        .toLowerCase() as (typeof connectors)[number]["id"] | undefined;
+    if (!connectorId) return;
+    const connector = connectors.find((item) => item.id === connectorId);
+    if (!connector || connectorId === "stripe" || connectorId === "resend")
+      throw new Error(
+        "Choose generic, github, or azure_devops. Stripe and Resend setup is unavailable until provider signing-secret import is implemented.",
+      );
     const label = (
       await promptModal({
         title: "Inbound webhook channel name",
@@ -771,32 +1448,88 @@ export function App() {
         endpoint: result.endpoint,
         channelId: result.channelId,
         secretVersion: result.secretVersion,
-        authentication: connectorId==='azure_devops'?{type:'basic',username:'waypoint',password:result.secret}:connectorId==='github'?{type:'github-hmac-sha256',secret:result.secret}:connectorId==='generic'?{type:'waypoint-hmac-sha256',signingSecret:result.secret}:{type:result.authMode,temporaryRelaySecret:result.secret,requiresProviderSigningSecretImport:true},
+        authentication:
+          connectorId === "azure_devops"
+            ? { type: "basic", username: "waypoint", password: result.secret }
+            : connectorId === "github"
+              ? { type: "github-hmac-sha256", secret: result.secret }
+              : connectorId === "generic"
+                ? { type: "waypoint-hmac-sha256", signingSecret: result.secret }
+                : {
+                    type: result.authMode,
+                    temporaryRelaySecret: result.secret,
+                    requiresProviderSigningSecretImport: true,
+                  },
         recipientPublicKey: result.recipientPublicKey,
-        reachability:result.transportMode==='hosted-relay'?'public trusted relay':'local network; desktop host must remain running; cloud providers generally cannot reach or trust this endpoint',
-        ...(result.transportMode==='desktop-host'?{tls:{trust:'self-signed-pinned',certificatePem:result.certificatePem,fingerprintSha256:result.fingerprintSha256}}:{}),
+        reachability:
+          result.transportMode === "hosted-relay"
+            ? "public trusted relay"
+            : "local network; desktop host must remain running; cloud providers generally cannot reach or trust this endpoint",
+        ...(result.transportMode === "desktop-host"
+          ? {
+              tls: {
+                trust: "self-signed-pinned",
+                certificatePem: result.certificatePem,
+                fingerprintSha256: result.fingerprintSha256,
+              },
+            }
+          : {}),
       };
     await navigator.clipboard.writeText(JSON.stringify(configuration, null, 2));
     setWebhookChannels(await window.waypoint.webhookChannels(workspace.id));
-    setNotice("One-time connector configuration copied to the clipboard. Store it in protected provider settings; Waypoint will not show the secret again.");
+    setNotice(
+      "One-time connector configuration copied to the clipboard. Store it in protected provider settings; Waypoint will not show the secret again.",
+    );
   }
-  async function decideAutomationProposal(proposal:AutomationProposal,decision:'approve'|'reject'){
-    if(!workspace)return;
-    const updated=await window.waypoint.decideAutomationProposal(workspace.id,proposal.id,proposal.proposalDigest,decision);
-    setAutomationProposals((items)=>items.map((item)=>item.id===updated.id?updated:item));
-    setAutomationRuntime(await window.waypoint.automationRulesAndRuns(workspace.id));
-    setNotice(decision==='reject'?"Proposal rejected. No external provider change was made.":updated.status==='applied'?"The digest-bound connector configuration was applied and its exact approved rule is enabled. You can stop it at any time in Automations.":updated.status==='failed'?`The approved connector setup could not be applied: ${String(updated.receipt?.externalMutation.summary??'See Automations for the unavailable gate.')}`:"Proposal approved. Provisioning is waiting for a public endpoint or required provider configuration.");
+  async function decideAutomationProposal(
+    proposal: AutomationProposal,
+    decision: "approve" | "reject",
+  ) {
+    if (!workspace) return;
+    const updated = await window.waypoint.decideAutomationProposal(
+      workspace.id,
+      proposal.id,
+      proposal.proposalDigest,
+      decision,
+    );
+    setAutomationProposals((items) =>
+      items.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    setAutomationRuntime(
+      await window.waypoint.automationRulesAndRuns(workspace.id),
+    );
+    setNotice(
+      decision === "reject"
+        ? "Proposal rejected. No external provider change was made."
+        : updated.status === "applied"
+          ? "The digest-bound connector configuration was applied and its exact approved rule is enabled. You can stop it at any time in Automations."
+          : updated.status === "failed"
+            ? `The approved connector setup could not be applied: ${String(updated.receipt?.externalMutation.summary ?? "See Automations for the unavailable gate.")}`
+            : "Proposal approved. Provisioning is waiting for a public endpoint or required provider configuration.",
+    );
   }
-  async function setAutomationRuleEnabled(ruleId:string,enabled:boolean){
-    if(!workspace)return;
-    await window.waypoint.setAutomationRuleEnabled(workspace.id,ruleId,enabled);
-    setAutomationRuntime(await window.waypoint.automationRulesAndRuns(workspace.id));
-    setNotice(enabled?"Webhook automation resumed. New matching authenticated events can start the approved AI route.":"Webhook automation stopped. Queued runs were canceled; an already-running AI job must be canceled separately.");
+  async function setAutomationRuleEnabled(ruleId: string, enabled: boolean) {
+    if (!workspace) return;
+    await window.waypoint.setAutomationRuleEnabled(
+      workspace.id,
+      ruleId,
+      enabled,
+    );
+    setAutomationRuntime(
+      await window.waypoint.automationRulesAndRuns(workspace.id),
+    );
+    setNotice(
+      enabled
+        ? "Webhook automation resumed. New matching authenticated events can start the approved AI route."
+        : "Webhook automation stopped. Queued runs were canceled; an already-running AI job must be canceled separately.",
+    );
   }
-  async function cancelAutomationRun(runId:string){
-    if(!workspace)return;
-    await window.waypoint.cancelAutomationRun(workspace.id,runId);
-    setAutomationRuntime(await window.waypoint.automationRulesAndRuns(workspace.id));
+  async function cancelAutomationRun(runId: string) {
+    if (!workspace) return;
+    await window.waypoint.cancelAutomationRun(workspace.id, runId);
+    setAutomationRuntime(
+      await window.waypoint.automationRulesAndRuns(workspace.id),
+    );
     setNotice("Automation cancellation requested.");
   }
   async function rotateWebhookChannel(channelId: string) {
@@ -1195,6 +1928,8 @@ export function App() {
       nextCommitments,
       nextActivity,
       nextProfiles,
+      nextProviderSessions,
+      nextProviderRequests,
       nextRuns,
       nextSync,
       nextDesktop,
@@ -1208,6 +1943,8 @@ export function App() {
       window.waypoint.listCommitments(next.id),
       window.waypoint.activity(next.id, { limit: 500 }),
       window.waypoint.listSecurityProfiles(next.id),
+      window.waypoint.listProviderSessions(next.id),
+      window.waypoint.listProviderRequests(next.id),
       window.waypoint.listExecutions(next.id),
       window.waypoint.syncStatus(next.id),
       window.waypoint.desktopSyncStatus(next.id),
@@ -1225,7 +1962,9 @@ export function App() {
       setActiveMainTabId(initialTabs[0]?.id);
       setDrawer(undefined);
     } else {
-      setSelectedChatId((current) => reconcileSelectedChatId(nextChats, current));
+      setSelectedChatId((current) =>
+        reconcileSelectedChatId(nextChats, current),
+      );
     }
     setDocuments(nextDocuments);
     setMemories(nextMemories);
@@ -1233,6 +1972,8 @@ export function App() {
     setCommitments(nextCommitments);
     setActivity(nextActivity);
     setProfiles(nextProfiles);
+    setProviderSessions(nextProviderSessions);
+    setProviderRequests(nextProviderRequests);
     setSelectedProfileId((current) =>
       nextProfiles.some((item) => item.id === current)
         ? current
@@ -1300,14 +2041,26 @@ export function App() {
       }),
     [workspace],
   );
-  useEffect(()=>window.waypoint.onScreenCaptureRequest(()=>setScreenCaptureOpen(true)),[])
-  useEffect(()=>window.waypoint.onScreenCaptureCompleted((result)=>{if(result.status==='failed')setError(result.message);else if(result.status==='completed')setNotice(result.message)}),[])
+  useEffect(
+    () =>
+      window.waypoint.onScreenCaptureRequest(() => setScreenCaptureOpen(true)),
+    [],
+  );
+  useEffect(
+    () =>
+      window.waypoint.onScreenCaptureCompleted((result) => {
+        if (result.status === "failed") setError(result.message);
+        else if (result.status === "completed") setNotice(result.message);
+      }),
+    [],
+  );
   useEffect(
     () =>
       window.waypoint.onMeetingTranscriptionProgress((event) => {
         if (activeWorkspaceRef.current !== event.workspaceId) return;
         setMeetingTranscriptionRun((current) =>
-          current?.runId === event.runId && current.meetingId === event.meetingId
+          current?.runId === event.runId &&
+          current.meetingId === event.meetingId
             ? {
                 ...current,
                 phase: event.phase,
@@ -1319,7 +2072,16 @@ export function App() {
       }),
     [],
   );
-  useEffect(()=>{if(!workspace)return;void Promise.all([window.waypoint.screenCaptureSettings(workspace.id),window.waypoint.screenCaptureReadiness()]).then(([settings,readiness])=>{setManualCaptureSettings(settings);setManualCaptureReadiness(readiness)})},[workspace])
+  useEffect(() => {
+    if (!workspace) return;
+    void Promise.all([
+      window.waypoint.screenCaptureSettings(workspace.id),
+      window.waypoint.screenCaptureReadiness(),
+    ]).then(([settings, readiness]) => {
+      setManualCaptureSettings(settings);
+      setManualCaptureReadiness(readiness);
+    });
+  }, [workspace]);
   useEffect(() => {
     if (drawer !== "browser" || !workspace) return;
     const slot = inAppBrowserSlotRef.current;
@@ -1348,19 +2110,15 @@ export function App() {
     };
   }, [drawer, workspace]);
   useEffect(() => {
-    void Promise.all([
-      window.waypoint.bootstrap(),
-      window.waypoint.cliCapabilities(),
-    ])
-      .then(async ([{ workspaces: available }, nextCapabilities]) => {
+    void window.waypoint
+      .bootstrap()
+      .then(async ({ workspaces: available }) => {
         setWorkspaces(available);
-        setCapabilities(nextCapabilities);
-        void window.waypoint
-          .cliModelCatalog()
-          .then(setCliModels)
-          .catch(() => undefined);
         if (available[0]) await selectWorkspace(available[0]);
       })
+      .catch(showError);
+    void Promise.resolve()
+      .then(() => refreshCliProviders())
       .catch(showError);
     // Initial bootstrap intentionally runs once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1380,12 +2138,49 @@ export function App() {
       .then(setAttachments)
       .catch(showError);
   }, [workspace, selectedChatId, chats]);
-  useEffect(()=>{
-    if(!workspace)return;
-    void Promise.all([window.waypoint.automationProposals(workspace.id),window.waypoint.automationRulesAndRuns(workspace.id)]).then(([proposals,runtime])=>{setAutomationProposals(proposals);setAutomationRuntime(runtime)}).catch(showError);
-    const offProposal=window.waypoint.onAutomationProposalCreated((event)=>{if(event.workspaceId===workspace.id)void window.waypoint.automationProposals(workspace.id).then(setAutomationProposals).catch(showError)}),offWebhook=window.waypoint.onWebhookEventsImported((event)=>{if(event.workspaceId===workspace.id)void window.waypoint.listWebhookEvents(workspace.id).then(setWebhookEvents).catch(showError)}),offRun=window.waypoint.onAutomationRunUpdated((event)=>{if(event.workspaceId===workspace.id)void Promise.all([window.waypoint.automationRulesAndRuns(workspace.id),window.waypoint.listWebhookEvents(workspace.id)]).then(([runtime,inbound])=>{setAutomationRuntime(runtime);setWebhookEvents(inbound)}).catch(showError)});
-    return()=>{offProposal();offWebhook();offRun()};
-  },[workspace]);
+  useEffect(() => {
+    if (!workspace) return;
+    void Promise.all([
+      window.waypoint.automationProposals(workspace.id),
+      window.waypoint.automationRulesAndRuns(workspace.id),
+    ])
+      .then(([proposals, runtime]) => {
+        setAutomationProposals(proposals);
+        setAutomationRuntime(runtime);
+      })
+      .catch(showError);
+    const offProposal = window.waypoint.onAutomationProposalCreated((event) => {
+        if (event.workspaceId === workspace.id)
+          void window.waypoint
+            .automationProposals(workspace.id)
+            .then(setAutomationProposals)
+            .catch(showError);
+      }),
+      offWebhook = window.waypoint.onWebhookEventsImported((event) => {
+        if (event.workspaceId === workspace.id)
+          void window.waypoint
+            .listWebhookEvents(workspace.id)
+            .then(setWebhookEvents)
+            .catch(showError);
+      }),
+      offRun = window.waypoint.onAutomationRunUpdated((event) => {
+        if (event.workspaceId === workspace.id)
+          void Promise.all([
+            window.waypoint.automationRulesAndRuns(workspace.id),
+            window.waypoint.listWebhookEvents(workspace.id),
+          ])
+            .then(([runtime, inbound]) => {
+              setAutomationRuntime(runtime);
+              setWebhookEvents(inbound);
+            })
+            .catch(showError);
+      });
+    return () => {
+      offProposal();
+      offWebhook();
+      offRun();
+    };
+  }, [workspace]);
   const autoTitleRefreshRef = useRef(refresh);
   autoTitleRefreshRef.current = refresh;
   const autoTitleChat = chats.find((item) => item.id === selectedChatId),
@@ -1395,9 +2190,9 @@ export function App() {
       autoTitleChat?.messages.some(
         (item) => item.role === "user" && item.body.trim().length >= 3,
       ) &&
-        autoTitleChat.messages.some(
-          (item) => item.role === "assistant" && item.body.trim().length >= 3,
-        ),
+      autoTitleChat.messages.some(
+        (item) => item.role === "assistant" && item.body.trim().length >= 3,
+      ),
     ),
     autoTitleWorkspaceId = workspace?.id;
   useEffect(() => {
@@ -1433,37 +2228,50 @@ export function App() {
       disposed = true;
       if (timer) window.clearInterval(timer);
     };
-  }, [
-    autoTitleWorkspaceId,
-    autoTitleChatId,
-    autoTitleStatus,
-    autoTitleReady,
-  ]);
+  }, [autoTitleWorkspaceId, autoTitleChatId, autoTitleStatus, autoTitleReady]);
   useEffect(() => {
     const available = capabilities.find(
-      (item) => item.available && item.compatible !== false,
+      (item) =>
+        item.available &&
+        item.compatible !== false &&
+        (item.name !== "grok" ||
+          cliModels.some(
+            (catalog) => catalog.provider === "grok" && catalog.ready,
+          )),
     );
     if (chatCli === "openrouter") return;
     if (
       !available ||
       capabilities.some(
         (item) =>
-          item.name === chatCli && item.available && item.compatible !== false,
+          item.name === chatCli &&
+          item.available &&
+          item.compatible !== false &&
+          (item.name !== "grok" ||
+            cliModels.some(
+              (catalog) => catalog.provider === "grok" && catalog.ready,
+            )),
       )
     )
       return;
     const timer = window.setTimeout(() => setChatCli(available.name), 0);
     return () => window.clearTimeout(timer);
-  }, [capabilities, chatCli]);
+  }, [capabilities, chatCli, cliModels]);
   useEffect(() => {
     if (!attachmentViewer) return;
-    const background = [...document.querySelectorAll<HTMLElement>(".app-frame > :not(.attachment-viewer)")];
+    const background = [
+      ...document.querySelectorAll<HTMLElement>(
+        ".app-frame > :not(.attachment-viewer)",
+      ),
+    ];
     for (const item of background) item.inert = true;
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") setAttachmentViewer(undefined);
       if (event.key === "Tab") {
         event.preventDefault();
-        document.querySelector<HTMLElement>(".attachment-viewer button")?.focus();
+        document
+          .querySelector<HTMLElement>(".attachment-viewer button")
+          ?.focus();
       }
     };
     window.addEventListener("keydown", close);
@@ -1475,7 +2283,10 @@ export function App() {
     };
   }, [attachmentViewer]);
   useEffect(() => {
-    attachmentContextRef.current = { workspaceId: workspace?.id, chatId: selectedChatId };
+    attachmentContextRef.current = {
+      workspaceId: workspace?.id,
+      chatId: selectedChatId,
+    };
     pasteAttemptRef.current += 1;
     const timer = window.setTimeout(() => setAttachmentViewer(undefined), 0);
     return () => window.clearTimeout(timer);
@@ -1485,11 +2296,12 @@ export function App() {
       .then(refreshOpenRouter)
       .catch(() => undefined);
   }, []);
-  // Capability refresh is intentionally keyed only to opening the voice surface.
   useEffect(() => {
     if (drawer !== "settings") return;
-    void loadVoiceCapability().catch(showError);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- capability loader is intentionally sampled only when Settings opens
+    void Promise.resolve()
+      .then(() => Promise.all([loadVoiceCapability(), refreshCliProviders()]))
+      .catch(showError);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshes are intentionally sampled whenever Settings opens
   }, [drawer]);
   useEffect(() => {
     voiceStateRef.current = voiceState;
@@ -1642,7 +2454,7 @@ export function App() {
           showError(reason);
         }
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- exact-turn refs guard these intentionally sampled voice operations
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- exact-turn refs guard these intentionally sampled voice operations
   }, [
     voiceState,
     workspace,
@@ -1732,11 +2544,17 @@ export function App() {
         setTabMenu(undefined);
         setSidebarOpen(false);
       }
-      if (primaryShortcutPressed(platform, event) && event.key.toLowerCase() === "n") {
+      if (
+        primaryShortcutPressed(platform, event) &&
+        event.key.toLowerCase() === "n"
+      ) {
         event.preventDefault();
         void beginNewChat();
       }
-      if (primaryShortcutPressed(platform, event) && event.key.toLowerCase() === "k") {
+      if (
+        primaryShortcutPressed(platform, event) &&
+        event.key.toLowerCase() === "k"
+      ) {
         event.preventDefault();
         openViewTab("knowledge");
       }
@@ -1946,6 +2764,45 @@ export function App() {
       showError(reason);
     }
   }
+  async function chooseWorkspaceExecutionRoot() {
+    if (!workspace) return;
+    const result = await window.waypoint.chooseWorkspaceExecutionRoot(
+      workspace.id,
+    );
+    if (result.canceled) return;
+    setWorkspace(result.workspace);
+    setWorkspaces((await window.waypoint.bootstrap()).workspaces);
+    await refresh(result.workspace);
+    setNotice(
+      `Agent repository set to ${result.workspace.executionRoot}. Existing provider sessions were invalidated.`,
+    );
+  }
+  async function clearWorkspaceExecutionRoot() {
+    if (!workspace) return;
+    const updated = await window.waypoint.clearWorkspaceExecutionRoot(
+      workspace.id,
+    );
+    setWorkspace(updated);
+    setWorkspaces((await window.waypoint.bootstrap()).workspaces);
+    await refresh(updated);
+    setNotice(
+      "Agent repository cleared. Chats now use Waypoint’s private read-only working area until you choose a repository.",
+    );
+  }
+  async function decideProviderRequest(
+    requestId: string,
+    status: "accepted" | "accepted_session" | "declined" | "canceled",
+    decision: Record<string, unknown> = {},
+  ) {
+    if (!workspace) return;
+    await window.waypoint.resolveProviderRequest(
+      workspace.id,
+      requestId,
+      status,
+      decision,
+    );
+    await refresh();
+  }
   async function removeWorkspace() {
     if (!workspace || workspaces.length <= 1) return;
     try {
@@ -1968,6 +2825,67 @@ export function App() {
     } catch (reason) {
       showError(reason);
     }
+  }
+  async function dispatchOfficeWorkOrder(order: OfficeWorkOrder) {
+    if (!workspace) throw new Error("Workspace is unavailable");
+    let result;
+    try {
+      result = await dispatchConfirmedOfficeWorkOrder(
+        {
+          createChat: (workspaceId, title) =>
+            window.waypoint.createChat(workspaceId, title),
+          addMessage: (workspaceId, chatId, role, body, attachmentIds) =>
+            window.waypoint.addMessage(
+              workspaceId,
+              chatId,
+              role,
+              body,
+              attachmentIds,
+            ),
+          runLocal: (input) =>
+            window.waypoint.runChat(
+              input.workspaceId,
+              input.chatId,
+              input.sourceMessageId,
+              input.provider,
+              input.securityProfileId,
+              input.prompt,
+              input.model,
+              undefined,
+              [],
+            ),
+          runHosted: (input) =>
+            window.waypoint.runOpenRouterChat({
+              workspaceId: input.workspaceId,
+              chatId: input.chatId,
+              sourceMessageId: input.sourceMessageId,
+              prompt: input.prompt,
+              role: "everyday",
+              securityProfileId: input.securityProfileId,
+              attachmentIds: [],
+            }),
+        },
+        workspace.id,
+        order,
+      );
+    } catch (reason) {
+      await refresh().catch(() => undefined);
+      throw reason;
+    }
+    const refreshed = await refreshAfterOfficeDispatch(refresh);
+    if (refreshed) {
+      setNotice(
+        `${order.provider === "openrouter" ? "OpenRouter" : order.provider} work order dispatched. Select the worker for live status.`,
+      );
+    } else {
+      setNotice(
+        "Work order dispatched successfully. Office status refresh is delayed; do not dispatch it again.",
+      );
+    }
+    return {
+      ...result,
+      statusRefresh: refreshed ? ("current" as const) : ("delayed" as const),
+    };
   }
   async function chooseAttachments() {
     if (!workspace || !selectedChatId) return;
@@ -2079,54 +2997,124 @@ export function App() {
     } catch (reason) {
       showError(reason);
     } finally {
-      attachmentOperationsRef.current = Math.max(0, attachmentOperationsRef.current - 1);
+      attachmentOperationsRef.current = Math.max(
+        0,
+        attachmentOperationsRef.current - 1,
+      );
       setAttachmentBusy(attachmentOperationsRef.current > 0);
     }
   }
   async function pasteChatImages(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (!workspace || !selectedChatId) return;
-    const images = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
+    const images = [...event.clipboardData.files].filter((file) =>
+      file.type.startsWith("image/"),
+    );
     if (!images.length) return;
     event.preventDefault();
-    const target = { workspaceId: workspace.id, chatId: selectedChatId, attempt: ++pasteAttemptRef.current };
+    const target = {
+      workspaceId: workspace.id,
+      chatId: selectedChatId,
+      attempt: ++pasteAttemptRef.current,
+    };
     const added: string[] = [];
     attachmentOperationsRef.current += 1;
     setAttachmentBusy(true);
     try {
-      const allowed: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
+      const allowed: Record<string, string> = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+      };
       for (const [index, file] of images.entries()) {
-        if (file.size < 1 || file.size > 25 * 1024 * 1024) throw new Error("Pasted images must be no larger than 25 MiB");
+        if (file.size < 1) throw new Error("Pasted images must not be empty");
         const extension = allowed[file.type];
-        if (!extension) throw new Error(`Pasted ${file.type || "image"} is not supported`);
-        const base = file.name && file.name !== "image.png" ? file.name : `pasted-image-${Date.now()}-${index + 1}${extension}`;
-        const name = base.toLowerCase().endsWith(extension) ? base : `${base.replace(/\.[^.]+$/, "")}${extension}`;
+        if (!extension)
+          throw new Error(`Pasted ${file.type || "image"} is not supported`);
+        const base =
+          file.name && file.name !== "image.png"
+            ? file.name
+            : `pasted-image-${Date.now()}-${index + 1}${extension}`;
+        const name = base.toLowerCase().endsWith(extension)
+          ? base
+          : `${base.replace(/\.[^.]+$/, "")}${extension}`;
         const bytes = new Uint8Array(await file.arrayBuffer());
         const current = attachmentContextRef.current;
-        if (pasteAttemptRef.current !== target.attempt || current.workspaceId !== target.workspaceId || current.chatId !== target.chatId) throw new Error("Image paste was canceled because the active chat changed");
-        const result = await window.waypoint.addPastedChatImage(target.workspaceId, target.chatId, name, file.type, bytes);
+        if (
+          pasteAttemptRef.current !== target.attempt ||
+          current.workspaceId !== target.workspaceId ||
+          current.chatId !== target.chatId
+        )
+          throw new Error(
+            "Image paste was canceled because the active chat changed",
+          );
+        const result = await window.waypoint.addPastedChatImage(
+          target.workspaceId,
+          target.chatId,
+          name,
+          file.type,
+          bytes,
+        );
         added.push(result.attachment.id);
         const after = attachmentContextRef.current;
-        if (pasteAttemptRef.current !== target.attempt || after.workspaceId !== target.workspaceId || after.chatId !== target.chatId) throw new Error("Image paste was canceled because the active chat changed");
-        setAttachments((current) => current.some((item) => item.id === result.attachment.id) ? current : [...current, result.attachment]);
+        if (
+          pasteAttemptRef.current !== target.attempt ||
+          after.workspaceId !== target.workspaceId ||
+          after.chatId !== target.chatId
+        )
+          throw new Error(
+            "Image paste was canceled because the active chat changed",
+          );
+        setAttachments((current) =>
+          current.some((item) => item.id === result.attachment.id)
+            ? current
+            : [...current, result.attachment],
+        );
       }
     } catch (reason) {
-      const cleanup = await Promise.allSettled(added.map((id) => window.waypoint.deleteAttachment(target.workspaceId, id))), cleanupFailed = cleanup.some((item) => item.status === "rejected");
-      if (attachmentContextRef.current.workspaceId === target.workspaceId && attachmentContextRef.current.chatId === target.chatId) {
-        setAttachments(await window.waypoint.listChatAttachments(target.workspaceId, target.chatId).catch(() => []));
-        showError(cleanupFailed ? `${reason instanceof Error ? reason.message : String(reason)} A partially pasted image could not be removed; remove it from the prior chat before retrying.` : reason);
+      const cleanup = await Promise.allSettled(
+          added.map((id) =>
+            window.waypoint.deleteAttachment(target.workspaceId, id),
+          ),
+        ),
+        cleanupFailed = cleanup.some((item) => item.status === "rejected");
+      if (
+        attachmentContextRef.current.workspaceId === target.workspaceId &&
+        attachmentContextRef.current.chatId === target.chatId
+      ) {
+        setAttachments(
+          await window.waypoint
+            .listChatAttachments(target.workspaceId, target.chatId)
+            .catch(() => []),
+        );
+        showError(
+          cleanupFailed
+            ? `${reason instanceof Error ? reason.message : String(reason)} A partially pasted image could not be removed; remove it from the prior chat before retrying.`
+            : reason,
+        );
       } else if (cleanupFailed) {
-        setError("A canceled pasted image could not be removed from the prior chat. Return to that chat and remove it before retrying.");
+        setError(
+          "A canceled pasted image could not be removed from the prior chat. Return to that chat and remove it before retrying.",
+        );
       }
-    }
-    finally {
-      attachmentOperationsRef.current = Math.max(0, attachmentOperationsRef.current - 1);
+    } finally {
+      attachmentOperationsRef.current = Math.max(
+        0,
+        attachmentOperationsRef.current - 1,
+      );
       setAttachmentBusy(attachmentOperationsRef.current > 0);
     }
   }
   function showAttachmentViewer(viewer: AttachmentViewer) {
     const current = attachmentContextRef.current;
-    if (current.workspaceId === viewer.workspaceId && current.chatId === viewer.chatId) {
-      viewerReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (
+      current.workspaceId === viewer.workspaceId &&
+      current.chatId === viewer.chatId
+    ) {
+      viewerReturnFocusRef.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       setAttachmentViewer(viewer);
     }
   }
@@ -2487,8 +3475,8 @@ export function App() {
       data = new FormData(form),
       prompt = String(data.get("prompt") ?? ""),
       cli = String(data.get("cli") ?? chatCli) as
-        "codex" | "claude" | "openrouter",
-      profile = String(data.get("profile") ?? ""),
+        "codex" | "claude" | "grok" | "openrouter",
+      profile = selectedProfileId,
       model = String(data.get("model") ?? "") || undefined,
       attachmentIds = attachments
         .filter((item) => item.ownerId === chatId)
@@ -2522,7 +3510,10 @@ export function App() {
         });
         if (!browserTerminalRunsRef.current.has(started.runId))
           setActiveBrowserRun(started.runId);
-        if (started.result&&!browserTerminalRunsRef.current.has(started.runId)) {
+        if (
+          started.result &&
+          !browserTerminalRunsRef.current.has(started.runId)
+        ) {
           const terminal = started.result as {
             receipt?: { status?: string; summary?: string; code?: string };
           };
@@ -2554,7 +3545,7 @@ export function App() {
           sourceMessageId: messageId,
           prompt,
           role: "everyday",
-          securityProfileId:profile,
+          securityProfileId: profile,
           attachmentIds,
         });
         let exactRunId: string, runKind: "hosted" | "local";
@@ -2614,6 +3605,7 @@ export function App() {
         model,
         undefined,
         attachmentIds,
+        undefined,
       );
       if (voiceTurn !== undefined && voiceRunRef.current?.turn === voiceTurn)
         voiceRunRef.current.runId = started.runId;
@@ -2665,7 +3657,7 @@ export function App() {
         workspace.id,
         selectedChat.id,
         source.id,
-        String(run.cli) as "codex" | "claude",
+        String(run.cli) as "codex" | "claude" | "grok",
         String(run.securityProfileId),
         source.body,
         run.model ? String(run.model) : undefined,
@@ -2708,10 +3700,7 @@ export function App() {
           "policy",
         ].includes(String(event.type)),
       ),
-      text = events
-        .filter((event) => event.type === "text")
-        .map((event) => String(event.text ?? ""))
-        .join("");
+      text = executionAnswerText({ ...run, events });
     return (
       <Fragment key={`execution-${String(run.id)}`}>
         <details className={`execution-timeline ${String(run.status)}`}>
@@ -2722,6 +3711,7 @@ export function App() {
               {String(run.status).replace("_", " ")}
             </strong>
             <small>
+              {`${String(run.profileName ?? "Unknown authority profile")}${run.model ? ` · ${String(run.model)}` : ""} · `}
               {toolEvents.length
                 ? `${toolEvents.length} structured event${toolEvents.length === 1 ? "" : "s"}`
                 : "No provider tool events exposed"}
@@ -2760,14 +3750,26 @@ export function App() {
                 run. Waypoint does not infer or invent one.
               </p>
             )}
-            {run.status !== "completed" && text && (
-              <section className="execution-live-text">
-                <strong>Live provider output</strong>
-                <ChatMarkdown body={text} />
-              </section>
-            )}
           </div>
         </details>
+        {run.status === "running" && text && (
+          <article
+            className="chat-message assistant execution-live-answer"
+            aria-live="polite"
+          >
+            <div className="message-role">
+              <img
+                className="assistant-mark"
+                src={waypointMark}
+                alt="Waypoint"
+              />
+            </div>
+            <div className="message-content">
+              <ChatMarkdown body={text} />
+              <small className="execution-live-label">Still working…</small>
+            </div>
+          </article>
+        )}
         {run.status !== "completed" && (
           <article className={`run-strip ${String(run.status)}`}>
             <div>
@@ -2800,7 +3802,7 @@ export function App() {
       (item) =>
         item.chatId === selectedChat.id &&
         Number(item.depth) === 0 &&
-        item.cli === "claude" &&
+        ["claude", "grok"].includes(String(item.cli)) &&
         item.status === "completed" &&
         Array.isArray(item.events) &&
         item.events.some(
@@ -2814,7 +3816,7 @@ export function App() {
     );
     if (!parent) {
       setError(
-        "No completed Claude result has an unused child-task budget. Codex child tasks remain unavailable until a reviewed no-tool mode exists.",
+        "No completed Claude or Grok result has an unused child-task budget. Codex child tasks remain unavailable until a reviewed no-tool mode exists.",
       );
       return;
     }
@@ -2849,7 +3851,7 @@ export function App() {
         workspace.id,
         selectedChat.id,
         source.id,
-        "claude",
+        String(parent.cli) as "claude" | "grok",
         String(parent.securityProfileId),
         instruction,
         parent.model ? String(parent.model) : undefined,
@@ -2858,7 +3860,7 @@ export function App() {
         type,
       );
       setNotice(
-        `${type} child task started with the parent profile and a 60-second cap.`,
+        `${type} child task started with the parent provider and authority profile; Waypoint applies no AI time or output cap.`,
       );
       await refresh();
     } catch (reason) {
@@ -3387,13 +4389,25 @@ export function App() {
     ),
     queued = attachments.filter((item) => item.ownerId === selectedChatId),
     queuedHasImage = queued.some((item) => item.mediaType.startsWith("image/")),
-    chatAutomationProposals=automationProposals.filter((item)=>item.chatId===selectedChatId&&item.question?.status==='pending'),
+    chatAutomationProposals = automationProposals.filter(
+      (item) =>
+        item.chatId === selectedChatId && item.question?.status === "pending",
+    ),
+    selectedSecurityProfile = profiles.find(
+      (item) => item.id === selectedProfileId,
+    ),
+    selectedProviderSession = providerSessions.find(
+      (item) => item.chatId === selectedChatId && item.provider === chatCli,
+    ),
+    pendingChatProviderRequests = providerRequests.filter(
+      (item) => item.chatId === selectedChatId && item.status === "pending",
+    ),
     historyGroups = groupChatHistory(chats, historyQuery, historySort),
     selectedComposerModel =
       chatCli === "openrouter"
-        ? (queuedHasImage
+        ? ((queuedHasImage
             ? openRouter?.settings.attachmentModel
-            : openRouter?.settings.everydayModel) ?? ""
+            : openRouter?.settings.everydayModel) ?? "")
         : chatModels[chatCli],
     composerModelChoices =
       chatCli === "openrouter"
@@ -3423,12 +4437,58 @@ export function App() {
       ],
       chatModels.claude,
     ),
+    grokModelChoices = withLegacyModel(
+      cliModels.find((item) => item.provider === "grok")?.models ?? [
+        { id: "", label: "Grok default (CLI selected)" },
+      ],
+      chatModels.grok,
+    ),
+    grokCatalog = cliModels.find((item) => item.provider === "grok"),
     openRouterPresentation = openRouter
       ? providerCapabilityPresentation(
           openRouter.capability.state,
           openRouter.capability.health,
         )
-      : undefined;
+      : undefined,
+    officeProviderOptions: OfficeProviderOption[] = [
+      ...(["codex", "claude", "grok"] as const).map((provider) => {
+        const capability = capabilities.find((item) => item.name === provider),
+          grokReady =
+            provider !== "grok" ||
+            cliModels.some(
+              (catalog) => catalog.provider === "grok" && catalog.ready,
+            ),
+          available =
+            Boolean(capability?.available) &&
+            capability?.compatible !== false &&
+            grokReady,
+          model = chatModels[provider] || undefined;
+        return {
+          id: provider,
+          label: provider[0].toUpperCase() + provider.slice(1),
+          available,
+          availabilityReason: !capability?.available
+            ? "not installed"
+            : capability.compatible === false
+              ? (capability.compatibilityError ?? "incompatible version")
+              : !grokReady
+                ? "sign in required"
+                : undefined,
+          model,
+          modelLabel: model || `${provider} CLI default`,
+        };
+      }),
+      {
+        id: "openrouter",
+        label: "OpenRouter",
+        available: Boolean(openRouter?.capability.available),
+        availabilityReason:
+          openRouter?.capability.reason ?? "configure hosted requests in Settings",
+        model: openRouter?.settings.everydayModel || undefined,
+        modelLabel:
+          openRouter?.settings.everydayModel || "OpenRouter everyday default",
+      },
+    ];
   return (
     <div className="app-frame">
       <ModalDialogHost />
@@ -3502,7 +4562,9 @@ export function App() {
                     <button
                       className="conversation-select"
                       aria-current={
-                        activeMainTabId === `chat:${chat.id}` ? "page" : undefined
+                        activeMainTabId === `chat:${chat.id}`
+                          ? "page"
+                          : undefined
                       }
                       onClick={() => {
                         openChatTab(chat.id);
@@ -3517,7 +4579,21 @@ export function App() {
                       className="conversation-rename"
                       aria-label={`Rename ${chat.title}`}
                       title="Rename conversation"
-                      onClick={()=>{if(!workspace)return;void promptModal({title:'Rename conversation',defaultValue:chat.title,okLabel:'Rename'}).then((title)=>{if(title?.trim())return window.waypoint.renameChat(workspace.id,chat.id,title).then(()=>refresh())}).catch(showError)}}
+                      onClick={() => {
+                        if (!workspace) return;
+                        void promptModal({
+                          title: "Rename conversation",
+                          defaultValue: chat.title,
+                          okLabel: "Rename",
+                        })
+                          .then((title) => {
+                            if (title?.trim())
+                              return window.waypoint
+                                .renameChat(workspace.id, chat.id, title)
+                                .then(() => refresh());
+                          })
+                          .catch(showError);
+                      }}
                     >
                       ✎
                     </button>
@@ -3542,6 +4618,13 @@ export function App() {
           )}
         </nav>
         <nav className="utility-nav" aria-label="Workspace tools">
+          <button
+            onClick={() => {
+              openViewTab("office");
+            }}
+          >
+            <span>▦</span> Command Center <kbd>Experimental</kbd>
+          </button>
           <button onClick={() => void openBriefing()}>
             <span>☀</span> Briefing
           </button>
@@ -3550,7 +4633,8 @@ export function App() {
               openViewTab("knowledge");
             }}
           >
-            <span>{knowledgeIcon}</span> Knowledge <kbd>{shortcutModifier} K</kbd>
+            <span>{knowledgeIcon}</span> Knowledge{" "}
+            <kbd>{shortcutModifier} K</kbd>
           </button>
           <button onClick={() => void openRules()}>
             <span>◇</span> Graph &amp; rules
@@ -3746,11 +4830,15 @@ export function App() {
                 >
                   <button
                     className="main-tab-select"
-                    aria-current={tab.id === activeMainTabId ? "page" : undefined}
+                    aria-current={
+                      tab.id === activeMainTabId ? "page" : undefined
+                    }
                     onClick={() => activateMainTab(tab)}
                     title={title}
                   >
-                    {running && <i className="main-tab-running" aria-label="Running" />}
+                    {running && (
+                      <i className="main-tab-running" aria-label="Running" />
+                    )}
                     <span>{title}</span>
                   </button>
                   <button
@@ -3761,7 +4849,9 @@ export function App() {
                   >
                     ×
                   </button>
-                  {index < mainTabs.length - 1 && <span className="sr-only">Tab</span>}
+                  {index < mainTabs.length - 1 && (
+                    <span className="sr-only">Tab</span>
+                  )}
                 </div>
               );
             })}
@@ -3790,496 +4880,691 @@ export function App() {
             aria-hidden={Boolean(drawer)}
             inert={drawer ? true : undefined}
           >
-        <header className="chat-header">
-          <button
-            className="mobile-menu-inline icon-button"
-            aria-label="Open conversations"
-            onClick={() => setSidebarOpen(true)}
-          >
-            ☰
-          </button>
-          <div>
-            <strong>{selectedChat?.title || "New conversation"}</strong>
-            {selectedChat?.titleStatus==='running'&&<small aria-live="polite">Naming chat…</small>}
-            <small>
-              {chatCli} ·{" "}
-              {chatCli === "openrouter"
-                ? "hosted · explicit cost policy"
-                : "local CLI"}
-            </small>
-          </div>
-          {recordingMeetingId && (
-            <div className="recording-global" role="status">
+            <header className="chat-header">
               <button
-                aria-label="Open active meeting recording"
-                onClick={() => openViewTab("meetings")}
+                className="mobile-menu-inline icon-button"
+                aria-label="Open conversations"
+                onClick={() => setSidebarOpen(true)}
               >
-                ● Recording {Math.floor(recordingSeconds / 60)}:
-                {String(recordingSeconds % 60).padStart(2, "0")}
+                ☰
               </button>
-              <button
-                aria-label="Stop and save active meeting recording"
-                onClick={() => void stopMeeting().catch(showError)}
-              >
-                Stop
-              </button>
-            </div>
-          )}
-          {activityCapture?.policy.enabled && (
-            <div
-              className={`capture-global ${activityCapture.policy.paused || !activityCapture.readiness.available ? "paused" : "active"}`}
-              role="status"
-            >
-              <button
-                aria-label="Open whole-device activity capture controls"
-                onClick={() => openViewTab("activity")}
-              >
-                {activityCapture.readiness.available &&
-                !activityCapture.policy.paused
-                  ? "● Capturing"
-                  : "Ⅱ Activity paused"}
-              </button>
-              <button
-                aria-label="Pause whole-device activity capture"
-                disabled={activityCapture.policy.paused}
-                onClick={() =>
-                  void updateActivityCapture({ paused: true }).catch(showError)
-                }
-              >
-                Pause
-              </button>
-            </div>
-          )}
-          <div
-            className="chat-header-actions"
-            role="group"
-            aria-label="Chat actions"
-          >
-            <button
-              className="knowledge-button"
-              aria-label="Capture screenshot"
-              onClick={() => setScreenCaptureOpen(true)}
-            >
-              Capture
-            </button>
-            {selectedChat && (
-              <button
-                className="knowledge-button"
-                aria-label="Delegate task"
-                onClick={() => void delegateTask()}
-              >
-                Delegate task
-              </button>
-            )}
-            <button
-              className="knowledge-button"
-              aria-label="Open Waypoint In-App Browser"
-              onClick={() => openViewTab("browser")}
-            >
-              Browser
-            </button>
-            <button
-              className="knowledge-button"
-              aria-label="Open knowledge"
-              onClick={() => openViewTab("knowledge")}
-            >
-              Knowledge <span>{shortcutModifier} K</span>
-            </button>
-          </div>
-        </header>
-        {(error || notice) && (
-          <div
-            className={`toast ${error ? "error" : ""}`}
-            role={error ? "alert" : "status"}
-          >
-            {error || notice}
-            <button
-              aria-label="Dismiss"
-              onClick={() => {
-                setError("");
-                setNotice("");
-              }}
-            >
-              ×
-            </button>
-          </div>
-        )}
-        {selectedChat ? (
-          <>
-            <section
-              ref={transcriptRef}
-              className="transcript"
-              aria-label="Conversation"
-              aria-live="polite"
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                transcriptFollowingRef.current = shouldFollowChat(
-                  element.scrollHeight,
-                  element.scrollTop,
-                  element.clientHeight,
-                );
-              }}
-            >
-              {!selectedChat.messages.length && (
-                <div className="empty-chat">
-                  <div className="compass">✦</div>
-                  <h1>What are we working on?</h1>
-                  <p>
-                    Ask Waypoint to think, write, research your local knowledge,
-                    or organize what matters.
-                  </p>
+              <div>
+                <strong>{selectedChat?.title || "New conversation"}</strong>
+                {selectedChat?.titleStatus === "running" && (
+                  <small aria-live="polite">Naming chat…</small>
+                )}
+                <small>
+                  {chatCli} ·{" "}
+                  {chatCli === "openrouter"
+                    ? "hosted · explicit cost policy"
+                    : "local CLI"}
+                </small>
+              </div>
+              {recordingMeetingId && (
+                <div className="recording-global" role="status">
+                  <button
+                    aria-label="Open active meeting recording"
+                    onClick={() => openViewTab("meetings")}
+                  >
+                    ● Recording {Math.floor(recordingSeconds / 60)}:
+                    {String(recordingSeconds % 60).padStart(2, "0")}
+                  </button>
+                  <button
+                    aria-label="Stop and save active meeting recording"
+                    onClick={() => void stopMeeting().catch(showError)}
+                  >
+                    Stop
+                  </button>
                 </div>
               )}
-              {chatRuns
-                .filter(
-                  (run) =>
-                    !selectedChat.messages.some(
-                      (message) =>
-                        message.id === String(run.sourceMessageId ?? ""),
-                    ),
-                )
-                .map(executionHistory)}
-              {selectedChat.messages.map((message) => (
-                <Fragment key={message.id}>
-                  <article className={`chat-message ${message.role}`}>
-                    <div className="message-role">
-                      {message.role === "assistant" ? (
-                        <img
-                          className="assistant-mark"
-                          src={waypointMark}
-                          alt="Waypoint"
-                        />
-                      ) : (
-                        <span>
-                          {message.role === "system" ? "Browser" : "You"}
-                        </span>
-                      )}
-                    </div>
-                    <div className="message-content">
-                      {message.role === "assistant" ||
-                      message.role === "system" ? (
-                        <ChatMarkdown body={message.body} />
-                      ) : (
-                        <p>{message.body}</p>
-                      )}
-                      {attachments.some(
-                        (item) => item.ownerId === message.id,
-                      ) && (
-                        <div className="sent-files" aria-label="Message attachments">
-                          {attachments
-                            .filter((item) => item.ownerId === message.id)
-                            .map((item) => (
-                              <ChatAttachmentPreview key={item.id} workspaceId={workspace.id} chatId={selectedChat.id} attachment={item} onOpen={showAttachmentViewer} />
-                            ))}
-                        </div>
-                      )}
-                      {message.role === "assistant" && (
-                        <button
-                          className="message-action"
-                          onClick={() =>
-                            void saveMessageToKnowledge(message.id)
-                          }
-                        >
-                          ＋ Save to knowledge
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                  {message.role === "user" &&
-                    runsForSourceMessage(chatRuns, message.id).map(
-                      executionHistory,
-                    )}
-                </Fragment>
-              ))}
-            </section>
-            <div className="composer-dock">
-              {chatAutomationProposals.map((proposal)=><section className="automation-confirmation" role="group" aria-labelledby={`automation-question-${proposal.id}`} key={proposal.id}>
-                <div><small>{proposal.definition.trigger.connectorId.replaceAll('_',' ')} · explicit approval required</small><strong id={`automation-question-${proposal.id}`}>{proposal.title}</strong><p>{proposal.question?.prompt}</p><dl><div><dt>Trigger</dt><dd>{proposal.definition.trigger.eventType} · filters {Object.keys(proposal.definition.trigger.filters).length?JSON.stringify(proposal.definition.trigger.filters):'none'}</dd></div><div><dt>AI route</dt><dd>{proposal.definition.action.provider}{proposal.definition.action.model?` · ${proposal.definition.action.model}`:' · default model'} · profile {proposal.definition.action.securityProfileId} · {Math.round(proposal.definition.action.maxDurationMs/1000)}s</dd></div><div><dt>Instruction</dt><dd>{proposal.definition.action.instruction}</dd></div><div><dt>Delivery</dt><dd>{proposal.definition.delivery.reachability.replaceAll('_',' ')} · {proposal.definition.delivery.endpoint??'not configured'} · channel {proposal.definition.delivery.channelId??'not configured'}</dd></div><div><dt>Provisioning</dt><dd>{proposal.definition.provisioning.mode.replaceAll('_',' ')} · {[proposal.definition.provisioning.organization,proposal.definition.provisioning.project,proposal.definition.provisioning.repositoryFullName??proposal.definition.provisioning.repository,proposal.definition.provisioning.targetBranch].filter(Boolean).join(' / ')||'no provider target'} · stable IDs {[proposal.definition.provisioning.projectId,proposal.definition.provisioning.repositoryId].filter(Boolean).join(' / ')||'not applicable'}{proposal.definition.provisioning.commandPreview?` · ${proposal.definition.provisioning.commandPreview}`:''}</dd></div><div><dt>Approval digest</dt><dd><code>{proposal.proposalDigest}</code></dd></div></dl></div>
-                <div className="automation-confirmation-actions"><button type="button" className="secondary" onClick={()=>void decideAutomationProposal(proposal,'reject').catch(showError)}>Reject</button><button type="button" onClick={()=>void decideAutomationProposal(proposal,'approve').catch(showError)}>Approve and provision</button></div>
-              </section>)}
-              {browserActivity.length > 0 && (
-                <details
-                  className="execution-timeline browser-chat-activity"
-                  open={Boolean(activeBrowserRun)}
+              {activityCapture?.policy.enabled && (
+                <div
+                  className={`capture-global ${activityCapture.policy.paused || !activityCapture.readiness.available ? "paused" : "active"}`}
+                  role="status"
                 >
-                  <summary>
-                    <span className="status-dot" />
-                    <strong>
-                      Browser activity ·{" "}
-                      {activeBrowserRun ? "running" : "latest result"}
-                    </strong>
-                    <small>
-                      Redacted structured actions ·{" "}
-                      {toolSettings?.browserAllowedDomains.length ?? 0} allowed
-                      domains
-                    </small>
-                  </summary>
-                  <ol>
-                    {browserActivity.map((item) => (
-                      <li key={`${item.runId}-${item.sequence}`}>
-                        <b>{item.type}</b>
-                        <span>{item.summary}</span>
-                        <small>
-                          {new Date(item.createdAt).toLocaleTimeString()}
-                        </small>
-                      </li>
-                    ))}
-                  </ol>
-                  <div className="drawer-actions">
-                    {activeBrowserRun && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.cancelTool(
-                            workspace.id,
-                            activeBrowserRun,
-                          )
-                        }
-                      >
-                        Cancel browser action
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() =>
-                        void stopAllBrowserTools().catch(showError)
-                      }
-                    >
-                      Global stop
-                    </button>
-                  </div>
-                </details>
-              )}
-              <form
-                className="composer"
-                onSubmit={(event) => void runChat(event, selectedChat.id)}
-              >
-                {queued.length > 0 && (
-                  <div className="file-queue" aria-label="Queued attachments">
-                    {queued.map((item) => (
-                      <ChatAttachmentPreview key={item.id} workspaceId={workspace.id} chatId={selectedChat.id} attachment={item} queued onOpen={showAttachmentViewer} onRemove={() => void removeAttachment(item.id)} />
-                    ))}
-                  </div>
-                )}
-                <textarea
-                  ref={composerRef}
-                  name="prompt"
-                  required
-                  rows={1}
-                  placeholder="Message Waypoint"
-                  aria-label="Message Waypoint"
-                  onPaste={(event) => void pasteChatImages(event)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      event.currentTarget.form?.requestSubmit();
+                  <button
+                    aria-label="Open whole-device activity capture controls"
+                    onClick={() => openViewTab("activity")}
+                  >
+                    {activityCapture.readiness.available &&
+                    !activityCapture.policy.paused
+                      ? "● Capturing"
+                      : "Ⅱ Activity paused"}
+                  </button>
+                  <button
+                    aria-label="Pause whole-device activity capture"
+                    disabled={activityCapture.policy.paused}
+                    onClick={() =>
+                      void updateActivityCapture({ paused: true }).catch(
+                        showError,
+                      )
                     }
+                  >
+                    Pause
+                  </button>
+                </div>
+              )}
+              <div
+                className="chat-header-actions"
+                role="group"
+                aria-label="Chat actions"
+              >
+                <button
+                  className="knowledge-button"
+                  aria-label="Capture screenshot"
+                  onClick={() => setScreenCaptureOpen(true)}
+                >
+                  Capture
+                </button>
+                {selectedChat && (
+                  <button
+                    className="knowledge-button"
+                    aria-label="Delegate task"
+                    onClick={() => void delegateTask()}
+                  >
+                    Delegate task
+                  </button>
+                )}
+                <button
+                  className="knowledge-button"
+                  aria-label="Open Waypoint In-App Browser"
+                  onClick={() => openViewTab("browser")}
+                >
+                  Browser
+                </button>
+                <button
+                  className="knowledge-button"
+                  aria-label="Open knowledge"
+                  onClick={() => openViewTab("knowledge")}
+                >
+                  Knowledge <span>{shortcutModifier} K</span>
+                </button>
+              </div>
+            </header>
+            {(error || notice) && (
+              <div
+                className={`toast ${error ? "error" : ""}`}
+                role={error ? "alert" : "status"}
+              >
+                {error || notice}
+                <button
+                  aria-label="Dismiss"
+                  onClick={() => {
+                    setError("");
+                    setNotice("");
                   }}
-                />
-                <div className="composer-controls">
-                  <div>
-                    <button
-                      type="button"
-                      className="attach"
-                      disabled={attachmentBusy}
-                      onClick={() => void chooseAttachments()}
-                      aria-label="Attach files"
-                    >
-                      ＋
-                    </button>
-                    <button
-                      type="button"
-                      className={`voice-control ${voiceState !== "off" || voiceSessionActive ? "active" : ""}`}
-                      aria-label={
-                        voiceMode === "hands_free"
-                          ? voiceSessionActive
-                            ? "End hands-free voice session"
-                            : "Start hands-free voice session"
-                          : "Hold to talk"
-                      }
-                      title={
-                        voiceMode === "hands_free"
-                          ? voiceSessionActive
-                            ? "End voice session"
-                            : "Start hands-free voice"
-                          : "Hold to talk"
-                      }
-                      aria-pressed={
-                        voiceMode === "hands_free"
-                          ? voiceSessionActive
-                          : undefined
-                      }
-                      onClick={
-                        voiceMode === "hands_free"
-                          ? () => void toggleHandsFree()
-                          : undefined
-                      }
-                      onPointerDown={
-                        voiceMode === "push_to_talk"
-                          ? (event) => {
-                              event.currentTarget.setPointerCapture(
-                                event.pointerId,
-                              );
-                              beginPushToTalk();
-                            }
-                          : undefined
-                      }
-                      onPointerUp={
-                        voiceMode === "push_to_talk"
-                          ? releasePushToTalk
-                          : undefined
-                      }
-                      onPointerCancel={
-                        voiceMode === "push_to_talk"
-                          ? () => void stopVoiceMode()
-                          : undefined
-                      }
-                      onKeyDown={
-                        voiceMode === "push_to_talk"
-                          ? (event) => {
-                              if (
-                                !event.repeat &&
-                                (event.key === " " || event.key === "Enter")
-                              ) {
-                                event.preventDefault();
-                                beginPushToTalk();
+                >
+                  ×
+                </button>
+              </div>
+            )}
+            {selectedChat ? (
+              <>
+                <section
+                  ref={transcriptRef}
+                  className="transcript"
+                  aria-label="Conversation"
+                  aria-live="polite"
+                  onScroll={(event) => {
+                    const element = event.currentTarget;
+                    transcriptFollowingRef.current = shouldFollowChat(
+                      element.scrollHeight,
+                      element.scrollTop,
+                      element.clientHeight,
+                    );
+                  }}
+                >
+                  {!selectedChat.messages.length && (
+                    <div className="empty-chat">
+                      <div className="compass">✦</div>
+                      <h1>What are we working on?</h1>
+                      <p>
+                        Ask Waypoint to think, write, research your local
+                        knowledge, or organize what matters.
+                      </p>
+                    </div>
+                  )}
+                  {chatRuns
+                    .filter(
+                      (run) =>
+                        !selectedChat.messages.some(
+                          (message) =>
+                            message.id === String(run.sourceMessageId ?? ""),
+                        ),
+                    )
+                    .map(executionHistory)}
+                  {selectedChat.messages.map((message) => (
+                    <Fragment key={message.id}>
+                      <article className={`chat-message ${message.role}`}>
+                        <div className="message-role">
+                          {message.role === "assistant" ? (
+                            <img
+                              className="assistant-mark"
+                              src={waypointMark}
+                              alt="Waypoint"
+                            />
+                          ) : (
+                            <span>
+                              {message.role === "system" ? "Browser" : "You"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="message-content">
+                          {message.role === "assistant" ||
+                          message.role === "system" ? (
+                            <ChatMarkdown body={message.body} />
+                          ) : (
+                            <p>{message.body}</p>
+                          )}
+                          {attachments.some(
+                            (item) => item.ownerId === message.id,
+                          ) && (
+                            <div
+                              className="sent-files"
+                              aria-label="Message attachments"
+                            >
+                              {attachments
+                                .filter((item) => item.ownerId === message.id)
+                                .map((item) => (
+                                  <ChatAttachmentPreview
+                                    key={item.id}
+                                    workspaceId={workspace.id}
+                                    chatId={selectedChat.id}
+                                    attachment={item}
+                                    onOpen={showAttachmentViewer}
+                                  />
+                                ))}
+                            </div>
+                          )}
+                          {message.role === "assistant" && (
+                            <button
+                              className="message-action"
+                              onClick={() =>
+                                void saveMessageToKnowledge(message.id)
                               }
-                            }
-                          : undefined
-                      }
-                      onKeyUp={
-                        voiceMode === "push_to_talk"
-                          ? (event) => {
-                              if (event.key === " " || event.key === "Enter") {
-                                event.preventDefault();
-                                releasePushToTalk();
-                              }
-                            }
-                          : undefined
-                      }
+                            >
+                              ＋ Save to knowledge
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                      {message.role === "user" &&
+                        runsForSourceMessage(chatRuns, message.id).map(
+                          executionHistory,
+                        )}
+                    </Fragment>
+                  ))}
+                </section>
+                <div className="composer-dock">
+                  {chatAutomationProposals.map((proposal) => (
+                    <section
+                      className="automation-confirmation"
+                      role="group"
+                      aria-labelledby={`automation-question-${proposal.id}`}
+                      key={proposal.id}
                     >
-                      <span />
-                      <span />
-                      <span />
-                    </button>
-                    <select
-                      className="provider-select"
-                      name="cli"
-                      value={chatCli}
-                      onChange={(event) =>
-                        setChatCli(
-                          event.target.value as
-                            "codex" | "claude" | "openrouter",
-                        )
-                      }
-                      aria-label="AI provider"
-                    >
-                      {capabilities.map((item) => (
-                        <option
-                          key={item.name}
-                          value={item.name}
-                          disabled={
-                            !item.available || item.compatible === false
+                      <div>
+                        <small>
+                          {proposal.definition.trigger.connectorId.replaceAll(
+                            "_",
+                            " ",
+                          )}{" "}
+                          · explicit approval required
+                        </small>
+                        <strong id={`automation-question-${proposal.id}`}>
+                          {proposal.title}
+                        </strong>
+                        <p>{proposal.question?.prompt}</p>
+                        <dl>
+                          <div>
+                            <dt>Trigger</dt>
+                            <dd>
+                              {proposal.definition.trigger.eventType} · filters{" "}
+                              {Object.keys(proposal.definition.trigger.filters)
+                                .length
+                                ? JSON.stringify(
+                                    proposal.definition.trigger.filters,
+                                  )
+                                : "none"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>AI route</dt>
+                            <dd>
+                              {proposal.definition.action.provider}
+                              {proposal.definition.action.model
+                                ? ` · ${proposal.definition.action.model}`
+                                : " · default model"}{" "}
+                              · profile{" "}
+                              {proposal.definition.action.securityProfileId} ·
+                              runs until completion or cancellation
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Instruction</dt>
+                            <dd>{proposal.definition.action.instruction}</dd>
+                          </div>
+                          <div>
+                            <dt>Delivery</dt>
+                            <dd>
+                              {proposal.definition.delivery.reachability.replaceAll(
+                                "_",
+                                " ",
+                              )}{" "}
+                              ·{" "}
+                              {proposal.definition.delivery.endpoint ??
+                                "not configured"}{" "}
+                              · channel{" "}
+                              {proposal.definition.delivery.channelId ??
+                                "not configured"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Provisioning</dt>
+                            <dd>
+                              {proposal.definition.provisioning.mode.replaceAll(
+                                "_",
+                                " ",
+                              )}{" "}
+                              ·{" "}
+                              {[
+                                proposal.definition.provisioning.organization,
+                                proposal.definition.provisioning.project,
+                                proposal.definition.provisioning
+                                  .repositoryFullName ??
+                                  proposal.definition.provisioning.repository,
+                                proposal.definition.provisioning.targetBranch,
+                              ]
+                                .filter(Boolean)
+                                .join(" / ") || "no provider target"}{" "}
+                              · stable IDs{" "}
+                              {[
+                                proposal.definition.provisioning.projectId,
+                                proposal.definition.provisioning.repositoryId,
+                              ]
+                                .filter(Boolean)
+                                .join(" / ") || "not applicable"}
+                              {proposal.definition.provisioning.commandPreview
+                                ? ` · ${proposal.definition.provisioning.commandPreview}`
+                                : ""}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Approval digest</dt>
+                            <dd>
+                              <code>{proposal.proposalDigest}</code>
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+                      <div className="automation-confirmation-actions">
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() =>
+                            void decideAutomationProposal(
+                              proposal,
+                              "reject",
+                            ).catch(showError)
                           }
                         >
-                          {item.name}
-                          {!item.available ? " · unavailable" : ""}
-                        </option>
-                      ))}
-                      <option
-                        value="openrouter"
-                        disabled={!openRouter?.capability.available}
-                      >
-                        OpenRouter
-                        {openRouter?.capability.available
-                          ? " · hosted cost"
-                          : ` · ${openRouter?.capability.reason ?? "Open Settings to configure a protected key and activation."}`}
-                      </option>
-                    </select>
-                    <select
-                      className="profile-select"
-                      name="profile"
-                      value={selectedProfileId}
-                      onChange={(event) =>
-                        setSelectedProfileId(event.target.value)
-                      }
-                      aria-label="Security profile"
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void decideAutomationProposal(
+                              proposal,
+                              "approve",
+                            ).catch(showError)
+                          }
+                        >
+                          Approve and provision
+                        </button>
+                      </div>
+                    </section>
+                  ))}
+                  {pendingChatProviderRequests.map((request) => (
+                    <ProviderRequestCard
+                      key={request.id}
+                      request={request}
+                      onDecision={async (status, decision) => {
+                        try {
+                          await decideProviderRequest(
+                            request.id,
+                            status,
+                            decision,
+                          );
+                        } catch (error) {
+                          showError(error);
+                        }
+                      }}
+                    />
+                  ))}
+                  {browserActivity.length > 0 && (
+                    <details
+                      className="execution-timeline browser-chat-activity"
+                      open={Boolean(activeBrowserRun)}
                     >
-                      {profiles.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      className="model-select"
-                      name="model"
-                      aria-label={`${chatCli}${chatCli === "openrouter" && queuedHasImage ? " image" : ""} model`}
-                      value={selectedComposerModel}
-                      onChange={(event) =>
-                        void changeComposerModel(event.target.value).catch(
-                          showError,
-                        )
-                      }
-                    >
-                      {composerModelChoices.map((model) => (
-                        <option value={model.id} key={model.id || "default"} disabled={Boolean("disabled" in model && model.disabled)}>
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="composer-status-actions">
-                    {voiceState !== "off" && (
+                      <summary>
+                        <span className="status-dot" />
+                        <strong>
+                          Browser activity ·{" "}
+                          {activeBrowserRun ? "running" : "latest result"}
+                        </strong>
+                        <small>
+                          Redacted structured actions ·{" "}
+                          {toolSettings?.browserAllowedDomains.length ?? 0}{" "}
+                          allowed domains
+                        </small>
+                      </summary>
+                      <ol>
+                        {browserActivity.map((item) => (
+                          <li key={`${item.runId}-${item.sequence}`}>
+                            <b>{item.type}</b>
+                            <span>{item.summary}</span>
+                            <small>
+                              {new Date(item.createdAt).toLocaleTimeString()}
+                            </small>
+                          </li>
+                        ))}
+                      </ol>
+                      <div className="drawer-actions">
+                        {activeBrowserRun && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              workspace &&
+                              void window.waypoint.cancelTool(
+                                workspace.id,
+                                activeBrowserRun,
+                              )
+                            }
+                          >
+                            Cancel browser action
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() =>
+                            void stopAllBrowserTools().catch(showError)
+                          }
+                        >
+                          Global stop
+                        </button>
+                      </div>
+                    </details>
+                  )}
+                  <form
+                    className="composer"
+                    onSubmit={(event) => void runChat(event, selectedChat.id)}
+                  >
+                    {queued.length > 0 && (
                       <div
-                        className={`voice-transient ${voiceState}`}
-                        role="status"
-                        aria-live="polite"
+                        className="file-queue"
+                        aria-label="Queued attachments"
                       >
-                        <span className="voice-pulse" />
-                        <span>
-                          {voicePartial || voiceState.replace("_", " ")}
-                        </span>
+                        {queued.map((item) => (
+                          <ChatAttachmentPreview
+                            key={item.id}
+                            workspaceId={workspace.id}
+                            chatId={selectedChat.id}
+                            attachment={item}
+                            queued
+                            onOpen={showAttachmentViewer}
+                            onRemove={() => void removeAttachment(item.id)}
+                          />
+                        ))}
                       </div>
                     )}
-                    <button className="send" aria-label="Send message">
-                      ↑
-                    </button>
-                  </div>
+                    <textarea
+                      ref={composerRef}
+                      name="prompt"
+                      required
+                      rows={1}
+                      placeholder="Message Waypoint"
+                      aria-label="Message Waypoint"
+                      onPaste={(event) => void pasteChatImages(event)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          event.currentTarget.form?.requestSubmit();
+                        }
+                      }}
+                    />
+                    <div className="composer-controls">
+                      <div>
+                        <button
+                          type="button"
+                          className="attach"
+                          disabled={attachmentBusy}
+                          onClick={() => void chooseAttachments()}
+                          aria-label="Attach files"
+                        >
+                          ＋
+                        </button>
+                        <button
+                          type="button"
+                          className={`voice-control ${voiceState !== "off" || voiceSessionActive ? "active" : ""}`}
+                          aria-label={
+                            voiceMode === "hands_free"
+                              ? voiceSessionActive
+                                ? "End hands-free voice session"
+                                : "Start hands-free voice session"
+                              : "Hold to talk"
+                          }
+                          title={
+                            voiceMode === "hands_free"
+                              ? voiceSessionActive
+                                ? "End voice session"
+                                : "Start hands-free voice"
+                              : "Hold to talk"
+                          }
+                          aria-pressed={
+                            voiceMode === "hands_free"
+                              ? voiceSessionActive
+                              : undefined
+                          }
+                          onClick={
+                            voiceMode === "hands_free"
+                              ? () => void toggleHandsFree()
+                              : undefined
+                          }
+                          onPointerDown={
+                            voiceMode === "push_to_talk"
+                              ? (event) => {
+                                  event.currentTarget.setPointerCapture(
+                                    event.pointerId,
+                                  );
+                                  beginPushToTalk();
+                                }
+                              : undefined
+                          }
+                          onPointerUp={
+                            voiceMode === "push_to_talk"
+                              ? releasePushToTalk
+                              : undefined
+                          }
+                          onPointerCancel={
+                            voiceMode === "push_to_talk"
+                              ? () => void stopVoiceMode()
+                              : undefined
+                          }
+                          onKeyDown={
+                            voiceMode === "push_to_talk"
+                              ? (event) => {
+                                  if (
+                                    !event.repeat &&
+                                    (event.key === " " || event.key === "Enter")
+                                  ) {
+                                    event.preventDefault();
+                                    beginPushToTalk();
+                                  }
+                                }
+                              : undefined
+                          }
+                          onKeyUp={
+                            voiceMode === "push_to_talk"
+                              ? (event) => {
+                                  if (
+                                    event.key === " " ||
+                                    event.key === "Enter"
+                                  ) {
+                                    event.preventDefault();
+                                    releasePushToTalk();
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
+                          <span />
+                          <span />
+                          <span />
+                        </button>
+                        <select
+                          className="provider-select"
+                          name="cli"
+                          value={chatCli}
+                          onChange={(event) =>
+                            setChatCli(
+                              event.target.value as
+                                "codex" | "claude" | "grok" | "openrouter",
+                            )
+                          }
+                          aria-label="AI provider"
+                        >
+                          {capabilities.map((item) => (
+                            <option
+                              key={item.name}
+                              value={item.name}
+                              disabled={
+                                !item.available ||
+                                item.compatible === false ||
+                                (item.name === "grok" &&
+                                  !cliModels.some(
+                                    (catalog) =>
+                                      catalog.provider === "grok" &&
+                                      catalog.ready,
+                                  ))
+                              }
+                            >
+                              {item.name}
+                              {!item.available ? " · unavailable" : ""}
+                              {item.name === "grok" &&
+                              cliModels.some(
+                                (catalog) =>
+                                  catalog.provider === "grok" && !catalog.ready,
+                              )
+                                ? " · sign in required"
+                                : ""}
+                            </option>
+                          ))}
+                          <option
+                            value="openrouter"
+                            disabled={!openRouter?.capability.available}
+                          >
+                            OpenRouter
+                            {openRouter?.capability.available
+                              ? " · hosted cost"
+                              : ` · ${openRouter?.capability.reason ?? "Open Settings to configure a protected key and activation."}`}
+                          </option>
+                        </select>
+                        <select
+                          className="profile-select"
+                          name="profile"
+                          value={selectedProfileId}
+                          onChange={(event) =>
+                            void selectSecurityProfile(event.target.value)
+                          }
+                          aria-label="Security profile"
+                        >
+                          {profiles.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          className="model-select"
+                          name="model"
+                          aria-label={`${chatCli}${chatCli === "openrouter" && queuedHasImage ? " image" : ""} model`}
+                          value={selectedComposerModel}
+                          onChange={(event) =>
+                            void changeComposerModel(event.target.value).catch(
+                              showError,
+                            )
+                          }
+                        >
+                          {composerModelChoices.map((model) => (
+                            <option
+                              value={model.id}
+                              key={model.id || "default"}
+                              disabled={Boolean(
+                                "disabled" in model && model.disabled,
+                              )}
+                            >
+                              {model.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="composer-status-actions">
+                        {voiceState !== "off" && (
+                          <div
+                            className={`voice-transient ${voiceState}`}
+                            role="status"
+                            aria-live="polite"
+                          >
+                            <span className="voice-pulse" />
+                            <span>
+                              {voicePartial || voiceState.replace("_", " ")}
+                            </span>
+                          </div>
+                        )}
+                        <button className="send" aria-label="Send message">
+                          ↑
+                        </button>
+                      </div>
+                    </div>
+                    <p className="capability-copy">
+                      {chatCli === "openrouter"
+                        ? queuedHasImage
+                          ? `Image pixels use ${openRouter?.settings.attachmentModel || "the Images model selected in Settings"}; documents are extracted locally · hosted cost · cancel available.`
+                          : "Images are supported through the explicit Images model; PDF, Word, TXT, and Markdown are extracted locally · hosted cost · cancel available."
+                        : chatCli === "codex"
+                          ? "Images use Codex image input; PDF, Word, TXT, and Markdown are extracted locally with provenance."
+                          : chatCli === "claude"
+                            ? "Images use Claude structured image input; PDF, Word, TXT, and Markdown are extracted locally with provenance."
+                            : "Grok ACP receives text. PDF, Word, TXT, and Markdown use integrity-checked run-scoped local paths that Grok can read with native tools. Images stay local because this Grok ACP version does not advertise image input."}{" "}
+                      {chatCli !== "openrouter" &&
+                        cliModels.find((item) => item.provider === chatCli)
+                          ?.reason}
+                      {` · ${selectedSecurityProfile?.name ?? "No authority profile"} · ${workspace.executionRoot ?? "no repository selected"}${selectedProviderSession?.status === "active" ? " · session resumed" : ""} · model-selected configuration tools ready`}
+                      {platform === "win32" &&
+                        selectedSecurityProfile?.tools.includes("terminal") &&
+                        ` · Windows shell has host authority${selectedSecurityProfile.approval === "never" ? " · no approval prompts" : " · commands require approval"}`}
+                    </p>
+                  </form>
+                  <small className="composer-hint">
+                    Enter to send · Shift Enter for a new line · /browser for
+                    controlled browsing
+                  </small>
                 </div>
-                <p className="capability-copy">
-                  {chatCli === "openrouter"
-                    ? queuedHasImage
-                      ? `Image pixels use ${openRouter?.settings.attachmentModel || "the Images model selected in Settings"}; documents are extracted locally · hosted cost · cancel available.`
-                      : "Images are supported through the explicit Images model; PDF, Word, TXT, and Markdown are extracted locally · hosted cost · cancel available."
-                    : chatCli === "codex"
-                      ? "Images use Codex image input; PDF, Word, TXT, and Markdown are extracted locally with provenance."
-                      : "Images use Claude structured image input; PDF, Word, TXT, and Markdown are extracted locally with provenance."}{" "}
-                  {chatCli !== "openrouter" &&
-                    cliModels.find((item) => item.provider === chatCli)?.reason}
-                </p>
-              </form>
-              <small className="composer-hint">
-                Enter to send · Shift Enter for a new line · /browser for
-                controlled browsing
-              </small>
-            </div>
-          </>
-        ) : (
-          <section className="transcript">
-            <div className="empty-chat">
-              <div className="compass">✦</div>
-              <h1>Start with a conversation.</h1>
-              <p>
-                Your chats become the path into notes, memories, and everything
-                Waypoint knows.
-              </p>
-              <button onClick={() => void beginNewChat()}>New chat</button>
-            </div>
-          </section>
-        )}
+              </>
+            ) : (
+              <section className="transcript">
+                <div className="empty-chat">
+                  <div className="compass">✦</div>
+                  <h1>Start with a conversation.</h1>
+                  <p>
+                    Your chats become the path into notes, memories, and
+                    everything Waypoint knows.
+                  </p>
+                  <button onClick={() => void beginNewChat()}>New chat</button>
+                </div>
+              </section>
+            )}
           </div>
         ) : (
           <section className="tab-empty-state">
@@ -4292,1321 +5577,1282 @@ export function App() {
       </main>
 
       {drawer && (
-          <aside
-            className={`right-drawer main-tab-view ${drawer === "browser" ? "browser-drawer" : ""} ${drawer === "settings" ? "settings-view" : ""}`}
-            role="region"
-            aria-labelledby="drawer-title"
-          >
-            <header>
-              <div>
-                <p>{workspace.name}</p>
-                <h2 id="drawer-title">
-                  {workspaceViewTitles[drawer]}
-                </h2>
-              </div>
-              <span className="view-persistence-note">Workspace view</span>
-            </header>
-            {drawer === "browser" && (
-              <div
-                className={`in-app-browser ${inAppBrowserState?.loading ? "is-loading" : ""} ${inAppBrowserState?.error || error ? "has-error" : ""}`}
-              >
-                <div className="browser-chrome">
-                  <form
-                    className="browser-toolbar"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void openInAppBrowser().catch(showError);
-                    }}
-                  >
-                    <div className="browser-nav-actions">
-                      <button
-                        type="button"
-                        className="browser-icon-button"
-                        aria-label="Back"
-                        title="Back"
-                        disabled={!inAppBrowserState?.canGoBack}
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.navigateInAppBrowser(
-                            workspace.id,
-                            "back",
-                          )
-                        }
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        className="browser-icon-button"
-                        aria-label="Forward"
-                        title="Forward"
-                        disabled={!inAppBrowserState?.canGoForward}
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.navigateInAppBrowser(
-                            workspace.id,
-                            "forward",
-                          )
-                        }
-                      >
-                        →
-                      </button>
-                      <button
-                        type="button"
-                        className="browser-icon-button"
-                        aria-label={
-                          inAppBrowserState?.loading ? "Stop loading" : "Reload"
-                        }
-                        title={
-                          inAppBrowserState?.loading ? "Stop loading" : "Reload"
-                        }
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.navigateInAppBrowser(
-                            workspace.id,
-                            inAppBrowserState?.loading ? "stop" : "reload",
-                          )
-                        }
-                      >
-                        {inAppBrowserState?.loading ? "×" : "↻"}
-                      </button>
-                    </div>
-                    <label className="browser-address-field">
-                      <span className="browser-address-shield" aria-hidden="true">
-                        ◈
-                      </span>
-                      <span className="sr-only">In-App Browser address</span>
-                      <input
-                        aria-label="In-App Browser address"
-                        value={browserAddress}
-                        onChange={(event) =>
-                          setBrowserAddress(event.target.value)
-                        }
-                        placeholder="https://allowed.example"
-                        spellCheck={false}
-                        autoCapitalize="none"
-                      />
-                      <span className="browser-address-host" aria-hidden="true">
-                        {browserHostLabel(browserAddress)}
-                      </span>
-                    </label>
-                    <button className="browser-go-button">Go</button>
-                    <div className="browser-session-actions">
-                      <button
-                        type="button"
-                        aria-label="Close browser session"
-                        title="Close browser session"
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.closeInAppBrowser(workspace.id)
-                        }
-                      >
-                        Close
-                      </button>
-                      <button
-                        type="button"
-                        className="browser-clear-button"
-                        aria-label="Clear isolated browser data"
-                        title="Clear isolated browser data"
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.clearInAppBrowser(workspace.id)
-                        }
-                      >
-                        Clear data
-                      </button>
-                    </div>
-                  </form>
-                  {inAppBrowserState?.loading && (
-                    <div className="browser-progress" aria-hidden="true">
-                      <span />
-                    </div>
-                  )}
-                  <div className="browser-identity" role="status">
-                    <div className="browser-page-meta">
-                      <i
-                        className={
-                          inAppBrowserState?.error || error
-                            ? "error"
-                            : inAppBrowserState?.loading
-                              ? "loading"
-                              : inAppBrowserState?.open
-                                ? "ready"
-                                : "closed"
-                        }
-                      />
-                      <div>
-                        <strong>
-                          {inAppBrowserState?.title || "Private browser"}
-                        </strong>
-                        <small>
-                          {inAppBrowserState?.loading
-                            ? "Loading secure page…"
-                            : inAppBrowserState?.error || error
-                              ? "Page unavailable"
-                              : inAppBrowserState?.open
-                                ? browserHostLabel(
-                                    inAppBrowserState.url || browserAddress,
-                                  )
-                                : "Session closed"}
-                        </small>
-                      </div>
-                    </div>
-                    <div className="browser-policy-chips" aria-label="Browser policy">
-                      <span title="Browser data is isolated to this Waypoint session">
-                        ◉ {inAppBrowserState?.profile ?? "Waypoint isolated"}
-                      </span>
-                      <span title="Only explicitly allowed public domains can load">
-                        ◇ Public domains only
-                      </span>
-                      <span title="Untrusted page JavaScript is disabled">
-                        ⊘ Page scripts blocked
-                      </span>
-                    </div>
-                  </div>
-                  {(inAppBrowserState?.error || error) && (
-                    <div className="browser-error-banner" role="alert">
-                      <span>!</span>
-                      <div>
-                        <strong>Couldn’t open this page</strong>
-                        <small>{inAppBrowserState?.error || error}</small>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div
-                  ref={inAppBrowserSlotRef}
-                  className="in-app-browser-slot"
-                  aria-label="Waypoint In-App Browser content"
-                >
-                  {!inAppBrowserState?.open && (
-                    <div className="browser-empty-state">
-                      <span aria-hidden="true">◎</span>
-                      <strong>Browse without leaving Waypoint</strong>
-                      <p>
-                        Enter an approved HTTPS address above. Browsing stays in
-                        an isolated profile with public-domain controls.
-                      </p>
-                      <small>Page scripts remain blocked by design.</small>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            {drawer === "reflection" && (
-              <div className="drawer-body">
-                <p className="drawer-intro">
-                  Review selected local sources with an already signed-in CLI.
-                  Sources are never overwritten and runs never schedule
-                  themselves.
+        <aside
+          className={`right-drawer main-tab-view ${drawer === "browser" ? "browser-drawer" : ""} ${drawer === "settings" ? "settings-view" : ""}`}
+          role="region"
+          aria-labelledby="drawer-title"
+        >
+          <header>
+            <div>
+              <p>{workspace.name}</p>
+              <h2 id="drawer-title">{workspaceViewTitles[drawer]}</h2>
+            </div>
+            <span className="view-persistence-note">Workspace view</span>
+          </header>
+          {drawer === "office" && (
+            <Suspense
+              fallback={
+                <p className="drawer-empty" role="status">
+                  Opening the command center…
                 </p>
-                <section>
-                  <h3>
-                    Sources <span>{reflectionSources.length}/50</span>
-                  </h3>
-                  {[
-                    ...memories.map((item) => ({
-                      id: item.id,
-                      title: item.title,
-                      kind: "memory",
-                    })),
-                    ...documents.map((item) => ({
-                      id: item.id,
-                      title: item.title,
-                      kind: "document",
-                    })),
-                  ].map((item) => (
-                    <label className="meeting-consent" key={item.id}>
-                      <input
-                        type="checkbox"
-                        checked={reflectionSources.includes(item.id)}
-                        onChange={(event) =>
-                          setReflectionSources((current) =>
-                            event.target.checked
-                              ? [...current, item.id].slice(0, 50)
-                              : current.filter((id) => id !== item.id),
-                          )
-                        }
-                      />
-                      <span>
-                        <strong>{item.title}</strong>
-                        <small>
-                          {item.kind} · {item.id}
-                        </small>
-                      </span>
-                    </label>
-                  ))}
-                  <label className="settings-field">
-                    <span>Local reflection provider</span>
-                    <select
-                      aria-label="Local reflection provider"
-                      value={reflectionProvider}
-                      onChange={(event) =>
-                        setReflectionProvider(
-                          event.target.value as "codex" | "claude",
+              }
+            >
+              <OfficeCommandCenter
+                key={workspace.id}
+                workspaceName={workspace.name}
+                repositoryBoundary={workspace.executionRoot ?? ""}
+                providerOptions={officeProviderOptions}
+                chats={chats}
+                runs={runs}
+                requests={providerRequests}
+                sessions={providerSessions}
+                profiles={profiles}
+                onOpenChat={openChatTab}
+                onCancelRun={cancelRun}
+                onAuthorizeProfile={authorizeSecurityProfile}
+                onDispatchWorkOrder={dispatchOfficeWorkOrder}
+              />
+            </Suspense>
+          )}
+          {drawer === "browser" && (
+            <div
+              className={`in-app-browser ${inAppBrowserState?.loading ? "is-loading" : ""} ${inAppBrowserState?.error || error ? "has-error" : ""}`}
+            >
+              <div className="browser-chrome">
+                <form
+                  className="browser-toolbar"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void openInAppBrowser().catch(showError);
+                  }}
+                >
+                  <div className="browser-nav-actions">
+                    <button
+                      type="button"
+                      className="browser-icon-button"
+                      aria-label="Back"
+                      title="Back"
+                      disabled={!inAppBrowserState?.canGoBack}
+                      onClick={() =>
+                        workspace &&
+                        void window.waypoint.navigateInAppBrowser(
+                          workspace.id,
+                          "back",
                         )
                       }
                     >
-                      <option value="codex">Signed-in Codex CLI</option>
-                      <option value="claude">Signed-in Claude Code CLI</option>
-                    </select>
-                  </label>
-                  <div className="drawer-actions">
-                    <button
-                      disabled={!reflectionSources.length || reflectionActive}
-                      onClick={() => void startReflection().catch(showError)}
-                    >
-                      {reflectionActive
-                        ? "Reviewing…"
-                        : "Reflect on selected sources"}
+                      ←
                     </button>
-                    {reflectionActive && (
-                      <button
-                        className="secondary"
-                        aria-label="Cancel active reflection"
-                        onClick={() =>
-                          workspace &&
-                          void window.waypoint.cancelReflection(workspace.id)
-                        }
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </section>
-                <section aria-live="polite">
-                  <h3>Run history</h3>
-                  {reflectionRuns.map((run) => (
                     <button
-                      className="secondary"
-                      key={run.id}
-                      aria-pressed={selectedReflectionRunId === run.id}
+                      type="button"
+                      className="browser-icon-button"
+                      aria-label="Forward"
+                      title="Forward"
+                      disabled={!inAppBrowserState?.canGoForward}
                       onClick={() =>
-                        void selectReflectionRun(run.id).catch(showError)
+                        workspace &&
+                        void window.waypoint.navigateInAppBrowser(
+                          workspace.id,
+                          "forward",
+                        )
                       }
                     >
-                      {run.status} · {run.provider} ·{" "}
-                      {new Date(run.createdAt).toLocaleString()}
+                      →
                     </button>
-                  ))}
-                  {(() => {
-                    const run = reflectionRuns.find(
-                      (item) => item.id === selectedReflectionRunId,
-                    );
-                    return run ? (
-                      <article className="knowledge-item">
-                        <strong>{run.status}</strong>
-                        <p>
-                          Workspace: {workspace?.name} · {workspace?.id}
-                        </p>
-                        <p>
-                          Provider: {run.provider} CLI · {run.providerVersion}
-                        </p>
-                        <p>Policy: {run.policyVersion}</p>
-                        <p>Budget: {run.budgetJson}</p>
-                        <p>Omissions: {run.omissionsJson}</p>
-                        <small>
-                          Run {run.id} · {run.createdAt}
-                        </small>
-                      </article>
-                    ) : (
-                      <p className="drawer-empty">No reflection run yet.</p>
-                    );
-                  })()}
-                </section>
-                <section>
-                  <h3>
-                    Proposed revisions <span>{reflectionProposals.length}</span>
-                  </h3>
-                  {reflectionProposals.map((item) => (
-                    <article
-                      className="knowledge-item suggestion-item"
-                      key={item.id}
+                    <button
+                      type="button"
+                      className="browser-icon-button"
+                      aria-label={
+                        inAppBrowserState?.loading ? "Stop loading" : "Reload"
+                      }
+                      title={
+                        inAppBrowserState?.loading ? "Stop loading" : "Reload"
+                      }
+                      onClick={() =>
+                        workspace &&
+                        void window.waypoint.navigateInAppBrowser(
+                          workspace.id,
+                          inAppBrowserState?.loading ? "stop" : "reload",
+                        )
+                      }
                     >
-                      <div>
-                        <small className="suggestion-meta">
-                          {item.kind} · {item.status} ·{" "}
-                          {item.sourceIds.split(",").length} sources
-                        </small>
-                        <strong>{item.title}</strong>
-                        <p>{item.rationale}</p>
-                        <small>Before</small>
-                        <p>{item.beforeBody}</p>
-                        <small>Proposed</small>
-                        <p>
-                          {item.proposedBody ||
-                            "No winner selected. Edit is required before acceptance."}
-                        </p>
-                        <small>
-                          Sources: {item.sourceIds} · digests{" "}
-                          {item.sourceDigests}
-                        </small>
-                      </div>
-                      <div className="knowledge-actions">
-                        {item.status === "proposed" && (
-                          <>
-                            <button
-                              disabled={!item.proposedBody}
-                              onClick={() =>
-                                void resolveReflection(item, "accept").catch(
-                                  showError,
+                      {inAppBrowserState?.loading ? "×" : "↻"}
+                    </button>
+                  </div>
+                  <label className="browser-address-field">
+                    <span className="browser-address-shield" aria-hidden="true">
+                      ◈
+                    </span>
+                    <span className="sr-only">In-App Browser address</span>
+                    <input
+                      aria-label="In-App Browser address"
+                      value={browserAddress}
+                      onChange={(event) =>
+                        setBrowserAddress(event.target.value)
+                      }
+                      placeholder="https://allowed.example"
+                      spellCheck={false}
+                      autoCapitalize="none"
+                    />
+                    <span className="browser-address-host" aria-hidden="true">
+                      {browserHostLabel(browserAddress)}
+                    </span>
+                  </label>
+                  <button className="browser-go-button">Go</button>
+                  <div className="browser-session-actions">
+                    <button
+                      type="button"
+                      aria-label="Close browser session"
+                      title="Close browser session"
+                      onClick={() =>
+                        workspace &&
+                        void window.waypoint.closeInAppBrowser(workspace.id)
+                      }
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      className="browser-clear-button"
+                      aria-label="Clear isolated browser data"
+                      title="Clear isolated browser data"
+                      onClick={() =>
+                        workspace &&
+                        void window.waypoint.clearInAppBrowser(workspace.id)
+                      }
+                    >
+                      Clear data
+                    </button>
+                  </div>
+                </form>
+                {inAppBrowserState?.loading && (
+                  <div className="browser-progress" aria-hidden="true">
+                    <span />
+                  </div>
+                )}
+                <div className="browser-identity" role="status">
+                  <div className="browser-page-meta">
+                    <i
+                      className={
+                        inAppBrowserState?.error || error
+                          ? "error"
+                          : inAppBrowserState?.loading
+                            ? "loading"
+                            : inAppBrowserState?.open
+                              ? "ready"
+                              : "closed"
+                      }
+                    />
+                    <div>
+                      <strong>
+                        {inAppBrowserState?.title || "Private browser"}
+                      </strong>
+                      <small>
+                        {inAppBrowserState?.loading
+                          ? "Loading secure page…"
+                          : inAppBrowserState?.error || error
+                            ? "Page unavailable"
+                            : inAppBrowserState?.open
+                              ? browserHostLabel(
+                                  inAppBrowserState.url || browserAddress,
                                 )
-                              }
-                            >
-                              Accept
-                            </button>
-                            <button
-                              onClick={() =>
-                                void resolveReflection(item, "edit").catch(
-                                  showError,
-                                )
-                              }
-                            >
-                              Edit &amp; accept
-                            </button>
-                            <button
-                              onClick={() =>
-                                void resolveReflection(item, "reject").catch(
-                                  showError,
-                                )
-                              }
-                            >
-                              Reject
-                            </button>
-                          </>
-                        )}
-                        {["accepted", "edited"].includes(item.status) && (
+                              : "Session closed"}
+                      </small>
+                    </div>
+                  </div>
+                  <div
+                    className="browser-policy-chips"
+                    aria-label="Browser policy"
+                  >
+                    <span title="Browser data is isolated to this Waypoint session">
+                      ◉ {inAppBrowserState?.profile ?? "Waypoint isolated"}
+                    </span>
+                    <span title="Only explicitly allowed public domains can load">
+                      ◇ Public domains only
+                    </span>
+                    <span title="Untrusted page JavaScript is disabled">
+                      ⊘ Page scripts blocked
+                    </span>
+                  </div>
+                </div>
+                {(inAppBrowserState?.error || error) && (
+                  <div className="browser-error-banner" role="alert">
+                    <span>!</span>
+                    <div>
+                      <strong>Couldn’t open this page</strong>
+                      <small>{inAppBrowserState?.error || error}</small>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div
+                ref={inAppBrowserSlotRef}
+                className="in-app-browser-slot"
+                aria-label="Waypoint In-App Browser content"
+              >
+                {!inAppBrowserState?.open && (
+                  <div className="browser-empty-state">
+                    <span aria-hidden="true">◎</span>
+                    <strong>Browse without leaving Waypoint</strong>
+                    <p>
+                      Enter an approved HTTPS address above. Browsing stays in
+                      an isolated profile with public-domain controls.
+                    </p>
+                    <small>Page scripts remain blocked by design.</small>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {drawer === "reflection" && (
+            <div className="drawer-body">
+              <p className="drawer-intro">
+                Review selected local sources with an already signed-in CLI.
+                Sources are never overwritten and runs never schedule
+                themselves.
+              </p>
+              <section>
+                <h3>
+                  Sources <span>{reflectionSources.length}/50</span>
+                </h3>
+                {[
+                  ...memories.map((item) => ({
+                    id: item.id,
+                    title: item.title,
+                    kind: "memory",
+                  })),
+                  ...documents.map((item) => ({
+                    id: item.id,
+                    title: item.title,
+                    kind: "document",
+                  })),
+                ].map((item) => (
+                  <label className="meeting-consent" key={item.id}>
+                    <input
+                      type="checkbox"
+                      checked={reflectionSources.includes(item.id)}
+                      onChange={(event) =>
+                        setReflectionSources((current) =>
+                          event.target.checked
+                            ? [...current, item.id].slice(0, 50)
+                            : current.filter((id) => id !== item.id),
+                        )
+                      }
+                    />
+                    <span>
+                      <strong>{item.title}</strong>
+                      <small>
+                        {item.kind} · {item.id}
+                      </small>
+                    </span>
+                  </label>
+                ))}
+                <label className="settings-field">
+                  <span>Local reflection provider</span>
+                  <select
+                    aria-label="Local reflection provider"
+                    value={reflectionProvider}
+                    onChange={(event) =>
+                      setReflectionProvider(
+                        event.target.value as "codex" | "claude" | "grok",
+                      )
+                    }
+                  >
+                    <option value="codex">Signed-in Codex CLI</option>
+                    <option value="claude">Signed-in Claude Code CLI</option>
+                    <option value="grok">Signed-in Grok Build CLI</option>
+                  </select>
+                </label>
+                <div className="drawer-actions">
+                  <button
+                    disabled={!reflectionSources.length || reflectionActive}
+                    onClick={() => void startReflection().catch(showError)}
+                  >
+                    {reflectionActive
+                      ? "Reviewing…"
+                      : "Reflect on selected sources"}
+                  </button>
+                  {reflectionActive && (
+                    <button
+                      className="secondary"
+                      aria-label="Cancel active reflection"
+                      onClick={() =>
+                        workspace &&
+                        void window.waypoint.cancelReflection(workspace.id)
+                      }
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </section>
+              <section aria-live="polite">
+                <h3>Run history</h3>
+                {reflectionRuns.map((run) => (
+                  <button
+                    className="secondary"
+                    key={run.id}
+                    aria-pressed={selectedReflectionRunId === run.id}
+                    onClick={() =>
+                      void selectReflectionRun(run.id).catch(showError)
+                    }
+                  >
+                    {run.status} · {run.provider} ·{" "}
+                    {new Date(run.createdAt).toLocaleString()}
+                  </button>
+                ))}
+                {(() => {
+                  const run = reflectionRuns.find(
+                    (item) => item.id === selectedReflectionRunId,
+                  );
+                  return run ? (
+                    <article className="knowledge-item">
+                      <strong>{run.status}</strong>
+                      <p>
+                        Workspace: {workspace?.name} · {workspace?.id}
+                      </p>
+                      <p>
+                        Provider: {run.provider} CLI · {run.providerVersion}
+                      </p>
+                      <p>Policy: {run.policyVersion}</p>
+                      <p>Budget: {run.budgetJson}</p>
+                      <p>Omissions: {run.omissionsJson}</p>
+                      <small>
+                        Run {run.id} · {run.createdAt}
+                      </small>
+                    </article>
+                  ) : (
+                    <p className="drawer-empty">No reflection run yet.</p>
+                  );
+                })()}
+              </section>
+              <section>
+                <h3>
+                  Proposed revisions <span>{reflectionProposals.length}</span>
+                </h3>
+                {reflectionProposals.map((item) => (
+                  <article
+                    className="knowledge-item suggestion-item"
+                    key={item.id}
+                  >
+                    <div>
+                      <small className="suggestion-meta">
+                        {item.kind} · {item.status} ·{" "}
+                        {item.sourceIds.split(",").length} sources
+                      </small>
+                      <strong>{item.title}</strong>
+                      <p>{item.rationale}</p>
+                      <small>Before</small>
+                      <p>{item.beforeBody}</p>
+                      <small>Proposed</small>
+                      <p>
+                        {item.proposedBody ||
+                          "No winner selected. Edit is required before acceptance."}
+                      </p>
+                      <small>
+                        Sources: {item.sourceIds} · digests {item.sourceDigests}
+                      </small>
+                    </div>
+                    <div className="knowledge-actions">
+                      {item.status === "proposed" && (
+                        <>
                           <button
+                            disabled={!item.proposedBody}
                             onClick={() =>
-                              void resolveReflection(item, "rollback").catch(
+                              void resolveReflection(item, "accept").catch(
                                 showError,
                               )
                             }
                           >
-                            Rollback
+                            Accept
                           </button>
-                        )}
-                      </div>
-                    </article>
-                  ))}
-                  {!reflectionProposals.length && (
-                    <p className="drawer-empty">No proposals for this run.</p>
-                  )}
-                </section>
-              </div>
-            )}
-            {drawer === "knowledge" && (
-              <div className="drawer-body">
-                <p className="drawer-intro">
-                  Review what Waypoint may remember from conversation. Nothing
-                  becomes durable knowledge until you approve it.
-                </p>
-                <div className="drawer-actions">
-                  <button onClick={() => void scanSuggestions()}>
-                    Review conversation
-                  </button>
-                </div>
-                <section>
-                  <h3>
-                    Suggestions <span>{suggestions.length}</span>
-                  </h3>
-                  {suggestions.map((item) => (
-                    <article
-                      className="knowledge-item suggestion-item"
-                      key={item.id}
-                    >
-                      <div>
-                        <small className="suggestion-meta">
-                          {item.category} · {Math.round(item.confidence * 100)}%
-                          · {item.sourceRole}
-                        </small>
-                        <strong>{item.title}</strong>
-                        <p>{item.body}</p>
-                        <small>Source: “{item.sourceExcerpt}”</small>
-                      </div>
-                      <div className="knowledge-actions">
-                        <button
-                          onClick={() => void resolveSuggestion(item, "accept")}
-                        >
-                          Accept
-                        </button>
+                          <button
+                            onClick={() =>
+                              void resolveReflection(item, "edit").catch(
+                                showError,
+                              )
+                            }
+                          >
+                            Edit &amp; accept
+                          </button>
+                          <button
+                            onClick={() =>
+                              void resolveReflection(item, "reject").catch(
+                                showError,
+                              )
+                            }
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+                      {["accepted", "edited"].includes(item.status) && (
                         <button
                           onClick={() =>
-                            void resolveSuggestion(item, "accept", true)
+                            void resolveReflection(item, "rollback").catch(
+                              showError,
+                            )
                           }
                         >
-                          Edit &amp; accept
+                          Rollback
                         </button>
-                        <button
-                          onClick={() => void resolveSuggestion(item, "reject")}
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                  {!suggestions.length && (
-                    <p className="drawer-empty">
-                      No pending suggestions. Review the current conversation
-                      when you are ready.
-                    </p>
-                  )}
-                </section>
-                <section>
-                  <h3>
-                    Commitments{" "}
-                    <span>
-                      {
-                        commitments.filter((item) => item.status === "open")
-                          .length
-                      }
-                    </span>
-                  </h3>
-                  {commitments.map((item) => (
-                    <article
-                      id={`activity-target-${item.id}`}
-                      className={`knowledge-item commitment-item ${item.status} ${activityKnowledgeTarget === item.id ? "activity-target" : ""}`}
-                      key={item.id}
-                    >
-                      <div>
-                        <strong>{item.title}</strong>
-                        <p>{item.body}</p>
-                        <small>Source: “{item.sourceExcerpt}”</small>
-                      </div>
+                      )}
+                    </div>
+                  </article>
+                ))}
+                {!reflectionProposals.length && (
+                  <p className="drawer-empty">No proposals for this run.</p>
+                )}
+              </section>
+            </div>
+          )}
+          {drawer === "knowledge" && (
+            <div className="drawer-body">
+              <p className="drawer-intro">
+                Review what Waypoint may remember from conversation. Nothing
+                becomes durable knowledge until you approve it.
+              </p>
+              <div className="drawer-actions">
+                <button onClick={() => void scanSuggestions()}>
+                  Review conversation
+                </button>
+              </div>
+              <section>
+                <h3>
+                  Suggestions <span>{suggestions.length}</span>
+                </h3>
+                {suggestions.map((item) => (
+                  <article
+                    className="knowledge-item suggestion-item"
+                    key={item.id}
+                  >
+                    <div>
+                      <small className="suggestion-meta">
+                        {item.category} · {Math.round(item.confidence * 100)}% ·{" "}
+                        {item.sourceRole}
+                      </small>
+                      <strong>{item.title}</strong>
+                      <p>{item.body}</p>
+                      <small>Source: “{item.sourceExcerpt}”</small>
+                    </div>
+                    <div className="knowledge-actions">
                       <button
-                        aria-label={`${item.status === "open" ? "Complete" : "Reopen"} ${item.title}`}
-                        onClick={() => void toggleCommitment(item)}
+                        onClick={() => void resolveSuggestion(item, "accept")}
                       >
-                        {item.status === "open" ? "Complete" : "Reopen"}
+                        Accept
                       </button>
-                    </article>
-                  ))}
-                  {!commitments.length && (
-                    <p className="drawer-empty">No accepted commitments.</p>
-                  )}
-                </section>
-                <section>
-                  <h3>
-                    Notes <span>{documents.length}</span>
-                  </h3>
-                  <div className="knowledge-actions">
+                      <button
+                        onClick={() =>
+                          void resolveSuggestion(item, "accept", true)
+                        }
+                      >
+                        Edit &amp; accept
+                      </button>
+                      <button
+                        onClick={() => void resolveSuggestion(item, "reject")}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!suggestions.length && (
+                  <p className="drawer-empty">
+                    No pending suggestions. Review the current conversation when
+                    you are ready.
+                  </p>
+                )}
+              </section>
+              <section>
+                <h3>
+                  Commitments{" "}
+                  <span>
+                    {
+                      commitments.filter((item) => item.status === "open")
+                        .length
+                    }
+                  </span>
+                </h3>
+                {commitments.map((item) => (
+                  <article
+                    id={`activity-target-${item.id}`}
+                    className={`knowledge-item commitment-item ${item.status} ${activityKnowledgeTarget === item.id ? "activity-target" : ""}`}
+                    key={item.id}
+                  >
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.body}</p>
+                      <small>Source: “{item.sourceExcerpt}”</small>
+                    </div>
                     <button
-                      disabled={documentImportBusy}
-                      onClick={() => void importDocument()}
+                      aria-label={`${item.status === "open" ? "Complete" : "Reopen"} ${item.title}`}
+                      onClick={() => void toggleCommitment(item)}
                     >
-                      Import PDF, Word, or text
+                      {item.status === "open" ? "Complete" : "Reopen"}
                     </button>
-                  </div>
-                  {documents.map((item) => (
-                    <article
-                      id={`activity-target-${item.id}`}
-                      className={`knowledge-item ${activityKnowledgeTarget === item.id ? "activity-target" : ""}`}
-                      key={item.id}
-                    >
-                      <div>
-                        <strong>{item.title}</strong>
-                        <p>{item.body.slice(0, 180)}</p>
-                        {documentIndexes[item.id]?.sourceAvailable && (
-                          <small>
-                            {documentIndexes[item.id].sourceName} ·{" "}
-                            {documentIndexes[item.id].state === "indexed"
-                              ? `${documentIndexes[item.id].chunkCount} semantic chunks · ${documentIndexes[item.id].model}`
-                              : "lexical search ready · local embedding unavailable or not built"}
-                          </small>
-                        )}
-                      </div>
-                      <div className="knowledge-actions">
+                  </article>
+                ))}
+                {!commitments.length && (
+                  <p className="drawer-empty">No accepted commitments.</p>
+                )}
+              </section>
+              <section>
+                <h3>
+                  Notes <span>{documents.length}</span>
+                </h3>
+                <div className="knowledge-actions">
+                  <button
+                    disabled={documentImportBusy}
+                    onClick={() => void importDocument()}
+                  >
+                    Import PDF, Word, or text
+                  </button>
+                </div>
+                {documents.map((item) => (
+                  <article
+                    id={`activity-target-${item.id}`}
+                    className={`knowledge-item ${activityKnowledgeTarget === item.id ? "activity-target" : ""}`}
+                    key={item.id}
+                  >
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.body.slice(0, 180)}</p>
+                      {documentIndexes[item.id]?.sourceAvailable && (
+                        <small>
+                          {documentIndexes[item.id].sourceName} ·{" "}
+                          {documentIndexes[item.id].state === "indexed"
+                            ? `${documentIndexes[item.id].chunkCount} semantic chunks · ${documentIndexes[item.id].model}`
+                            : "lexical search ready · local embedding unavailable or not built"}
+                        </small>
+                      )}
+                    </div>
+                    <div className="knowledge-actions">
+                      <button
+                        aria-label={`Edit ${item.title}`}
+                        onClick={() => void editDocument(item)}
+                      >
+                        Edit
+                      </button>
+                      {documentIndexes[item.id]?.sourceAvailable && (
                         <button
-                          aria-label={`Edit ${item.title}`}
-                          onClick={() => void editDocument(item)}
+                          disabled={documentImportBusy}
+                          aria-label={`Reindex ${item.title}`}
+                          onClick={() => void reindexDocument(item.id)}
                         >
-                          Edit
+                          Reindex
                         </button>
-                        {documentIndexes[item.id]?.sourceAvailable && (
-                          <button
-                            disabled={documentImportBusy}
-                            aria-label={`Reindex ${item.title}`}
-                            onClick={() => void reindexDocument(item.id)}
-                          >
-                            Reindex
-                          </button>
-                        )}
-                        {(documentIndexes[item.id]?.retainedGenerations ?? 0) >
-                          1 && (
-                          <button
-                            disabled={documentImportBusy}
-                            aria-label={`Roll back index for ${item.title}`}
-                            onClick={() => void rollbackDocumentIndex(item.id)}
-                          >
-                            Roll back index
-                          </button>
-                        )}
+                      )}
+                      {(documentIndexes[item.id]?.retainedGenerations ?? 0) >
+                        1 && (
                         <button
-                          aria-label={`Delete ${item.title}`}
-                          onClick={() => void remove("document", item.id)}
+                          disabled={documentImportBusy}
+                          aria-label={`Roll back index for ${item.title}`}
+                          onClick={() => void rollbackDocumentIndex(item.id)}
                         >
-                          Delete
+                          Roll back index
                         </button>
-                      </div>
-                    </article>
-                  ))}
-                  {!documents.length && (
-                    <p className="drawer-empty">
-                      No notes yet. Use Save to knowledge on an assistant
-                      response.
-                    </p>
-                  )}
-                </section>
-                <section>
-                  <h3>
-                    Memories <span>{memories.length}</span>
-                  </h3>
-                  {memories.map((item) => (
-                    <article
-                      id={`activity-target-${item.id}`}
-                      className={`knowledge-item ${activityKnowledgeTarget === item.id ? "activity-target" : ""}`}
-                      key={item.id}
-                    >
-                      <div>
-                        <strong>{item.title}</strong>
-                        <p>{item.body.slice(0, 180)}</p>
-                      </div>
+                      )}
                       <button
                         aria-label={`Delete ${item.title}`}
-                        onClick={() => void remove("memory", item.id)}
+                        onClick={() => void remove("document", item.id)}
                       >
                         Delete
                       </button>
-                    </article>
-                  ))}
-                  {!memories.length && (
-                    <p className="drawer-empty">No memories yet.</p>
-                  )}
-                </section>
-              </div>
-            )}
-            {drawer === "rules" && (
-              <div className="drawer-body">
-                <p className="drawer-intro">
-                  Review workspace relationships and repeated directives. Rules
-                  remain advisory and cannot change tools, providers, security,
-                  schedules, sync, or external systems.
-                </p>
-                <div className="drawer-actions">
-                  <button onClick={() => void scanRules()}>
-                    Scan repeated directives
-                  </button>
-                </div>
-                <section>
-                  <h3>
-                    Rule suggestions <span>{ruleSuggestions.length}</span>
-                  </h3>
-                  {ruleSuggestions.map((item) => (
-                    <article
-                      className="knowledge-item suggestion-item"
-                      key={item.id}
-                    >
-                      <div>
-                        <small className="suggestion-meta">
-                          {item.scope} · v{item.extractorVersion} ·{" "}
-                          {item.sources.length} sources
-                        </small>
-                        <strong>{item.statement}</strong>
-                        {item.sources.map((source) => (
-                          <small key={source.messageId}>
-                            “{source.excerpt}” · {source.messageId.slice(0, 10)}
-                            …
-                          </small>
-                        ))}
-                      </div>
-                      <div className="knowledge-actions">
-                        <button onClick={() => void dryRunRule(item)}>
-                          Dry run
-                        </button>
-                        <button
-                          disabled={!item.lastDryRunAt}
-                          onClick={() => void resolveRule(item, "approve")}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => void resolveRule(item, "reject")}
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                  {!ruleSuggestions.length && (
-                    <p className="drawer-empty">
-                      No repeated user directives are waiting for review.
-                    </p>
-                  )}
-                </section>
-                <section>
-                  <h3>
-                    Advisory rules <span>{learnedRules.length}</span>
-                  </h3>
-                  {learnedRules.map((item) => (
-                    <article
-                      className={`knowledge-item rule-item ${item.enabled ? "enabled" : "disabled"}`}
-                      key={item.id}
-                    >
-                      <div>
-                        <small className="suggestion-meta">
-                          workspace · v{item.version} ·{" "}
-                          {item.enabled ? "enabled" : "disabled"}
-                        </small>
-                        <strong>{item.statement}</strong>
-                        <small>
-                          {item.outcomes
-                            .map(
-                              (outcome) =>
-                                `${outcome.action} (${outcome.matchCount})`,
-                            )
-                            .join(" · ")}
-                        </small>
-                      </div>
-                      <div className="knowledge-actions">
-                        <button onClick={() => void toggleRule(item)}>
-                          {item.enabled ? "Disable" : "Enable"}
-                        </button>
-                        <button
-                          disabled={item.priorEnabled === null}
-                          onClick={() => void revertRule(item)}
-                        >
-                          Revert
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                  {!learnedRules.length && (
-                    <p className="drawer-empty">No approved advisory rules.</p>
-                  )}
-                </section>
-                <section>
-                  <h3>
-                    Knowledge graph <span>{knowledgeGraph.nodes.length}</span>
-                  </h3>
-                  {knowledgeGraph.nodes.map((node) => (
+                    </div>
+                  </article>
+                ))}
+                {!documents.length && (
+                  <p className="drawer-empty">
+                    No notes yet. Use Save to knowledge on an assistant
+                    response.
+                  </p>
+                )}
+              </section>
+              <section>
+                <h3>
+                  Memories <span>{memories.length}</span>
+                </h3>
+                {memories.map((item) => (
+                  <article
+                    id={`activity-target-${item.id}`}
+                    className={`knowledge-item ${activityKnowledgeTarget === item.id ? "activity-target" : ""}`}
+                    key={item.id}
+                  >
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.body.slice(0, 180)}</p>
+                    </div>
                     <button
-                      className="graph-node"
-                      key={node.id}
-                      onClick={() => {
-                        if (node.kind === "chat") openChatTab(node.id);
-                        else openViewTab("knowledge");
-                      }}
+                      aria-label={`Delete ${item.title}`}
+                      onClick={() => void remove("memory", item.id)}
                     >
-                      <span>{node.kind}</span>
-                      <strong>{node.title}</strong>
-                      <small>
-                        {knowledgeGraph.edges
-                          .filter(
-                            (edge) =>
-                              edge.fromId === node.id || edge.toId === node.id,
-                          )
-                          .map(
-                            (edge) =>
-                              `${edge.fromId === node.id ? "→" : "←"} ${edge.type}`,
-                          )
-                          .join(" · ") || "No visible relationships"}
-                      </small>
+                      Delete
                     </button>
-                  ))}
-                  {!knowledgeGraph.nodes.length && (
-                    <p className="drawer-empty">
-                      Relationships appear after knowledge is saved from
-                      conversation.
-                    </p>
-                  )}
-                </section>
+                  </article>
+                ))}
+                {!memories.length && (
+                  <p className="drawer-empty">No memories yet.</p>
+                )}
+              </section>
+            </div>
+          )}
+          {drawer === "rules" && (
+            <div className="drawer-body">
+              <p className="drawer-intro">
+                Review workspace relationships and repeated directives. Rules
+                remain advisory and cannot change tools, providers, security,
+                schedules, sync, or external systems.
+              </p>
+              <div className="drawer-actions">
+                <button onClick={() => void scanRules()}>
+                  Scan repeated directives
+                </button>
               </div>
-            )}
-            {drawer === "briefing" && briefing && (
-              <div className="drawer-body">
+              <section>
+                <h3>
+                  Rule suggestions <span>{ruleSuggestions.length}</span>
+                </h3>
+                {ruleSuggestions.map((item) => (
+                  <article
+                    className="knowledge-item suggestion-item"
+                    key={item.id}
+                  >
+                    <div>
+                      <small className="suggestion-meta">
+                        {item.scope} · v{item.extractorVersion} ·{" "}
+                        {item.sources.length} sources
+                      </small>
+                      <strong>{item.statement}</strong>
+                      {item.sources.map((source) => (
+                        <small key={source.messageId}>
+                          “{source.excerpt}” · {source.messageId.slice(0, 10)}…
+                        </small>
+                      ))}
+                    </div>
+                    <div className="knowledge-actions">
+                      <button onClick={() => void dryRunRule(item)}>
+                        Dry run
+                      </button>
+                      <button
+                        disabled={!item.lastDryRunAt}
+                        onClick={() => void resolveRule(item, "approve")}
+                      >
+                        Approve
+                      </button>
+                      <button onClick={() => void resolveRule(item, "reject")}>
+                        Reject
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!ruleSuggestions.length && (
+                  <p className="drawer-empty">
+                    No repeated user directives are waiting for review.
+                  </p>
+                )}
+              </section>
+              <section>
+                <h3>
+                  Advisory rules <span>{learnedRules.length}</span>
+                </h3>
+                {learnedRules.map((item) => (
+                  <article
+                    className={`knowledge-item rule-item ${item.enabled ? "enabled" : "disabled"}`}
+                    key={item.id}
+                  >
+                    <div>
+                      <small className="suggestion-meta">
+                        workspace · v{item.version} ·{" "}
+                        {item.enabled ? "enabled" : "disabled"}
+                      </small>
+                      <strong>{item.statement}</strong>
+                      <small>
+                        {item.outcomes
+                          .map(
+                            (outcome) =>
+                              `${outcome.action} (${outcome.matchCount})`,
+                          )
+                          .join(" · ")}
+                      </small>
+                    </div>
+                    <div className="knowledge-actions">
+                      <button onClick={() => void toggleRule(item)}>
+                        {item.enabled ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        disabled={item.priorEnabled === null}
+                        onClick={() => void revertRule(item)}
+                      >
+                        Revert
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!learnedRules.length && (
+                  <p className="drawer-empty">No approved advisory rules.</p>
+                )}
+              </section>
+              <section>
+                <h3>
+                  Knowledge graph <span>{knowledgeGraph.nodes.length}</span>
+                </h3>
+                {knowledgeGraph.nodes.map((node) => (
+                  <button
+                    className="graph-node"
+                    key={node.id}
+                    onClick={() => {
+                      if (node.kind === "chat") openChatTab(node.id);
+                      else openViewTab("knowledge");
+                    }}
+                  >
+                    <span>{node.kind}</span>
+                    <strong>{node.title}</strong>
+                    <small>
+                      {knowledgeGraph.edges
+                        .filter(
+                          (edge) =>
+                            edge.fromId === node.id || edge.toId === node.id,
+                        )
+                        .map(
+                          (edge) =>
+                            `${edge.fromId === node.id ? "→" : "←"} ${edge.type}`,
+                        )
+                        .join(" · ") || "No visible relationships"}
+                    </small>
+                  </button>
+                ))}
+                {!knowledgeGraph.nodes.length && (
+                  <p className="drawer-empty">
+                    Relationships appear after knowledge is saved from
+                    conversation.
+                  </p>
+                )}
+              </section>
+            </div>
+          )}
+          {drawer === "briefing" && briefing && (
+            <div className="drawer-body">
+              <p className="drawer-intro">
+                A bounded local review for {briefing.localDay} in{" "}
+                {briefing.timezone}. Generated{" "}
+                {new Intl.DateTimeFormat(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                  timeZone: briefing.timezone,
+                }).format(new Date(briefing.generatedAt))}
+                . External accounts were not checked.
+              </p>
+              <div className="drawer-actions">
+                <button onClick={() => void openBriefing()}>
+                  Refresh briefing
+                </button>
+              </div>
+              <section>
+                <h3>
+                  For review <span>{briefing.items.length}</span>
+                </h3>
+                {briefing.items.map((item) => (
+                  <article
+                    className="knowledge-item briefing-item"
+                    key={`${item.kind}:${item.id}`}
+                  >
+                    <div>
+                      <small className="suggestion-meta">
+                        {item.kind} · {item.freshness} · {item.id.slice(0, 12)}…
+                      </small>
+                      <strong>{item.title}</strong>
+                      <p>
+                        {item.missingSource ? (
+                          "Source content is unavailable."
+                        ) : (
+                          <>
+                            {item.detail.slice(0, 240)}
+                            {item.detail.length > 240 || item.detailTruncated
+                              ? "…"
+                              : ""}
+                          </>
+                        )}
+                      </p>
+                      <small>
+                        {item.whyIncluded} · source excerpt · updated{" "}
+                        {new Intl.DateTimeFormat(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                          timeZone: briefing.timezone,
+                        }).format(new Date(item.updatedAt))}
+                      </small>
+                    </div>
+                    <button
+                      aria-label={`Dismiss ${item.title} for ${briefing.localDay}`}
+                      onClick={() => void dismissBriefing(item)}
+                    >
+                      Dismiss today
+                    </button>
+                  </article>
+                ))}
+                {!briefing.items.length && (
+                  <p className="drawer-empty">
+                    Nothing local is waiting for review today.
+                  </p>
+                )}
+              </section>
+              <section>
+                <h3>Coverage</h3>
                 <p className="drawer-intro">
-                  A bounded local review for {briefing.localDay} in{" "}
-                  {briefing.timezone}. Generated{" "}
-                  {new Intl.DateTimeFormat(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                    timeZone: briefing.timezone,
-                  }).format(new Date(briefing.generatedAt))}
-                  . External accounts were not checked.
+                  {briefing.coverage.openCommitments} open commitments ·{" "}
+                  {briefing.coverage.documents} notes ·{" "}
+                  {briefing.coverage.memories} memories ·{" "}
+                  {briefing.coverage.dismissed} dismissed today ·{" "}
+                  {briefing.coverage.missingSources} missing sources ·{" "}
+                  {briefing.coverage.omittedByLimit} omitted by limit
                 </p>
-                <div className="drawer-actions">
-                  <button onClick={() => void openBriefing()}>
-                    Refresh briefing
+                {briefing.omissions.map((item) => (
+                  <p className="briefing-omission" key={item}>
+                    {item}
+                  </p>
+                ))}
+              </section>
+            </div>
+          )}
+          {drawer === "meetings" && (
+            <div className="drawer-body">
+              <p className="drawer-intro">
+                Audio-only recording stays on this device and is never synced or
+                uploaded. Confirm that everyone has consented and that recording
+                is legal where you are. Recordings remain until you explicitly
+                delete them.
+              </p>
+              <label className="meeting-consent">
+                <input
+                  type="checkbox"
+                  checked={meetingConsent}
+                  disabled={Boolean(recordingMeetingId)}
+                  onChange={(event) => setMeetingConsent(event.target.checked)}
+                />{" "}
+                I have informed participants and confirmed consent for this
+                recording session.
+              </label>
+              {recordingMeetingId ? (
+                <div
+                  className="recording-state"
+                  role="status"
+                  aria-live="assertive"
+                >
+                  <i /> Recording · {Math.floor(recordingSeconds / 60)}:
+                  {String(recordingSeconds % 60).padStart(2, "0")}
+                  <button onClick={() => void stopMeeting().catch(showError)}>
+                    Stop &amp; save locally
                   </button>
                 </div>
-                <section>
-                  <h3>
-                    For review <span>{briefing.items.length}</span>
-                  </h3>
-                  {briefing.items.map((item) => (
-                    <article
-                      className="knowledge-item briefing-item"
-                      key={`${item.kind}:${item.id}`}
-                    >
+              ) : (
+                <div className="drawer-actions">
+                  <button
+                    disabled={!meetingConsent}
+                    onClick={() => void startMeeting().catch(showError)}
+                  >
+                    Start audio recording
+                  </button>
+                </div>
+              )}
+              <p className="transcription-note">
+                {transcriptionCapability?.reason}
+              </p>
+              <section>
+                <h3>
+                  Local recordings <span>{meetings.length}</span>
+                </h3>
+                {meetings.map((item) => (
+                  <article className="meeting-item" key={item.id}>
+                    <header>
                       <div>
-                        <small className="suggestion-meta">
-                          {item.kind} · {item.freshness} ·{" "}
-                          {item.id.slice(0, 12)}…
-                        </small>
                         <strong>{item.title}</strong>
-                        <p>
-                          {item.missingSource ? (
-                            "Source content is unavailable."
-                          ) : (
-                            <>
-                              {item.detail.slice(0, 240)}
-                              {item.detail.length > 240 || item.detailTruncated
-                                ? "…"
-                                : ""}
-                            </>
-                          )}
-                        </p>
                         <small>
-                          {item.whyIncluded} · source excerpt · updated{" "}
-                          {new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                            timeZone: briefing.timezone,
-                          }).format(new Date(item.updatedAt))}
+                          {item.status} ·{" "}
+                          {item.bytes
+                            ? `${(item.bytes / 1024 / 1024).toFixed(1)} MiB`
+                            : "no saved audio"}{" "}
+                          · speakers uncertain
                         </small>
                       </div>
                       <button
-                        aria-label={`Dismiss ${item.title} for ${briefing.localDay}`}
-                        onClick={() => void dismissBriefing(item)}
+                        onClick={() =>
+                          void removeMeeting(item.id).catch(showError)
+                        }
                       >
-                        Dismiss today
+                        Delete
                       </button>
-                    </article>
-                  ))}
-                  {!briefing.items.length && (
-                    <p className="drawer-empty">
-                      Nothing local is waiting for review today.
-                    </p>
-                  )}
-                </section>
-                <section>
-                  <h3>Coverage</h3>
-                  <p className="drawer-intro">
-                    {briefing.coverage.openCommitments} open commitments ·{" "}
-                    {briefing.coverage.documents} notes ·{" "}
-                    {briefing.coverage.memories} memories ·{" "}
-                    {briefing.coverage.dismissed} dismissed today ·{" "}
-                    {briefing.coverage.missingSources} missing sources ·{" "}
-                    {briefing.coverage.omittedByLimit} omitted by limit
-                  </p>
-                  {briefing.omissions.map((item) => (
-                    <p className="briefing-omission" key={item}>
-                      {item}
-                    </p>
-                  ))}
-                </section>
-              </div>
-            )}
-            {drawer === "meetings" && (
-              <div className="drawer-body">
-                <p className="drawer-intro">
-                  Audio-only recording stays on this device and is never synced or
-                  uploaded. Confirm that everyone has consented and that
-                  recording is legal where you are. Recordings remain until you
-                  explicitly delete them.
-                </p>
-                <label className="meeting-consent">
-                  <input
-                    type="checkbox"
-                    checked={meetingConsent}
-                    disabled={Boolean(recordingMeetingId)}
-                    onChange={(event) =>
-                      setMeetingConsent(event.target.checked)
-                    }
-                  />{" "}
-                  I have informed participants and confirmed consent for this
-                  recording session.
-                </label>
-                {recordingMeetingId ? (
-                  <div
-                    className="recording-state"
-                    role="status"
-                    aria-live="assertive"
-                  >
-                    <i /> Recording · {Math.floor(recordingSeconds / 60)}:
-                    {String(recordingSeconds % 60).padStart(2, "0")}
-                    <button onClick={() => void stopMeeting().catch(showError)}>
-                      Stop &amp; save locally
-                    </button>
-                  </div>
-                ) : (
-                  <div className="drawer-actions">
-                    <button
-                      disabled={!meetingConsent}
-                      onClick={() => void startMeeting().catch(showError)}
-                    >
-                      Start audio recording
-                    </button>
-                  </div>
-                )}
-                <p className="transcription-note">
-                  {transcriptionCapability?.reason}
-                </p>
-                <section>
-                  <h3>
-                    Local recordings <span>{meetings.length}</span>
-                  </h3>
-                  {meetings.map((item) => (
-                    <article className="meeting-item" key={item.id}>
-                      <header>
-                        <div>
-                          <strong>{item.title}</strong>
-                          <small>
-                            {item.status} ·{" "}
-                            {item.bytes
-                              ? `${(item.bytes / 1024 / 1024).toFixed(1)} MiB`
-                              : "no saved audio"}{" "}
-                            · speakers uncertain
-                          </small>
-                        </div>
-                        <button
-                          onClick={() =>
-                            void removeMeeting(item.id).catch(showError)
-                          }
-                        >
-                          Delete
-                        </button>
-                      </header>
-                      {item.status === "ready" && (
-                        <>
-                          <div className="meeting-actions">
-                            <button
-                              onClick={() =>
-                                void playMeeting(item.id).catch(showError)
-                              }
-                            >
-                              {meetingPlayback?.meetingId === item.id
-                                ? "Hide player"
-                                : "Play"}
-                            </button>
-                            <button
-                              onClick={() =>
-                                void window.waypoint
-                                  .exportMeetingAudio(workspace.id, item.id)
-                                  .catch(showError)
-                              }
-                            >
-                              Export audio
-                            </button>
-                            {meetingTranscriptionRun?.meetingId === item.id ? (
-                              <button
-                                onClick={() =>
-                                  void cancelMeetingTranscription().catch(
-                                    showError,
-                                  )
-                                }
-                              >
-                                {meetingTranscriptionRun.phase === "preparing"
-                                  ? "Cancel · preparing audio"
-                                  : `Cancel transcription (${meetingTranscriptionRun.completed}/${meetingTranscriptionRun.total ?? "?"} segments)`}
-                              </button>
-                            ) : (
-                              <button
-                                disabled={
-                                  !transcriptionCapability?.available ||
-                                  Boolean(meetingTranscriptionRun)
-                                }
-                                onClick={() => void transcribeMeeting(item.id)}
-                              >
-                                Transcribe locally
-                              </button>
-                            )}
-                          </div>
-                          {meetingPlayback?.meetingId === item.id && (
-                            <audio
-                              className="meeting-player"
-                              controls
-                              autoPlay
-                              preload="metadata"
-                              src={meetingPlayback.url}
-                              onError={() =>
-                                showError(
-                                  "The local recording player could not load this audio.",
-                                )
-                              }
-                            >
-                              Local audio playback is unavailable in this renderer.
-                            </audio>
-                          )}
-                          <textarea
-                            aria-label={`Transcript draft for ${item.title}`}
-                            placeholder="Enter or paste a local transcript draft. Mark uncertain speakers like “Speaker 1?”."
-                            value={transcriptDrafts[item.id] ?? ""}
-                            onChange={(event) =>
-                              setTranscriptDrafts((current) => ({
-                                ...current,
-                                [item.id]: event.target.value,
-                              }))
-                            }
-                          />
-                          <div className="meeting-actions">
-                            <button
-                              onClick={() =>
-                                void saveTranscript(item.id, false).catch(
-                                  showError,
-                                )
-                              }
-                            >
-                              Save draft
-                            </button>
-                            <button
-                              onClick={() =>
-                                void saveTranscript(item.id, true).catch(
-                                  showError,
-                                )
-                              }
-                            >
-                              Mark reviewed
-                            </button>
-                            <button
-                              disabled={item.transcriptStatus !== "reviewed"}
-                              onClick={() =>
-                                void saveMeetingMemory(item.id).catch(showError)
-                              }
-                            >
-                              Save to knowledge
-                            </button>
-                          </div>
-                        </>
-                      )}
-                      {item.status === "failed" && (
-                        <p>
-                          Capture ended without a retained audio artifact (
-                          {item.failureCode?.replaceAll("_", " ")}). Delete this
-                          record when no longer useful.
-                        </p>
-                      )}
-                    </article>
-                  ))}
-                  {!meetings.length && (
-                    <p className="drawer-empty">No local meeting recordings.</p>
-                  )}
-                </section>
-              </div>
-            )}
-            {drawer === "activity" && (
-              <div className="drawer-body">
-                <section
-                  className="capture-console"
-                  aria-label="Whole-device activity capture"
-                >
-                  <header>
-                    <div>
-                      <strong>Whole-device history</strong>
-                      <small role="status">
-                        {!activityCapture
-                          ? "Checking…"
-                          : !activityCapture.policy.enabled
-                            ? "Off"
-                            : activityCapture.policy.paused ||
-                                !activityCapture.readiness.available
-                              ? "Paused"
-                              : "Capturing periodic snapshots"}
-                      </small>
-                    </div>
-                    <span
-                      className={
-                        activityCapture?.policy.enabled &&
-                        !activityCapture.policy.paused &&
-                        activityCapture.readiness.available
-                          ? "active"
-                          : "paused"
-                      }
-                    />
-                  </header>
-                  <p>
-                    Opt-in periodic screenshots, never video. Pause is immediate
-                    and never backfills. No cloud capture or raw OCR is placed
-                    in receipts.
-                  </p>
-                  {activityCapture && (
-                    <>
-                      <div className="capture-readiness">
-                        <strong>
-                          {activityCapture.readiness.available
-                            ? "Native capture ready"
-                            : "Native capture unavailable"}
-                        </strong>
-                        <span>{activityCapture.readiness.reason}</span>
-                      </div>
-                      <label>
-                        Raw snapshot retention
-                        <select
-                          aria-label="Raw snapshot retention"
-                          value={activityCapture.policy.retentionDays}
-                          onChange={(event) =>
-                            void updateActivityCapture({
-                              retentionDays: Number(event.target.value) as
-                                90 | 183 | 365,
-                            }).catch(showError)
-                          }
-                        >
-                          <option value="90">90 days</option>
-                          <option value="183">6 months</option>
-                          <option value="365">1 year</option>
-                        </select>
-                      </label>
-                      <label>
-                        Excluded app bundle IDs or process names
-                        <textarea
-                          aria-label="Excluded apps, one per line"
-                          value={activityExclusions}
-                          onChange={(event) =>
-                            setActivityExclusions(event.target.value)
-                          }
-                          onBlur={() =>
-                            void updateActivityCapture({
-                              exclusions: activityExclusions
-                                .split("\n")
-                                .map((item) => item.trim())
-                                .filter(Boolean),
-                            }).catch(showError)
-                          }
-                          placeholder="com.example.private-app"
-                        />
-                      </label>
-                      <label className="capture-check">
-                        <input
-                          type="checkbox"
-                          checked={activityCapture.policy.syncRaw}
-                          onChange={(event) =>
-                            void updateActivityCapture({
-                              syncRaw: event.target.checked,
-                            }).catch(showError)
-                          }
-                        />
-                        Encrypted raw snapshot sync and backup (can use
-                        substantial storage/bandwidth)
-                      </label>
-                      <div className="drawer-actions">
-                        <button
-                          disabled={!activityCapture.readiness.available}
-                          onClick={() =>
-                            void updateActivityCapture({
-                              enabled: true,
-                              paused: false,
-                            }).catch(showError)
-                          }
-                        >
-                          Preview &amp; resume
-                        </button>
-                        <button
-                          className="secondary"
-                          disabled={
-                            !activityCapture.policy.enabled ||
-                            activityCapture.policy.paused
-                          }
-                          onClick={() =>
-                            void updateActivityCapture({ paused: true }).catch(
-                              showError,
-                            )
-                          }
-                        >
-                          Pause now
-                        </button>
-                        <button
-                          className="secondary"
-                          disabled={!activityCapture.policy.enabled}
-                          onClick={() =>
-                            void updateActivityCapture({
-                              enabled: false,
-                              paused: true,
-                            }).catch(showError)
-                          }
-                        >
-                          Stop
-                        </button>
-                      </div>
-                      <small>
-                        {activityCapture.storage.count} snapshots ·{" "}
-                        {(activityCapture.storage.bytes / 1024 / 1024).toFixed(
-                          1,
-                        )}{" "}
-                        MB local raw storage
-                      </small>
-                    </>
-                  )}
-                  <div className="activity-filters">
-                    <input
-                      aria-label="Search captured app timeline"
-                      placeholder="Search app, process, or device"
-                      value={activitySnapshotQuery}
-                      onChange={(event) =>
-                        setActivitySnapshotQuery(event.target.value)
-                      }
-                    />
-                    <button
-                      disabled={!activitySnapshots.length}
-                      onClick={() =>
-                        void removeAllActivitySnapshots().catch(showError)
-                      }
-                    >
-                      Delete all raw
-                    </button>
-                  </div>
-                  {activitySnapshots.map((item) => (
-                    <article className="capture-item" key={item.id}>
-                      <div>
-                        <strong>{item.appTitle || item.appProcess}</strong>
-                        <small>
-                          {item.appBundleId} · {item.deviceId} /{" "}
-                          {item.displayId}
-                        </small>
-                        <small>
-                          Captured{" "}
-                          {new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          }).format(new Date(item.capturedAt))}{" "}
-                          · expires{" "}
-                          {new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                          }).format(new Date(item.expiresAt))}{" "}
-                          · {(item.bytes / 1024).toFixed(1)} KB
-                          {item.synced
-                            ? " · encrypted sync queued/retained"
-                            : " · local only"}
-                        </small>
-                      </div>
-                      <div>
-                        <button
-                          aria-label={`View snapshot from ${item.appTitle || item.appProcess}`}
-                          onClick={() =>
-                            void previewActivitySnapshot(item.id).catch(
-                              showError,
-                            )
-                          }
-                        >
-                          View
-                        </button>
-                        <button
-                          aria-label={`Delete snapshot from ${item.appTitle || item.appProcess}`}
-                          onClick={() =>
-                            void removeActivitySnapshot(item.id).catch(
-                              showError,
-                            )
-                          }
-                        >
-                          Delete
-                        </button>
-                      </div>
-                      {activityPreview?.id === item.id && (
-                        <figure className="capture-preview">
-                          <img
-                            src={activityPreview.url}
-                            alt={`Private snapshot from ${item.appTitle || item.appProcess} at ${item.capturedAt}`}
-                          />
-                          <button onClick={() => setActivityPreview(undefined)}>
-                            Close preview
-                          </button>
-                        </figure>
-                      )}
-                    </article>
-                  ))}
-                  {!activitySnapshots.length && (
-                    <p className="drawer-empty">
-                      No raw activity snapshots. Waypoint has not captured this
-                      screen.
-                    </p>
-                  )}
-                </section>
-                <p className="drawer-intro">
-                  A workspace-scoped history of meaningful local actions. Event
-                  details never copy prompts, documents, transcripts, file
-                  paths, or credentials.
-                </p>
-                <div className="activity-filters">
-                  <input
-                    value={activityQuery}
-                    onChange={(event) => setActivityQuery(event.target.value)}
-                    placeholder="Filter activity"
-                    aria-label="Filter activity"
-                  />
-                  <select
-                    value={activityFamilyFilter}
-                    onChange={(event) =>
-                      setActivityFamilyFilter(
-                        event.target.value as ActivityFamily | "all",
-                      )
-                    }
-                    aria-label="Activity family"
-                  >
-                    <option value="all">All activity</option>
-                    <option value="content">Content</option>
-                    <option value="execution">AI execution</option>
-                    <option value="sync">Sync &amp; devices</option>
-                    <option value="rules">Rules</option>
-                    <option value="automation">Automations</option>
-                    <option value="meeting">Meetings</option>
-                    <option value="lifecycle">Deletion</option>
-                    <option value="maintenance">Maintenance</option>
-                  </select>
-                </div>
-                {activity
-                  .filter(
-                    (item) =>
-                      (activityFamilyFilter === "all" ||
-                        item.family === activityFamilyFilter) &&
-                      (!activityQuery.trim() ||
-                        [
-                          item.action,
-                          item.family,
-                          item.objectKind,
-                          item.objectTitle ?? "",
-                        ].some((value) =>
-                          value
-                            .toLocaleLowerCase()
-                            .includes(activityQuery.trim().toLocaleLowerCase()),
-                        )),
-                  )
-                  .map((item) => (
-                    <article
-                      className={`activity-item ${item.family} ${item.objectState}`}
-                      key={item.id}
-                    >
-                      <span />
-                      <div>
-                        <small className="activity-family">
-                          {item.family} · {item.objectState}
-                        </small>
-                        <strong>{item.action.replaceAll(".", " ")}</strong>
-                        {Object.keys(item.details).length > 0 && (
-                          <small>
-                            {Object.entries(item.details)
-                              .map(([key, value]) => `${key}: ${String(value)}`)
-                              .join(" · ")}
-                          </small>
-                        )}
-                        {item.objectTitle && (
+                    </header>
+                    {item.status === "ready" && (
+                      <>
+                        <div className="meeting-actions">
                           <button
-                            onClick={() => followActivity(item)}
-                            disabled={
-                              item.objectState !== "available" || !item.targetId
+                            onClick={() =>
+                              void playMeeting(item.id).catch(showError)
                             }
                           >
-                            {item.objectTitle}
+                            {meetingPlayback?.meetingId === item.id
+                              ? "Hide player"
+                              : "Play"}
                           </button>
+                          <button
+                            onClick={() =>
+                              void window.waypoint
+                                .exportMeetingAudio(workspace.id, item.id)
+                                .catch(showError)
+                            }
+                          >
+                            Export audio
+                          </button>
+                          {meetingTranscriptionRun?.meetingId === item.id ? (
+                            <button
+                              onClick={() =>
+                                void cancelMeetingTranscription().catch(
+                                  showError,
+                                )
+                              }
+                            >
+                              {meetingTranscriptionRun.phase === "preparing"
+                                ? "Cancel · preparing audio"
+                                : `Cancel transcription (${meetingTranscriptionRun.completed}/${meetingTranscriptionRun.total ?? "?"} segments)`}
+                            </button>
+                          ) : (
+                            <button
+                              disabled={
+                                !transcriptionCapability?.available ||
+                                Boolean(meetingTranscriptionRun)
+                              }
+                              onClick={() => void transcribeMeeting(item.id)}
+                            >
+                              Transcribe locally
+                            </button>
+                          )}
+                        </div>
+                        {meetingPlayback?.meetingId === item.id && (
+                          <audio
+                            className="meeting-player"
+                            controls
+                            autoPlay
+                            preload="metadata"
+                            src={meetingPlayback.url}
+                            onError={() =>
+                              showError(
+                                "The local recording player could not load this audio.",
+                              )
+                            }
+                          >
+                            Local audio playback is unavailable in this
+                            renderer.
+                          </audio>
                         )}
-                        <small>
-                          {new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          }).format(new Date(item.createdAt))}
-                        </small>
-                      </div>
-                    </article>
-                  ))}
-                {!activity.filter(
+                        <textarea
+                          aria-label={`Transcript draft for ${item.title}`}
+                          placeholder="Enter or paste a local transcript draft. Mark uncertain speakers like “Speaker 1?”."
+                          value={transcriptDrafts[item.id] ?? ""}
+                          onChange={(event) =>
+                            setTranscriptDrafts((current) => ({
+                              ...current,
+                              [item.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <div className="meeting-actions">
+                          <button
+                            onClick={() =>
+                              void saveTranscript(item.id, false).catch(
+                                showError,
+                              )
+                            }
+                          >
+                            Save draft
+                          </button>
+                          <button
+                            onClick={() =>
+                              void saveTranscript(item.id, true).catch(
+                                showError,
+                              )
+                            }
+                          >
+                            Mark reviewed
+                          </button>
+                          <button
+                            disabled={item.transcriptStatus !== "reviewed"}
+                            onClick={() =>
+                              void saveMeetingMemory(item.id).catch(showError)
+                            }
+                          >
+                            Save to knowledge
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {item.status === "failed" && (
+                      <p>
+                        Capture ended without a retained audio artifact (
+                        {item.failureCode?.replaceAll("_", " ")}). Delete this
+                        record when no longer useful.
+                      </p>
+                    )}
+                  </article>
+                ))}
+                {!meetings.length && (
+                  <p className="drawer-empty">No local meeting recordings.</p>
+                )}
+              </section>
+            </div>
+          )}
+          {drawer === "activity" && (
+            <div className="drawer-body">
+              <section
+                className="capture-console"
+                aria-label="Whole-device activity capture"
+              >
+                <header>
+                  <div>
+                    <strong>Whole-device history</strong>
+                    <small role="status">
+                      {!activityCapture
+                        ? "Checking…"
+                        : !activityCapture.policy.enabled
+                          ? "Off"
+                          : activityCapture.policy.paused ||
+                              !activityCapture.readiness.available
+                            ? "Paused"
+                            : "Capturing periodic snapshots"}
+                    </small>
+                  </div>
+                  <span
+                    className={
+                      activityCapture?.policy.enabled &&
+                      !activityCapture.policy.paused &&
+                      activityCapture.readiness.available
+                        ? "active"
+                        : "paused"
+                    }
+                  />
+                </header>
+                <p>
+                  Opt-in periodic screenshots, never video. Pause is immediate
+                  and never backfills. No cloud capture or raw OCR is placed in
+                  receipts.
+                </p>
+                {activityCapture && (
+                  <>
+                    <div className="capture-readiness">
+                      <strong>
+                        {activityCapture.readiness.available
+                          ? "Native capture ready"
+                          : "Native capture unavailable"}
+                      </strong>
+                      <span>{activityCapture.readiness.reason}</span>
+                    </div>
+                    <label>
+                      Raw snapshot retention
+                      <select
+                        aria-label="Raw snapshot retention"
+                        value={activityCapture.policy.retentionDays}
+                        onChange={(event) =>
+                          void updateActivityCapture({
+                            retentionDays: Number(event.target.value) as
+                              90 | 183 | 365,
+                          }).catch(showError)
+                        }
+                      >
+                        <option value="90">90 days</option>
+                        <option value="183">6 months</option>
+                        <option value="365">1 year</option>
+                      </select>
+                    </label>
+                    <label>
+                      Excluded app bundle IDs or process names
+                      <textarea
+                        aria-label="Excluded apps, one per line"
+                        value={activityExclusions}
+                        onChange={(event) =>
+                          setActivityExclusions(event.target.value)
+                        }
+                        onBlur={() =>
+                          void updateActivityCapture({
+                            exclusions: activityExclusions
+                              .split("\n")
+                              .map((item) => item.trim())
+                              .filter(Boolean),
+                          }).catch(showError)
+                        }
+                        placeholder="com.example.private-app"
+                      />
+                    </label>
+                    <label className="capture-check">
+                      <input
+                        type="checkbox"
+                        checked={activityCapture.policy.syncRaw}
+                        onChange={(event) =>
+                          void updateActivityCapture({
+                            syncRaw: event.target.checked,
+                          }).catch(showError)
+                        }
+                      />
+                      Encrypted raw snapshot sync and backup (can use
+                      substantial storage/bandwidth)
+                    </label>
+                    <div className="drawer-actions">
+                      <button
+                        disabled={!activityCapture.readiness.available}
+                        onClick={() =>
+                          void updateActivityCapture({
+                            enabled: true,
+                            paused: false,
+                          }).catch(showError)
+                        }
+                      >
+                        Preview &amp; resume
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={
+                          !activityCapture.policy.enabled ||
+                          activityCapture.policy.paused
+                        }
+                        onClick={() =>
+                          void updateActivityCapture({ paused: true }).catch(
+                            showError,
+                          )
+                        }
+                      >
+                        Pause now
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={!activityCapture.policy.enabled}
+                        onClick={() =>
+                          void updateActivityCapture({
+                            enabled: false,
+                            paused: true,
+                          }).catch(showError)
+                        }
+                      >
+                        Stop
+                      </button>
+                    </div>
+                    <small>
+                      {activityCapture.storage.count} snapshots ·{" "}
+                      {(activityCapture.storage.bytes / 1024 / 1024).toFixed(1)}{" "}
+                      MB local raw storage
+                    </small>
+                  </>
+                )}
+                <div className="activity-filters">
+                  <input
+                    aria-label="Search captured app timeline"
+                    placeholder="Search app, process, or device"
+                    value={activitySnapshotQuery}
+                    onChange={(event) =>
+                      setActivitySnapshotQuery(event.target.value)
+                    }
+                  />
+                  <button
+                    disabled={!activitySnapshots.length}
+                    onClick={() =>
+                      void removeAllActivitySnapshots().catch(showError)
+                    }
+                  >
+                    Delete all raw
+                  </button>
+                </div>
+                {activitySnapshots.map((item) => (
+                  <article className="capture-item" key={item.id}>
+                    <div>
+                      <strong>{item.appTitle || item.appProcess}</strong>
+                      <small>
+                        {item.appBundleId} · {item.deviceId} / {item.displayId}
+                      </small>
+                      <small>
+                        Captured{" "}
+                        {new Intl.DateTimeFormat(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(item.capturedAt))}{" "}
+                        · expires{" "}
+                        {new Intl.DateTimeFormat(undefined, {
+                          dateStyle: "medium",
+                        }).format(new Date(item.expiresAt))}{" "}
+                        · {(item.bytes / 1024).toFixed(1)} KB
+                        {item.synced
+                          ? " · encrypted sync queued/retained"
+                          : " · local only"}
+                      </small>
+                    </div>
+                    <div>
+                      <button
+                        aria-label={`View snapshot from ${item.appTitle || item.appProcess}`}
+                        onClick={() =>
+                          void previewActivitySnapshot(item.id).catch(showError)
+                        }
+                      >
+                        View
+                      </button>
+                      <button
+                        aria-label={`Delete snapshot from ${item.appTitle || item.appProcess}`}
+                        onClick={() =>
+                          void removeActivitySnapshot(item.id).catch(showError)
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    {activityPreview?.id === item.id && (
+                      <figure className="capture-preview">
+                        <img
+                          src={activityPreview.url}
+                          alt={`Private snapshot from ${item.appTitle || item.appProcess} at ${item.capturedAt}`}
+                        />
+                        <button onClick={() => setActivityPreview(undefined)}>
+                          Close preview
+                        </button>
+                      </figure>
+                    )}
+                  </article>
+                ))}
+                {!activitySnapshots.length && (
+                  <p className="drawer-empty">
+                    No raw activity snapshots. Waypoint has not captured this
+                    screen.
+                  </p>
+                )}
+              </section>
+              <p className="drawer-intro">
+                A workspace-scoped history of meaningful local actions. Event
+                details never copy prompts, documents, transcripts, file paths,
+                or credentials.
+              </p>
+              <div className="activity-filters">
+                <input
+                  value={activityQuery}
+                  onChange={(event) => setActivityQuery(event.target.value)}
+                  placeholder="Filter activity"
+                  aria-label="Filter activity"
+                />
+                <select
+                  value={activityFamilyFilter}
+                  onChange={(event) =>
+                    setActivityFamilyFilter(
+                      event.target.value as ActivityFamily | "all",
+                    )
+                  }
+                  aria-label="Activity family"
+                >
+                  <option value="all">All activity</option>
+                  <option value="content">Content</option>
+                  <option value="execution">AI execution</option>
+                  <option value="sync">Sync &amp; devices</option>
+                  <option value="rules">Rules</option>
+                  <option value="automation">Automations</option>
+                  <option value="meeting">Meetings</option>
+                  <option value="lifecycle">Deletion</option>
+                  <option value="maintenance">Maintenance</option>
+                </select>
+              </div>
+              {activity
+                .filter(
                   (item) =>
                     (activityFamilyFilter === "all" ||
                       item.family === activityFamilyFilter) &&
@@ -5621,87 +6867,285 @@ export function App() {
                           .toLocaleLowerCase()
                           .includes(activityQuery.trim().toLocaleLowerCase()),
                       )),
-                ).length && (
-                  <p className="drawer-empty">
-                    No activity matches this filter. Meeting and automation
-                    events appear only after those features are explicitly
-                    enabled.
-                  </p>
-                )}
-              </div>
-            )}
-            {drawer === "health" && (
-              <div className="drawer-body">
-                <div className="drawer-actions">
-                  <button onClick={() => void runHealth()} disabled={checking}>
-                    {checking ? "Checking…" : "Run local checks"}
-                  </button>
-                </div>
-                {diagnostics?.results.map((item) => (
+                )
+                .map((item) => (
                   <article
-                    className={`health-item ${item.status}`}
-                    key={item.code}
+                    className={`activity-item ${item.family} ${item.objectState}`}
+                    key={item.id}
                   >
-                    <span>{item.status.replace("_", " ")}</span>
-                    <strong>{item.code}</strong>
-                    <p>{item.summary}</p>
-                    {item.remediation && <small>{item.remediation}</small>}
+                    <span />
+                    <div>
+                      <small className="activity-family">
+                        {item.family} · {item.objectState}
+                      </small>
+                      <strong>{item.action.replaceAll(".", " ")}</strong>
+                      {Object.keys(item.details).length > 0 && (
+                        <small>
+                          {Object.entries(item.details)
+                            .map(([key, value]) => `${key}: ${String(value)}`)
+                            .join(" · ")}
+                        </small>
+                      )}
+                      {item.objectTitle && (
+                        <button
+                          onClick={() => followActivity(item)}
+                          disabled={
+                            item.objectState !== "available" || !item.targetId
+                          }
+                        >
+                          {item.objectTitle}
+                        </button>
+                      )}
+                      <small>
+                        {new Intl.DateTimeFormat(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(item.createdAt))}
+                      </small>
+                    </div>
                   </article>
-                )) || (
-                  <p className="drawer-empty">
-                    Check the database, storage, attachments, indexes, CLIs, and
-                    local sync state.
-                  </p>
-                )}
+                ))}
+              {!activity.filter(
+                (item) =>
+                  (activityFamilyFilter === "all" ||
+                    item.family === activityFamilyFilter) &&
+                  (!activityQuery.trim() ||
+                    [
+                      item.action,
+                      item.family,
+                      item.objectKind,
+                      item.objectTitle ?? "",
+                    ].some((value) =>
+                      value
+                        .toLocaleLowerCase()
+                        .includes(activityQuery.trim().toLocaleLowerCase()),
+                    )),
+              ).length && (
+                <p className="drawer-empty">
+                  No activity matches this filter. Meeting and automation events
+                  appear only after those features are explicitly enabled.
+                </p>
+              )}
+            </div>
+          )}
+          {drawer === "health" && (
+            <div className="drawer-body">
+              <div className="drawer-actions">
+                <button onClick={() => void runHealth()} disabled={checking}>
+                  {checking ? "Checking…" : "Run local checks"}
+                </button>
               </div>
-            )}
-            {drawer === "settings" && (
-              <div className="drawer-body settings-page-body">
-                <nav className="settings-page-nav" aria-label="Settings sections">
-                  <strong>Settings</strong>
-                  {[
-                    ["settings-appearance", "Appearance"],
-                    ["settings-capture", "Screen capture"],
-                    ["settings-tools", "AI tools"],
-                    ["settings-voice", "Voice chat"],
-                    ["settings-models", "Models"],
-                    ["settings-sync", "Device sync"],
-                    ["settings-backup", "Backup"],
-                    ["settings-providers", "Provider status"],
-                    ["settings-budgets", "Execution budgets"],
-                  ].map(([id, label]) => (
-                    <button
-                      key={id}
-                      onClick={() =>
-                        document.getElementById(id)?.scrollIntoView({
-                          behavior: "smooth",
-                          block: "start",
-                        })
-                      }
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </nav>
-                <div className="settings-content">
-                  <div className="settings-page-intro">
-                    <p>Waypoint preferences</p>
-                    <h1>Settings</h1>
+              {diagnostics?.results.map((item) => (
+                <article
+                  className={`health-item ${item.status}`}
+                  key={item.code}
+                >
+                  <span>{item.status.replace("_", " ")}</span>
+                  <strong>{item.code}</strong>
+                  <p>{item.summary}</p>
+                  {item.remediation && <small>{item.remediation}</small>}
+                </article>
+              )) || (
+                <p className="drawer-empty">
+                  Check the database, storage, attachments, indexes, CLIs, and
+                  local sync state.
+                </p>
+              )}
+            </div>
+          )}
+          {drawer === "settings" && (
+            <div className="drawer-body settings-page-body">
+              <nav className="settings-page-nav" aria-label="Settings sections">
+                <strong>Settings</strong>
+                {[
+                  ["settings-agent-workspace", "Agent workspace"],
+                  ["settings-appearance", "Appearance"],
+                  ["settings-capture", "Screen capture"],
+                  ["settings-tools", "AI tools"],
+                  ["settings-voice", "Voice chat"],
+                  ["settings-models", "Models"],
+                  ["settings-sync", "Device sync"],
+                  ["settings-backup", "Backup"],
+                  ["settings-providers", "Provider status"],
+                  ["settings-budgets", "Execution budgets"],
+                ].map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() =>
+                      document.getElementById(id)?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
+              <div className="settings-content">
+                <div className="settings-page-intro">
+                  <p>Waypoint preferences</p>
+                  <h1>Settings</h1>
+                  <span>
+                    Configure local tools, models, capture, voice, sync, and
+                    recovery without leaving your active work.
+                  </span>
+                </div>
+                <section
+                  id="settings-agent-workspace"
+                  className="settings-section"
+                >
+                  <h3>Agent workspace</h3>
+                  <p className="drawer-intro">
+                    Choose the repository or folder that Codex, Claude, and
+                    OpenRouter tools may inspect or change. Waypoint’s private
+                    chats, notes, recordings, and indexes stay in separate app
+                    storage.
+                  </p>
+                  <div
+                    className={`automation-boundary ${workspace?.executionRoot ? "" : "warning"}`}
+                    role="status"
+                  >
+                    <strong>
+                      {workspace?.executionRoot
+                        ? "Repository connected"
+                        : "No repository selected"}
+                    </strong>
                     <span>
-                      Configure local tools, models, capture, voice, sync, and recovery without leaving your active work.
+                      {workspace?.executionRoot ??
+                        "Provider chats use a private Waypoint working area. Choose a repository before asking an agent to work on code."}
                     </span>
                   </div>
+                  <div className="drawer-actions">
+                    <button
+                      onClick={() =>
+                        void chooseWorkspaceExecutionRoot().catch(showError)
+                      }
+                    >
+                      {workspace?.executionRoot
+                        ? "Change repository"
+                        : "Choose repository"}
+                    </button>
+                    {workspace?.executionRoot && (
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          void clearWorkspaceExecutionRoot().catch(showError)
+                        }
+                      >
+                        Clear repository
+                      </button>
+                    )}
+                  </div>
+                  <div
+                    className="authority-profile-grid"
+                    aria-label="Agent authority profiles"
+                  >
+                    {profiles.map((profile) => (
+                      <article
+                        className={`authority-profile-card${profile.approval === "never" ? " bypass" : ""}`}
+                        key={profile.id}
+                      >
+                        <strong>{profile.name}</strong>
+                        <small>
+                          {profile.filesystem.replace("-", " ")} ·{" "}
+                          {profile.network === "enabled"
+                            ? "network enabled"
+                            : "provider network only"}{" "}
+                          ·{" "}
+                          {profile.approval === "never"
+                            ? "no prompts; explicit high-risk mode"
+                            : profile.approval === "on-write"
+                              ? "approve changes and commands"
+                              : "read-only authority"}
+                        </small>
+                        <span>
+                          {profile.tools.join(" · ") || "No provider tools"}
+                        </span>
+                        {platform === "win32" &&
+                          profile.tools.includes("terminal") && (
+                            <em>
+                              Windows shell and PowerShell are host authority,
+                              not repository/network sandboxing.{" "}
+                              {profile.approval === "never"
+                                ? "No prompts; "
+                                : "Each command requires approval; "}
+                              audit and Stop/Cancel remain active.
+                            </em>
+                          )}
+                      </article>
+                    ))}
+                  </div>
+                  <div className="automation-boundary" role="status">
+                    <strong>Provider sessions</strong>
+                    <span>
+                      {
+                        providerSessions.filter(
+                          (item) => item.status === "active",
+                        ).length
+                      }{" "}
+                      active ·{" "}
+                      {
+                        providerSessions.filter(
+                          (item) => item.status === "stale",
+                        ).length
+                      }{" "}
+                      invalidated ·{" "}
+                      {
+                        providerRequests.filter(
+                          (item) => item.status === "pending",
+                        ).length
+                      }{" "}
+                      waiting for a decision
+                    </span>
+                  </div>
+                  {providerSessions
+                    .filter((item) => item.status === "active")
+                    .map((session) => (
+                      <div className="provider-row" key={session.id}>
+                        <strong>
+                          {session.provider} · active chat session
+                        </strong>
+                        <small>
+                          {session.model || "CLI-selected model"} ·{" "}
+                          {session.executionRoot}
+                        </small>
+                        <button
+                          className="secondary"
+                          onClick={() =>
+                            void window.waypoint
+                              .resetProviderSession(
+                                session.workspaceId,
+                                session.chatId,
+                                session.provider,
+                              )
+                              .then(() => refresh())
+                              .catch(showError)
+                          }
+                        >
+                          Reset session
+                        </button>
+                      </div>
+                    ))}
+                </section>
                 <section id="settings-appearance" className="settings-section">
                   <h3>Appearance</h3>
                   <p className="drawer-intro">
-                    Choose Waypoint’s visual atmosphere on this device. System follows your operating-system appearance automatically.
+                    Choose Waypoint’s visual atmosphere on this device. System
+                    follows your operating-system appearance automatically.
                   </p>
-                  <div className="appearance-picker" role="radiogroup" aria-label="App appearance">
-                    {([
-                      ["system", "System", "Follow this device"],
-                      ["light", "Light", "Clear paper and sage"],
-                      ["dark", "Dark", "Midnight cartography"],
-                    ] as const).map(([value, label, detail]) => (
+                  <div
+                    className="appearance-picker"
+                    role="radiogroup"
+                    aria-label="App appearance"
+                  >
+                    {(
+                      [
+                        ["system", "System", "Follow this device"],
+                        ["light", "Light", "Clear paper and sage"],
+                        ["dark", "Dark", "Midnight cartography"],
+                      ] as const
+                    ).map(([value, label, detail]) => (
                       <button
                         type="button"
                         role="radio"
@@ -5710,17 +7154,25 @@ export function App() {
                         tabIndex={appearance === value ? 0 : -1}
                         onClick={() => changeAppearance(value)}
                         onKeyDown={(event) => {
-                          const next = nextAppearanceFromKey(appearance, event.key);
+                          const next = nextAppearanceFromKey(
+                            appearance,
+                            event.key,
+                          );
                           if (!next) return;
                           event.preventDefault();
                           changeAppearance(next);
                           window.requestAnimationFrame(() =>
-                            document.getElementById(`appearance-${next}`)?.focus(),
+                            document
+                              .getElementById(`appearance-${next}`)
+                              ?.focus(),
                           );
                         }}
                         key={value}
                       >
-                        <span className={`appearance-swatch ${value}`} aria-hidden="true" />
+                        <span
+                          className={`appearance-swatch ${value}`}
+                          aria-hidden="true"
+                        />
                         <strong>{label}</strong>
                         <small>{detail}</small>
                       </button>
@@ -5734,36 +7186,221 @@ export function App() {
                 </section>
                 <section id="settings-capture" className="settings-section">
                   <h3>Screen capture</h3>
-                  <p className="drawer-intro">Choose whether your shortcut opens the full capture studio or takes a screenshot immediately. Captures stay local and are never sent to a model unless you explicitly add one to chat.</p>
-                  <div className="automation-boundary" role="status"><strong>{manualCaptureReadiness?.available?'Native capture ready':'Permission required'}</strong><span>{manualCaptureReadiness?.reason||'Checking platform capture readiness…'} {manualCaptureReadiness?.shortcut.reason}</span></div>
-                  {manualCaptureSettings&&<>
-                    <div className="capture-workflow-picker" role="radiogroup" aria-label="Shortcut behavior">
-                      <button type="button" role="radio" aria-checked={manualCaptureSettings.workflow==='guided'} className={manualCaptureSettings.workflow==='guided'?'active':''} onClick={()=>setManualCaptureSettings({...manualCaptureSettings,workflow:'guided'})}>
-                        <span className="capture-workflow-icon" aria-hidden="true">▣</span><strong>Guided capture</strong><small>Open the source picker, preview, crop, annotation tools, and capture library.</small>
-                      </button>
-                      <button type="button" role="radio" aria-checked={manualCaptureSettings.workflow==='quick'} className={manualCaptureSettings.workflow==='quick'?'active':''} onClick={()=>setManualCaptureSettings({...manualCaptureSettings,workflow:'quick'})}>
-                        <span className="capture-workflow-icon" aria-hidden="true">+</span><strong>Quick capture</strong><small>Stay out of the way. Capture and copy immediately with no Waypoint window.</small>
-                      </button>
-                    </div>
-                    <div className="settings-grid" aria-label="Manual screen capture settings">
-                      <label>{manualCaptureSettings.workflow==='quick'?'Quick capture target':'Default capture target'}<select value={manualCaptureSettings.mode} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,mode:event.target.value as typeof manualCaptureSettings.mode})}><option value="region">{manualCaptureSettings.workflow==='quick'?'Region · draw with crosshair':'Region · crop in studio'}</option><option value="window">Active window</option><option value="display">Display under cursor</option></select><small>{manualCaptureSettings.workflow==='quick'&&manualCaptureSettings.mode==='region'?'Press the shortcut, then drag around exactly what you want.':manualCaptureSettings.workflow==='quick'?'Pressing the shortcut captures this target immediately.':'You can change the target each time in Guided Capture.'}</small></label>
-                      <label>Global shortcut<HotkeyRecorder workspaceId={workspace?.id||''} value={manualCaptureSettings.shortcut} platform={platform} onChange={(shortcut)=>setManualCaptureSettings({...manualCaptureSettings,shortcut})}/><small>Click the shortcut, then press your preferred key combination.</small></label>
-                      <label>Local retention<select value={manualCaptureSettings.retentionDays} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,retentionDays:Number(event.target.value) as 7|30|90})}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label>
-                      <label>Storage limit<select value={manualCaptureSettings.maxCaptures} onChange={(event)=>setManualCaptureSettings({...manualCaptureSettings,maxCaptures:Number(event.target.value)})}><option value="50">50 captures</option><option value="100">100 captures</option><option value="250">250 captures</option><option value="500">500 captures</option></select></label>
-                    </div>
-                  </>}
-                  <div className="drawer-actions"><button onClick={()=>setScreenCaptureOpen(true)}>Open Guided Capture</button><button disabled={!workspace||!manualCaptureSettings} onClick={()=>workspace&&manualCaptureSettings&&void window.waypoint.updateScreenCaptureSettings(workspace.id,manualCaptureSettings).then(async(saved)=>{setManualCaptureSettings(saved);setManualCaptureReadiness(await window.waypoint.screenCaptureReadiness());setNotice(saved.shortcutReason)})}>Save capture settings</button></div>
+                  <p className="drawer-intro">
+                    Choose whether your shortcut opens the full capture studio
+                    or takes a screenshot immediately. Captures stay local and
+                    are never sent to a model unless you explicitly add one to
+                    chat.
+                  </p>
+                  <div className="automation-boundary" role="status">
+                    <strong>
+                      {manualCaptureReadiness?.available
+                        ? "Native capture ready"
+                        : "Permission required"}
+                    </strong>
+                    <span>
+                      {manualCaptureReadiness?.reason ||
+                        "Checking platform capture readiness…"}{" "}
+                      {manualCaptureReadiness?.shortcut.reason}
+                    </span>
+                  </div>
+                  {manualCaptureSettings && (
+                    <>
+                      <div
+                        className="capture-workflow-picker"
+                        role="radiogroup"
+                        aria-label="Shortcut behavior"
+                      >
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={
+                            manualCaptureSettings.workflow === "guided"
+                          }
+                          className={
+                            manualCaptureSettings.workflow === "guided"
+                              ? "active"
+                              : ""
+                          }
+                          onClick={() =>
+                            setManualCaptureSettings({
+                              ...manualCaptureSettings,
+                              workflow: "guided",
+                            })
+                          }
+                        >
+                          <span
+                            className="capture-workflow-icon"
+                            aria-hidden="true"
+                          >
+                            ▣
+                          </span>
+                          <strong>Guided capture</strong>
+                          <small>
+                            Open the source picker, preview, crop, annotation
+                            tools, and capture library.
+                          </small>
+                        </button>
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={
+                            manualCaptureSettings.workflow === "quick"
+                          }
+                          className={
+                            manualCaptureSettings.workflow === "quick"
+                              ? "active"
+                              : ""
+                          }
+                          onClick={() =>
+                            setManualCaptureSettings({
+                              ...manualCaptureSettings,
+                              workflow: "quick",
+                            })
+                          }
+                        >
+                          <span
+                            className="capture-workflow-icon"
+                            aria-hidden="true"
+                          >
+                            +
+                          </span>
+                          <strong>Quick capture</strong>
+                          <small>
+                            Stay out of the way. Capture and copy immediately
+                            with no Waypoint window.
+                          </small>
+                        </button>
+                      </div>
+                      <div
+                        className="settings-grid"
+                        aria-label="Manual screen capture settings"
+                      >
+                        <label>
+                          {manualCaptureSettings.workflow === "quick"
+                            ? "Quick capture target"
+                            : "Default capture target"}
+                          <select
+                            value={manualCaptureSettings.mode}
+                            onChange={(event) =>
+                              setManualCaptureSettings({
+                                ...manualCaptureSettings,
+                                mode: event.target
+                                  .value as typeof manualCaptureSettings.mode,
+                              })
+                            }
+                          >
+                            <option value="region">
+                              {manualCaptureSettings.workflow === "quick"
+                                ? "Region · draw with crosshair"
+                                : "Region · crop in studio"}
+                            </option>
+                            <option value="window">Active window</option>
+                            <option value="display">
+                              Display under cursor
+                            </option>
+                          </select>
+                          <small>
+                            {manualCaptureSettings.workflow === "quick" &&
+                            manualCaptureSettings.mode === "region"
+                              ? "Press the shortcut, then drag around exactly what you want."
+                              : manualCaptureSettings.workflow === "quick"
+                                ? "Pressing the shortcut captures this target immediately."
+                                : "You can change the target each time in Guided Capture."}
+                          </small>
+                        </label>
+                        <label>
+                          Global shortcut
+                          <HotkeyRecorder
+                            workspaceId={workspace?.id || ""}
+                            value={manualCaptureSettings.shortcut}
+                            platform={platform}
+                            onChange={(shortcut) =>
+                              setManualCaptureSettings({
+                                ...manualCaptureSettings,
+                                shortcut,
+                              })
+                            }
+                          />
+                          <small>
+                            Click the shortcut, then press your preferred key
+                            combination.
+                          </small>
+                        </label>
+                        <label>
+                          Local retention
+                          <select
+                            value={manualCaptureSettings.retentionDays}
+                            onChange={(event) =>
+                              setManualCaptureSettings({
+                                ...manualCaptureSettings,
+                                retentionDays: Number(event.target.value) as
+                                  7 | 30 | 90,
+                              })
+                            }
+                          >
+                            <option value="7">7 days</option>
+                            <option value="30">30 days</option>
+                            <option value="90">90 days</option>
+                          </select>
+                        </label>
+                        <label>
+                          Storage limit
+                          <select
+                            value={manualCaptureSettings.maxCaptures}
+                            onChange={(event) =>
+                              setManualCaptureSettings({
+                                ...manualCaptureSettings,
+                                maxCaptures: Number(event.target.value),
+                              })
+                            }
+                          >
+                            <option value="50">50 captures</option>
+                            <option value="100">100 captures</option>
+                            <option value="250">250 captures</option>
+                            <option value="500">500 captures</option>
+                          </select>
+                        </label>
+                      </div>
+                    </>
+                  )}
+                  <div className="drawer-actions">
+                    <button onClick={() => setScreenCaptureOpen(true)}>
+                      Open Guided Capture
+                    </button>
+                    <button
+                      disabled={!workspace || !manualCaptureSettings}
+                      onClick={() =>
+                        workspace &&
+                        manualCaptureSettings &&
+                        void window.waypoint
+                          .updateScreenCaptureSettings(
+                            workspace.id,
+                            manualCaptureSettings,
+                          )
+                          .then(async (saved) => {
+                            setManualCaptureSettings(saved);
+                            setManualCaptureReadiness(
+                              await window.waypoint.screenCaptureReadiness(),
+                            );
+                            setNotice(saved.shortcutReason);
+                          })
+                      }
+                    >
+                      Save capture settings
+                    </button>
+                  </div>
                 </section>
                 <section id="settings-tools" className="settings-section">
                   <h3>AI Tool Gateway</h3>
                   <p className="drawer-intro">
-                    Trusted local commands use the Autonomous Developer profile.
-                    This is powerful local authority, not an OS security
-                    sandbox: receipts are bounded and redacted, but commands can
-                    use your installed tools and local identity. Agent Browser
-                    Preview is limited to isolated, user-approved public domains
-                    and non-secret navigation actions; PR and deployment tools
-                    are not exposed.
+                    Trusted local commands use the Developer · approve changes
+                    profile. This is powerful local authority, not an OS
+                    security sandbox: receipts are bounded and redacted, but
+                    commands can use your installed tools and local identity.
+                    Agent Browser Preview is limited to isolated, user-approved
+                    public domains and non-secret navigation actions; PR and
+                    deployment tools are not exposed.
                   </p>
                   <div className="automation-boundary warning" role="status">
                     <strong>Installed browsers</strong>
@@ -5839,7 +7476,9 @@ export function App() {
                             .removeBrowserProfile(workspace.id)
                             .then((result) => {
                               setToolSettings(result.settings);
-                              setNotice("Private browser snapshot removed; Waypoint returned to its isolated profile.");
+                              setNotice(
+                                "Private browser snapshot removed; Waypoint returned to its isolated profile.",
+                              );
                             })
                             .catch(showError)
                         }
@@ -5850,11 +7489,12 @@ export function App() {
                   </div>
                   <p className="settings-help">
                     Explicit import copies the selected profile into
-                    Waypoint-managed storage; close the source browser first for a consistent snapshot. The source browser is never
-                    automated or modified. Ordinary sessions may work under the
-                    same browser identity. Passwords, cookies, and Keychain
-                    values are never returned to chat, receipts, sync, or the
-                    model. Secure password entry remains unavailable.
+                    Waypoint-managed storage; close the source browser first for
+                    a consistent snapshot. The source browser is never automated
+                    or modified. Ordinary sessions may work under the same
+                    browser identity. Passwords, cookies, and Keychain values
+                    are never returned to chat, receipts, sync, or the model.
+                    Secure password entry remains unavailable.
                   </p>
                   {toolSettings && (
                     <>
@@ -5899,7 +7539,12 @@ export function App() {
                           <option value="isolated">
                             Waypoint In-App Browser · isolated (default)
                           </option>
-                          <option value="existing" disabled={!toolSettings.browserProfileName.includes(".")}>
+                          <option
+                            value="existing"
+                            disabled={
+                              !toolSettings.browserProfileName.includes(".")
+                            }
+                          >
                             Installed browser · private signed-in snapshot
                           </option>
                         </select>
@@ -6554,6 +8199,36 @@ export function App() {
                               ))}
                             </select>
                           </label>
+                          <label className="model-lane-card">
+                            <span className="model-lane-label">
+                              <i aria-hidden="true">G</i>
+                              <span>
+                                <strong>Grok Build</strong>
+                                <small>Signed-in CLI</small>
+                              </span>
+                            </span>
+                            <select
+                              aria-label="Grok Build model preference"
+                              value={chatModels.grok}
+                              onChange={(event) =>
+                                workspace &&
+                                void window.waypoint
+                                  .setChatModelPreference(
+                                    workspace.id,
+                                    "grok",
+                                    event.target.value,
+                                  )
+                                  .then(setChatModels)
+                                  .catch(showError)
+                              }
+                            >
+                              {grokModelChoices.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                         </div>
                         <p className="model-local-note">
                           These workspace choices also drive the composer. They
@@ -6623,8 +8298,8 @@ export function App() {
                               }
                             />
                             <small>
-                              Stored with OS protection; never backed up, synced,
-                              logged, or shown again.
+                              Stored with OS protection; never backed up,
+                              synced, logged, or shown again.
                             </small>
                           </label>
                           <div className="model-credential-actions">
@@ -6655,7 +8330,8 @@ export function App() {
                         <div className="model-subheading">
                           <strong>Hosted roles</strong>
                           <span>
-                            Used only when the hosted lane is enabled and selected.
+                            Used only when the hosted lane is enabled and
+                            selected.
                           </span>
                         </div>
                         <div className="model-role-grid attachment-routes">
@@ -6683,9 +8359,7 @@ export function App() {
                                   {"pricing" in model && model.pricing
                                     ? ` · ${model.pricing}`
                                     : ""}
-                                  {model.legacy
-                                    ? " (saved legacy/custom)"
-                                    : ""}
+                                  {model.legacy ? " (saved legacy/custom)" : ""}
                                 </option>
                               ))}
                             </select>
@@ -6715,9 +8389,7 @@ export function App() {
                                   {"pricing" in model && model.pricing
                                     ? ` · ${model.pricing}`
                                     : ""}
-                                  {model.legacy
-                                    ? " (saved legacy/custom)"
-                                    : ""}
+                                  {model.legacy ? " (saved legacy/custom)" : ""}
                                 </option>
                               ))}
                             </select>
@@ -6749,7 +8421,9 @@ export function App() {
                                 >
                                   {model.name} — {model.id}
                                   {model.pricing ? ` · ${model.pricing}` : ""}
-                                  {model.legacy ? " (not verified for images)" : ""}
+                                  {model.legacy
+                                    ? " (not verified for images)"
+                                    : ""}
                                 </option>
                               ))}
                             </select>
@@ -6775,7 +8449,11 @@ export function App() {
                               </strong>
                             </div>
                             <span>
-                              of {formatProviderMicros(openRouter.settings.monthlyCapMicros)} · projected{" "}
+                              of{" "}
+                              {formatProviderMicros(
+                                openRouter.settings.monthlyCapMicros,
+                              )}{" "}
+                              · projected{" "}
                               {formatProviderMicros(
                                 openRouter.usage.summary.projectedMonthMicros,
                               )}
@@ -6805,7 +8483,11 @@ export function App() {
                               </strong>
                             </div>
                             <span>
-                              of {formatProviderMicros(openRouter.settings.ytdCapMicros)} ·{" "}
+                              of{" "}
+                              {formatProviderMicros(
+                                openRouter.settings.ytdCapMicros,
+                              )}{" "}
+                              ·{" "}
                               {openRouter.usage.summary.capReached
                                 ? "cap reached"
                                 : openRouter.usage.summary.warning
@@ -6814,7 +8496,10 @@ export function App() {
                             </span>
                             <progress
                               aria-label="Year-to-date OpenRouter budget used"
-                              max={Math.max(1, openRouter.settings.ytdCapMicros)}
+                              max={Math.max(
+                                1,
+                                openRouter.settings.ytdCapMicros,
+                              )}
                               value={Math.min(
                                 openRouter.usage.summary.ytdMicros,
                                 Math.max(1, openRouter.settings.ytdCapMicros),
@@ -6851,7 +8536,9 @@ export function App() {
                               type="number"
                               min="0"
                               step="1"
-                              value={openRouter.settings.ytdCapMicros / 1_000_000}
+                              value={
+                                openRouter.settings.ytdCapMicros / 1_000_000
+                              }
                               onChange={(event) =>
                                 setOpenRouter({
                                   ...openRouter,
@@ -6895,19 +8582,25 @@ export function App() {
                                   settings: {
                                     ...openRouter.settings,
                                     fallbackProvider: event.target.value as
-                                      "codex" | "claude",
+                                      "codex" | "claude" | "grok",
                                   },
                                 })
                               }
                             >
                               <option value="codex">Codex subscription</option>
-                              <option value="claude">Claude subscription</option>
+                              <option value="claude">
+                                Claude subscription
+                              </option>
+                              <option value="grok">
+                                Grok Build subscription
+                              </option>
                             </select>
                           </label>
                         </div>
                         <div className="model-save-row">
                           <span>
-                            Changes to hosted roles and budgets apply after save.
+                            Changes to hosted roles and budgets apply after
+                            save.
                           </span>
                           <button
                             onClick={() =>
@@ -6984,6 +8677,10 @@ export function App() {
                       <dt>Deletion markers</dt>
                       <dd>{syncStatus?.tombstones ?? 0}</dd>
                     </div>
+                    <div>
+                      <dt>Local-only attachments</dt>
+                      <dd>{syncStatus?.localOnlyAttachments ?? 0}</dd>
+                    </div>
                   </dl>
                   {!desktopSync?.configured &&
                     !desktopSync?.pendingEnrollment && (
@@ -7039,7 +8736,8 @@ export function App() {
                             onClick={() =>
                               workspace &&
                               void confirmModal({
-                                title: "Host encrypted peer sync on this device?",
+                                title:
+                                  "Host encrypted peer sync on this device?",
                                 message:
                                   "Waypoint will listen on your local network. Enrolled peers can connect while this app is awake and running. Public webhooks and offline relay delivery still require the optional hosted relay.",
                                 okLabel: "Host on this device",
@@ -7082,7 +8780,8 @@ export function App() {
                       {desktopSync.peerHost?.running && (
                         <p className="settings-help">
                           Endpoint {desktopSync.peerHost.endpoint} · certificate{" "}
-                          is self-signed and must be pinned by senders · SHA-256 {desktopSync.peerHost.fingerprintSha256}
+                          is self-signed and must be pinned by senders · SHA-256{" "}
+                          {desktopSync.peerHost.fingerprintSha256}
                         </p>
                       )}
                       {pendingPeers.map((item) => (
@@ -7284,24 +8983,40 @@ export function App() {
                   </p>
                 </section>
                 <section id="settings-providers" className="settings-section">
-                  <h3>Provider status</h3>
+                  <div className="settings-heading-row">
+                    <h3>Provider status</h3>
+                    <button
+                      className="secondary"
+                      disabled={providerRefreshBusy}
+                      onClick={() =>
+                        void refreshCliProviders(true).catch(showError)
+                      }
+                    >
+                      {providerRefreshBusy
+                        ? "Refreshing…"
+                        : "Refresh providers"}
+                    </button>
+                  </div>
                   {capabilities.map((item) => (
                     <p className="provider-row" key={item.name}>
                       <strong>{item.name}</strong>
                       <span>
                         {item.available && item.compatible !== false
-                          ? "Ready"
+                          ? item.name === "grok"
+                            ? `${grokCatalog ? (grokCatalog.ready ? "Ready" : "Unavailable") : "Checking signed-in account"} · ${item.version ?? "version unknown"} · ${grokCatalog?.reason ?? "Waiting for the installed CLI model inventory"}`
+                            : `Ready · ${item.version ?? "version unknown"}`
                           : item.compatibilityError || item.error}
                       </span>
                     </p>
                   ))}
                 </section>
                 <section id="settings-budgets" className="settings-section">
-                  <h3>Recent execution budgets</h3>
+                  <h3>Recent execution authority</h3>
                   <p className="drawer-intro">
-                    Every local run records a fixed approval and resource
-                    envelope. Automatic retries, external cost, peer execution,
-                    and fallback remain off.
+                    Every local run records its approval and authority envelope.
+                    Provider-native AI runs continue until completion or
+                    explicit cancellation; Waypoint does not cap their tokens,
+                    output, or time.
                   </p>
                   {runs.slice(0, 5).map((run) => {
                     const budget = run.budget as
@@ -7312,11 +9027,10 @@ export function App() {
                           {String(run.cli)} · {String(budget.kind)}
                         </strong>
                         <span>
-                          {Math.round(Number(budget.maxDurationMs) / 1000)}s ·{" "}
-                          {Math.round(
-                            Number(budget.maxOutputBytes) / 1024 / 1024,
-                          )}{" "}
-                          MiB output · 1 attempt ·{" "}
+                          {budget.providerNativeLimits === true
+                            ? "Provider-native token, output, and time limits"
+                            : `${Math.round(Number(budget.maxDurationMs) / 1000)}s legacy envelope · ${Math.round(Number(budget.maxOutputBytes) / 1024 / 1024)} MiB legacy output`}{" "}
+                          · 1 attempt ·{" "}
                           {String(budget.approvalOrigin).replaceAll("-", " ")}
                         </span>
                       </p>
@@ -7328,196 +9042,465 @@ export function App() {
                     </p>
                   )}
                 </section>
-                </div>
               </div>
-            )}
-            {drawer === "automations" && (
-              <div className="drawer-body">
-                <p className="drawer-intro">
-                  Provider webhooks enter one authenticated, encrypted queue and
-                  remain quarantined until they match an explicitly approved
-                  rule. AI-created configurations are digest-bound and cannot
-                  provision a provider or start a model before you approve them.
-                </p>
-                <section>
-                  <h3>AI proposals <span>{automationProposals.length}</span></h3>
-                  {!automationProposals.length&&<p className="drawer-empty">Ask chat to create a webhook automation, or configure an inbound channel below.</p>}
-                  {automationProposals.map((proposal)=><article className={`playbook-item ${proposal.status}`} key={proposal.id}><header><div><small>{proposal.status} · {proposal.definition.trigger.connectorId.replaceAll('_',' ')}</small><strong>{proposal.title}</strong><small>{proposal.definition.trigger.eventType} · {proposal.definition.action.provider}{proposal.definition.action.model?` / ${proposal.definition.action.model}`:''} · profile {proposal.definition.action.securityProfileId} · {Math.round(proposal.definition.action.maxDurationMs/1000)}s</small><span>Filters {Object.keys(proposal.definition.trigger.filters).length?JSON.stringify(proposal.definition.trigger.filters):'none'}</span><span>Endpoint {proposal.definition.delivery.endpoint??'not configured'} · channel {proposal.definition.delivery.channelId??'not configured'}</span><span>Provisioning {proposal.definition.provisioning.mode.replaceAll('_',' ')} · {[proposal.definition.provisioning.organization,proposal.definition.provisioning.project,proposal.definition.provisioning.repositoryFullName??proposal.definition.provisioning.repository,proposal.definition.provisioning.targetBranch].filter(Boolean).join(' / ')||'no provider target'} · stable IDs {[proposal.definition.provisioning.projectId,proposal.definition.provisioning.repositoryId].filter(Boolean).join(' / ')||'not applicable'}</span><span>Instruction: {proposal.definition.action.instruction}</span><span>Digest {proposal.proposalDigest}</span>{proposal.definition.provisioning.commandPreview&&<span>{proposal.definition.provisioning.commandPreview}</span>}{proposal.receipt&&<><span>{String(proposal.receipt.externalMutation.summary??proposal.receipt.externalMutation.reason??'Decision recorded')}</span><details><summary>Audit trail and rollback</summary><pre>{JSON.stringify({rollback:proposal.receipt.externalMutation.rollback??'No external cleanup required',externalId:proposal.receipt.externalMutation.externalId,delivery:proposal.receipt.externalMutation.delivery,events:proposal.receipt.provisioningEvents??[]},null,2)}</pre></details></>}</div></header>{proposal.question?.status==='pending'&&<div className="meeting-actions"><button onClick={()=>void decideAutomationProposal(proposal,'reject').catch(showError)}>Reject</button><button onClick={()=>void decideAutomationProposal(proposal,'approve').catch(showError)}>Approve and provision</button></div>}</article>)}
-                </section>
-                <section>
-                  <h3>Active rules and runs <span>{automationRuntime.rules.length} / {automationRuntime.runs.length}</span></h3>
-                  {!automationRuntime.rules.length&&<p className="drawer-empty">No approved webhook rule is enabled.</p>}
-                  {automationRuntime.rules.map((rule)=><article className={`playbook-item ${rule.status}`} key={rule.id}><header><div><small>{rule.status} · {rule.connectorId.replaceAll('_',' ')}</small><strong>{rule.eventType}</strong><span>{Object.keys(rule.filters).length?JSON.stringify(rule.filters):'All authenticated events of this type'} · channel {rule.channelId.slice(0,10)}…</span></div><button onClick={()=>void setAutomationRuleEnabled(rule.id,rule.status!=='enabled').catch(showError)}>{rule.status==='enabled'?'Stop':'Resume'}</button></header></article>)}
-                  {automationRuntime.runs.slice(0,20).map((run)=><article className={`playbook-item ${run.status}`} key={run.id}><header><div><small>{run.status} · {new Date(run.createdAt).toLocaleString()}</small><strong>{run.resultSummary??'Webhook-triggered AI review'}</strong>{run.errorCode&&<span>{run.errorCode}</span>}</div><div className="automation-run-actions">{run.chatId&&<button onClick={()=>openChatTab(run.chatId!)}>Open chat</button>}{(run.status==='queued'||run.status==='running')&&<button onClick={()=>void cancelAutomationRun(run.id).catch(showError)}>Cancel</button>}</div></header></article>)}
-                </section>
-                <section>
-                  <h3>
-                    Signed inbound <span>{webhookEvents.length}</span>
-                  </h3>
-                  {!webhookChannels && (
-                    <p className="drawer-empty">
-                      Set up and enroll desktop sync before creating a
-                      production inbound channel.
-                    </p>
-                  )}
-                  {webhookChannels && (
-                    <>
-                      <div className="automation-boundary" role="status">
-                        <strong>
-                          {webhookChannels.managementState === "unknown"
-                            ? "Inbound management state unknown"
-                            : !webhookChannels.reachable
-                            ? "Inbound host unavailable"
-                            : webhookChannels.killSwitch
-                            ? "Inbound kill switch active"
-                            : "Encrypted inbound enabled"}
-                        </strong>
+            </div>
+          )}
+          {drawer === "automations" && (
+            <div className="drawer-body">
+              <p className="drawer-intro">
+                Provider webhooks enter one authenticated, encrypted queue and
+                remain quarantined until they match an explicitly approved rule.
+                AI-created configurations are digest-bound and cannot provision
+                a provider or start a model before you approve them.
+              </p>
+              <section>
+                <h3>
+                  AI proposals <span>{automationProposals.length}</span>
+                </h3>
+                {!automationProposals.length && (
+                  <p className="drawer-empty">
+                    Ask chat to create a webhook automation, or configure an
+                    inbound channel below.
+                  </p>
+                )}
+                {automationProposals.map((proposal) => (
+                  <article
+                    className={`playbook-item ${proposal.status}`}
+                    key={proposal.id}
+                  >
+                    <header>
+                      <div>
+                        <small>
+                          {proposal.status} ·{" "}
+                          {proposal.definition.trigger.connectorId.replaceAll(
+                            "_",
+                            " ",
+                          )}
+                        </small>
+                        <strong>{proposal.title}</strong>
+                        <small>
+                          {proposal.definition.trigger.eventType} ·{" "}
+                          {proposal.definition.action.provider}
+                          {proposal.definition.action.model
+                            ? ` / ${proposal.definition.action.model}`
+                            : ""}{" "}
+                          · profile{" "}
+                          {proposal.definition.action.securityProfileId} · runs
+                          until completion or cancellation
+                        </small>
                         <span>
-                          {webhookChannels.reason} · {webhookChannels.reachability.replaceAll('-', ' ')} · {webhookChannels.transportMode.replaceAll('-', ' ')} · authenticated · replay protected · encrypted queue
+                          Filters{" "}
+                          {Object.keys(proposal.definition.trigger.filters)
+                            .length
+                            ? JSON.stringify(
+                                proposal.definition.trigger.filters,
+                              )
+                            : "none"}
                         </span>
-                        {webhookChannels.fingerprintSha256&&<code>Self-signed certificate SHA-256 {webhookChannels.fingerprintSha256}</code>}
-                      </div>
-                      <div className="drawer-actions">
-                        <button
-                          disabled={!webhookChannels.reachable || webhookChannels.managementState === "unknown"}
-                          onClick={() =>
-                            void createWebhookChannel().catch(showError)
-                          }
-                        >
-                          New inbound channel
-                        </button>
-                        <button
-                          disabled={!webhookChannels.reachable || webhookChannels.managementState === "unknown"}
-                          onClick={() =>
-                            void refreshWebhookEvents().catch(showError)
-                          }
-                        >
-                          Fetch inbound
-                        </button>
-                        <button
-                          className="secondary"
-                          disabled={!webhookChannels.reachable || webhookChannels.managementState === "unknown"}
-                          onClick={() =>
-                            void window.waypoint
-                              .setWebhookKill(
-                                workspace!.id,
-                                !webhookChannels.killSwitch,
-                              )
-                              .then(() =>
-                                window.waypoint.webhookChannels(workspace!.id),
-                              )
-                              .then(setWebhookChannels)
-                              .catch(showError)
-                          }
-                        >
-                          {webhookChannels.managementState === "unknown"
-                            ? "Kill switch unavailable"
-                            : webhookChannels.killSwitch
-                            ? "Resume inbound"
-                            : "Kill inbound"}
-                        </button>
-                        {webhookChannels.certificatePem&&<button className="secondary" onClick={()=>void navigator.clipboard.writeText(JSON.stringify({trust:'self-signed-pinned',certificatePem:webhookChannels.certificatePem,fingerprintSha256:webhookChannels.fingerprintSha256},null,2)).then(()=>setNotice('Pinned desktop-host certificate and full SHA-256 fingerprint copied.')).catch(showError)}>Copy TLS trust</button>}
-                      </div>
-                    </>
-                  )}
-                  {webhookChannels?.channels.map((channel) => (
-                    <article
-                      className={`playbook-item ${channel.status}`}
-                      key={channel.channelId}
-                    >
-                      <header>
-                        <div>
-                          <small>
-                            {channel.status} · {channel.connectorId.replaceAll('_',' ')} · {channel.authMode.replaceAll('_',' ')} · secret v{channel.secretVersion}
-                          </small>
-                          <strong>{channel.label}</strong>
-                          <small>
-                            Channel {channel.channelId.slice(0, 10)}… ·
-                            recipient {channel.recipientDeviceId.slice(0, 10)}…
-                          </small>
+                        <span>
+                          Endpoint{" "}
+                          {proposal.definition.delivery.endpoint ??
+                            "not configured"}{" "}
+                          · channel{" "}
+                          {proposal.definition.delivery.channelId ??
+                            "not configured"}
+                        </span>
+                        <span>
+                          Provisioning{" "}
+                          {proposal.definition.provisioning.mode.replaceAll(
+                            "_",
+                            " ",
+                          )}{" "}
+                          ·{" "}
+                          {[
+                            proposal.definition.provisioning.organization,
+                            proposal.definition.provisioning.project,
+                            proposal.definition.provisioning
+                              .repositoryFullName ??
+                              proposal.definition.provisioning.repository,
+                            proposal.definition.provisioning.targetBranch,
+                          ]
+                            .filter(Boolean)
+                            .join(" / ") || "no provider target"}{" "}
+                          · stable IDs{" "}
+                          {[
+                            proposal.definition.provisioning.projectId,
+                            proposal.definition.provisioning.repositoryId,
+                          ]
+                            .filter(Boolean)
+                            .join(" / ") || "not applicable"}
+                        </span>
+                        <span>
+                          Instruction: {proposal.definition.action.instruction}
+                        </span>
+                        <span>Digest {proposal.proposalDigest}</span>
+                        {proposal.definition.provisioning.commandPreview && (
                           <span>
-                            The signing secret is protected and cannot be
-                            displayed again. Rotate to issue a replacement.
+                            {proposal.definition.provisioning.commandPreview}
                           </span>
-                        </div>
-                      </header>
+                        )}
+                        {proposal.receipt && (
+                          <>
+                            <span>
+                              {String(
+                                proposal.receipt.externalMutation.summary ??
+                                  proposal.receipt.externalMutation.reason ??
+                                  "Decision recorded",
+                              )}
+                            </span>
+                            <details>
+                              <summary>Audit trail and rollback</summary>
+                              <pre>
+                                {JSON.stringify(
+                                  {
+                                    rollback:
+                                      proposal.receipt.externalMutation
+                                        .rollback ??
+                                      "No external cleanup required",
+                                    externalId:
+                                      proposal.receipt.externalMutation
+                                        .externalId,
+                                    delivery:
+                                      proposal.receipt.externalMutation
+                                        .delivery,
+                                    events:
+                                      proposal.receipt.provisioningEvents ?? [],
+                                  },
+                                  null,
+                                  2,
+                                )}
+                              </pre>
+                            </details>
+                          </>
+                        )}
+                      </div>
+                    </header>
+                    {proposal.question?.status === "pending" && (
                       <div className="meeting-actions">
                         <button
-                          disabled={channel.status !== "active"}
                           onClick={() =>
-                            void rotateWebhookChannel(channel.channelId).catch(
-                              showError,
-                            )
+                            void decideAutomationProposal(
+                              proposal,
+                              "reject",
+                            ).catch(showError)
                           }
                         >
-                          Rotate
-                        </button>
-                        <button
-                          disabled={channel.status !== "active"}
-                          onClick={() =>
-                            void window.waypoint
-                              .revokeWebhookChannel(
-                                workspace!.id,
-                                channel.channelId,
-                              )
-                              .then(() =>
-                                window.waypoint.webhookChannels(workspace!.id),
-                              )
-                              .then(setWebhookChannels)
-                              .catch(showError)
-                          }
-                        >
-                          Revoke
+                          Reject
                         </button>
                         <button
                           onClick={() =>
-                            void window.waypoint
-                              .deleteWebhookChannel(
-                                workspace!.id,
-                                channel.channelId,
-                              )
-                              .then(() =>
-                                window.waypoint.webhookChannels(workspace!.id),
-                              )
-                              .then(setWebhookChannels)
-                              .catch(showError)
+                            void decideAutomationProposal(
+                              proposal,
+                              "approve",
+                            ).catch(showError)
                           }
                         >
-                          Delete
+                          Approve and provision
                         </button>
                       </div>
-                    </article>
-                  ))}
-                  {webhookEvents.map((event) => (
-                    <article className="playbook-item paused" key={event.id}>
-                      <header>
-                        <div>
-                          <small>
-                            quarantined · untrusted · {event.runCount
-                              ? `${event.runCount} automation run${event.runCount === 1 ? "" : "s"} · ${event.runStatus}`
-                              : "unmatched · no automation run"}
-                          </small>
-                          <strong>{event.eventType}</strong>
-                          <small>
-                            Channel {event.channelId.slice(0, 10)}… · payload{" "}
-                            {event.payloadDigest.slice(0, 10)}…
-                          </small>
-                          <span>{JSON.stringify(event.payload)}</span>
-                        </div>
+                    )}
+                  </article>
+                ))}
+              </section>
+              <section>
+                <h3>
+                  Active rules and runs{" "}
+                  <span>
+                    {automationRuntime.rules.length} /{" "}
+                    {automationRuntime.runs.length}
+                  </span>
+                </h3>
+                {!automationRuntime.rules.length && (
+                  <p className="drawer-empty">
+                    No approved webhook rule is enabled.
+                  </p>
+                )}
+                {automationRuntime.rules.map((rule) => (
+                  <article
+                    className={`playbook-item ${rule.status}`}
+                    key={rule.id}
+                  >
+                    <header>
+                      <div>
+                        <small>
+                          {rule.status} ·{" "}
+                          {rule.connectorId.replaceAll("_", " ")}
+                        </small>
+                        <strong>{rule.eventType}</strong>
+                        <span>
+                          {Object.keys(rule.filters).length
+                            ? JSON.stringify(rule.filters)
+                            : "All authenticated events of this type"}{" "}
+                          · channel {rule.channelId.slice(0, 10)}…
+                        </span>
+                      </div>
+                      <button
+                        onClick={() =>
+                          void setAutomationRuleEnabled(
+                            rule.id,
+                            rule.status !== "enabled",
+                          ).catch(showError)
+                        }
+                      >
+                        {rule.status === "enabled" ? "Stop" : "Resume"}
+                      </button>
+                    </header>
+                  </article>
+                ))}
+                {automationRuntime.runs.slice(0, 20).map((run) => (
+                  <article
+                    className={`playbook-item ${run.status}`}
+                    key={run.id}
+                  >
+                    <header>
+                      <div>
+                        <small>
+                          {run.status} ·{" "}
+                          {new Date(run.createdAt).toLocaleString()}
+                        </small>
+                        <strong>
+                          {run.resultSummary ?? "Webhook-triggered AI review"}
+                        </strong>
+                        {run.errorCode && <span>{run.errorCode}</span>}
+                      </div>
+                      <div className="automation-run-actions">
+                        {run.chatId && (
+                          <button onClick={() => openChatTab(run.chatId!)}>
+                            Open chat
+                          </button>
+                        )}
+                        {(run.status === "queued" ||
+                          run.status === "running") && (
+                          <button
+                            onClick={() =>
+                              void cancelAutomationRun(run.id).catch(showError)
+                            }
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    </header>
+                  </article>
+                ))}
+              </section>
+              <section>
+                <h3>
+                  Signed inbound <span>{webhookEvents.length}</span>
+                </h3>
+                {!webhookChannels && (
+                  <p className="drawer-empty">
+                    Set up and enroll desktop sync before creating a production
+                    inbound channel.
+                  </p>
+                )}
+                {webhookChannels && (
+                  <>
+                    <div className="automation-boundary" role="status">
+                      <strong>
+                        {webhookChannels.managementState === "unknown"
+                          ? "Inbound management state unknown"
+                          : !webhookChannels.reachable
+                            ? "Inbound host unavailable"
+                            : webhookChannels.killSwitch
+                              ? "Inbound kill switch active"
+                              : "Encrypted inbound enabled"}
+                      </strong>
+                      <span>
+                        {webhookChannels.reason} ·{" "}
+                        {webhookChannels.reachability.replaceAll("-", " ")} ·{" "}
+                        {webhookChannels.transportMode.replaceAll("-", " ")} ·
+                        authenticated · replay protected · encrypted queue
+                      </span>
+                      {webhookChannels.fingerprintSha256 && (
+                        <code>
+                          Self-signed certificate SHA-256{" "}
+                          {webhookChannels.fingerprintSha256}
+                        </code>
+                      )}
+                    </div>
+                    <div className="drawer-actions">
+                      <button
+                        disabled={
+                          !webhookChannels.reachable ||
+                          webhookChannels.managementState === "unknown"
+                        }
+                        onClick={() =>
+                          void createWebhookChannel().catch(showError)
+                        }
+                      >
+                        New inbound channel
+                      </button>
+                      <button
+                        disabled={
+                          !webhookChannels.reachable ||
+                          webhookChannels.managementState === "unknown"
+                        }
+                        onClick={() =>
+                          void refreshWebhookEvents().catch(showError)
+                        }
+                      >
+                        Fetch inbound
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={
+                          !webhookChannels.reachable ||
+                          webhookChannels.managementState === "unknown"
+                        }
+                        onClick={() =>
+                          void window.waypoint
+                            .setWebhookKill(
+                              workspace!.id,
+                              !webhookChannels.killSwitch,
+                            )
+                            .then(() =>
+                              window.waypoint.webhookChannels(workspace!.id),
+                            )
+                            .then(setWebhookChannels)
+                            .catch(showError)
+                        }
+                      >
+                        {webhookChannels.managementState === "unknown"
+                          ? "Kill switch unavailable"
+                          : webhookChannels.killSwitch
+                            ? "Resume inbound"
+                            : "Kill inbound"}
+                      </button>
+                      {webhookChannels.certificatePem && (
                         <button
+                          className="secondary"
                           onClick={() =>
-                            void deleteWebhookEvent(event.id).catch(showError)
+                            void navigator.clipboard
+                              .writeText(
+                                JSON.stringify(
+                                  {
+                                    trust: "self-signed-pinned",
+                                    certificatePem:
+                                      webhookChannels.certificatePem,
+                                    fingerprintSha256:
+                                      webhookChannels.fingerprintSha256,
+                                  },
+                                  null,
+                                  2,
+                                ),
+                              )
+                              .then(() =>
+                                setNotice(
+                                  "Pinned desktop-host certificate and full SHA-256 fingerprint copied.",
+                                ),
+                              )
+                              .catch(showError)
                           }
                         >
-                          Delete
+                          Copy TLS trust
                         </button>
-                      </header>
-                    </article>
-                  ))}
-                </section>
-              </div>
-            )}
-          </aside>
+                      )}
+                    </div>
+                  </>
+                )}
+                {webhookChannels?.channels.map((channel) => (
+                  <article
+                    className={`playbook-item ${channel.status}`}
+                    key={channel.channelId}
+                  >
+                    <header>
+                      <div>
+                        <small>
+                          {channel.status} ·{" "}
+                          {channel.connectorId.replaceAll("_", " ")} ·{" "}
+                          {channel.authMode.replaceAll("_", " ")} · secret v
+                          {channel.secretVersion}
+                        </small>
+                        <strong>{channel.label}</strong>
+                        <small>
+                          Channel {channel.channelId.slice(0, 10)}… · recipient{" "}
+                          {channel.recipientDeviceId.slice(0, 10)}…
+                        </small>
+                        <span>
+                          The signing secret is protected and cannot be
+                          displayed again. Rotate to issue a replacement.
+                        </span>
+                      </div>
+                    </header>
+                    <div className="meeting-actions">
+                      <button
+                        disabled={channel.status !== "active"}
+                        onClick={() =>
+                          void rotateWebhookChannel(channel.channelId).catch(
+                            showError,
+                          )
+                        }
+                      >
+                        Rotate
+                      </button>
+                      <button
+                        disabled={channel.status !== "active"}
+                        onClick={() =>
+                          void window.waypoint
+                            .revokeWebhookChannel(
+                              workspace!.id,
+                              channel.channelId,
+                            )
+                            .then(() =>
+                              window.waypoint.webhookChannels(workspace!.id),
+                            )
+                            .then(setWebhookChannels)
+                            .catch(showError)
+                        }
+                      >
+                        Revoke
+                      </button>
+                      <button
+                        onClick={() =>
+                          void window.waypoint
+                            .deleteWebhookChannel(
+                              workspace!.id,
+                              channel.channelId,
+                            )
+                            .then(() =>
+                              window.waypoint.webhookChannels(workspace!.id),
+                            )
+                            .then(setWebhookChannels)
+                            .catch(showError)
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {webhookEvents.map((event) => (
+                  <article className="playbook-item paused" key={event.id}>
+                    <header>
+                      <div>
+                        <small>
+                          quarantined · untrusted ·{" "}
+                          {event.runCount
+                            ? `${event.runCount} automation run${event.runCount === 1 ? "" : "s"} · ${event.runStatus}`
+                            : "unmatched · no automation run"}
+                        </small>
+                        <strong>{event.eventType}</strong>
+                        <small>
+                          Channel {event.channelId.slice(0, 10)}… · payload{" "}
+                          {event.payloadDigest.slice(0, 10)}…
+                        </small>
+                        <span>{JSON.stringify(event.payload)}</span>
+                      </div>
+                      <button
+                        onClick={() =>
+                          void deleteWebhookEvent(event.id).catch(showError)
+                        }
+                      >
+                        Delete
+                      </button>
+                    </header>
+                  </article>
+                ))}
+              </section>
+            </div>
+          )}
+        </aside>
       )}
       {tabMenu && (
         <>
@@ -7532,31 +9515,91 @@ export function App() {
             aria-label="Tab actions"
             style={{ left: tabMenu.x, top: tabMenu.y }}
           >
-            <button role="menuitem" onClick={() => closeTab(tabMenu.tabId, "close")}>
+            <button
+              role="menuitem"
+              onClick={() => closeTab(tabMenu.tabId, "close")}
+            >
               Close
             </button>
-            <button role="menuitem" onClick={() => closeTab(tabMenu.tabId, "close-others")}>
+            <button
+              role="menuitem"
+              onClick={() => closeTab(tabMenu.tabId, "close-others")}
+            >
               Close others
             </button>
             <button
               role="menuitem"
-              disabled={mainTabs.findIndex((tab) => tab.id === tabMenu.tabId) === mainTabs.length - 1}
+              disabled={
+                mainTabs.findIndex((tab) => tab.id === tabMenu.tabId) ===
+                mainTabs.length - 1
+              }
               onClick={() => closeTab(tabMenu.tabId, "close-right")}
             >
               Close tabs to the right
             </button>
             <div className="tab-menu-divider" />
-            <button role="menuitem" onClick={() => closeTab(tabMenu.tabId, "close-all")}>
+            <button
+              role="menuitem"
+              onClick={() => closeTab(tabMenu.tabId, "close-all")}
+            >
               Close all
             </button>
           </div>
         </>
       )}
-      {attachmentViewer && <div className="attachment-viewer" role="dialog" aria-modal="true" aria-label={`Image preview: ${attachmentViewer.name}`}>
-        <header><strong>{attachmentViewer.name}</strong><small>{attachmentViewer.width} × {attachmentViewer.height}</small><button type="button" autoFocus aria-label="Close image preview" onClick={() => setAttachmentViewer(undefined)}>×</button></header>
-        <div><img src={attachmentViewer.dataUrl} alt={`Full image attachment: ${attachmentViewer.name}`} /></div>
-      </div>}
-      {screenCaptureOpen&&workspace&&<ScreenCaptureStudio key={workspace.id} workspaceId={workspace.id} chatId={selectedChatId} defaultMode={manualCaptureSettings?.mode??'region'} onClose={()=>setScreenCaptureOpen(false)} onNotice={setNotice} onAddedToChat={(chatId,attachment)=>{if(selectedChatId!==chatId||workspace.id!==attachment.workspaceId)return;setAttachments((items)=>items.some((item)=>item.id===attachment.id)?items:[...items,attachment]);setNotice('');setScreenCaptureOpen(false)}}/>}
+      {attachmentViewer && (
+        <div
+          className="attachment-viewer"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Image preview: ${attachmentViewer.name}`}
+        >
+          <header>
+            <strong>{attachmentViewer.name}</strong>
+            <small>
+              {attachmentViewer.width} × {attachmentViewer.height}
+            </small>
+            <button
+              type="button"
+              autoFocus
+              aria-label="Close image preview"
+              onClick={() => setAttachmentViewer(undefined)}
+            >
+              ×
+            </button>
+          </header>
+          <div>
+            <img
+              src={attachmentViewer.dataUrl}
+              alt={`Full image attachment: ${attachmentViewer.name}`}
+            />
+          </div>
+        </div>
+      )}
+      {screenCaptureOpen && workspace && (
+        <ScreenCaptureStudio
+          key={workspace.id}
+          workspaceId={workspace.id}
+          chatId={selectedChatId}
+          defaultMode={manualCaptureSettings?.mode ?? "region"}
+          onClose={() => setScreenCaptureOpen(false)}
+          onNotice={setNotice}
+          onAddedToChat={(chatId, attachment) => {
+            if (
+              selectedChatId !== chatId ||
+              workspace.id !== attachment.workspaceId
+            )
+              return;
+            setAttachments((items) =>
+              items.some((item) => item.id === attachment.id)
+                ? items
+                : [...items, attachment],
+            );
+            setNotice("");
+            setScreenCaptureOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

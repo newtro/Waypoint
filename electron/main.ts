@@ -14,19 +14,26 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { Display, IpcMainInvokeEvent, NativeImage, WebContents } from "electron";
+import type {
+  Display,
+  IpcMainInvokeEvent,
+  NativeImage,
+  WebContents,
+} from "electron";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import {
   accessSync,
   constants,
+  copyFileSync,
   createReadStream,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -38,7 +45,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Readable } from "node:stream";
 import { WorkspaceStore } from "./core/store.js";
-import { autoTitleMayStart,minimalTitlePrompt, resolveAutomaticTitle } from "./core/auto-chat-title.js";
+import {
+  autoTitleMayStart,
+  minimalTitlePrompt,
+  resolveAutomaticTitle,
+} from "./core/auto-chat-title.js";
 import { canonicalExecutionText } from "./core/execution-output.js";
 import { LocalOllamaEmbeddings } from "./core/ollama.js";
 import {
@@ -46,7 +57,33 @@ import {
   chunkingDigest,
   storedChunkingProvenance,
 } from "./core/embedding-benchmark.js";
-import { CliWorkbench, type CliImageInput, type ExecutionEvent } from "./core/ai-workbench.js";
+import {
+  CliWorkbench,
+  type CliImageInput,
+  type ExecutionEvent,
+} from "./core/ai-workbench.js";
+import {
+  CodexAppServerWorkbench,
+  type CodexApprovalRequest,
+  type CodexProviderDecision,
+} from "./core/codex-app-server.js";
+import { ClaudeAgentWorkbench } from "./core/claude-agent-sdk.js";
+import {
+  cleanupStaleGrokAutomationDirectories,
+  GrokAgentWorkbench,
+} from "./core/grok-agent-acp.js";
+import { auditableProviderDecision } from "./core/auditable-provider-decision.js";
+import {
+  ProviderDecisionGate,
+  providerDecisionFingerprint,
+} from "./core/provider-decision-gate.js";
+import {
+  cleanupRunScopedAttachmentDirectories,
+  initializeRunScopedAttachmentOwnership,
+  managedWorkspaceExecutionRoots,
+  markRunScopedAttachmentDirectory,
+} from "./core/run-scoped-attachment-cleanup.js";
+import { canonicalWindowsUserData } from "./core/windows-canonical-profile.js";
 import { detectCli } from "../spikes/cli-capabilities.js";
 import {
   deleteWithExecutionCancellation,
@@ -60,13 +97,38 @@ import {
   withProductHelp,
   type ProductHelpLibrary,
 } from "./core/product-help.js";
-import { WEBHOOK_CONNECTORS, validateAutomationProposal } from "./core/webhook-automations.js";
-import { extractAutomationProposalTool, withAutomationProposalTool } from "./core/automation-ai-tool.js";
-import { connectorProvisioningPreview, discoverConnectorTarget, provisionConnector, type CliExecutor } from "./core/connector-provisioning.js";
+import {
+  WEBHOOK_CONNECTORS,
+  assertAutomationProposalProvisionable,
+  assertAutomationSkillVerified,
+  validateAutomationProposal,
+} from "./core/webhook-automations.js";
+import { cleanupLegacyWindowsInstall } from "./core/legacy-windows-install.js";
+import {
+  automationProposalPreparedSummary,
+  codexTurnCanBeSteered,
+  extractAutomationProposalTool,
+  withAutomationProposalTool,
+} from "./core/automation-ai-tool.js";
+import {
+  connectorProvisioningPreview,
+  provisionConnector,
+} from "./core/connector-provisioning.js";
 import { readBackup, writeAtomicBackup } from "./core/backup.js";
 import { runBackupAdministration } from "./core/backup-administration-runner.js";
 import { extractDocumentOffMain } from "./core/document-extraction-runner.js";
-import {assertAttachmentExtractionDigest,assertPreparedAttachmentSources,CHAT_DOCUMENT_MEDIA,CHAT_IMAGE_MEDIA,providerAttachmentLabel,withChatAttachmentContext,type PreparedAttachmentSource,type ProviderTextAttachment} from "./core/provider-attachment-context.js";
+import {
+  assertAttachmentExtractionDigest,
+  assertPreparedAttachmentSources,
+  CHAT_DOCUMENT_MEDIA,
+  CHAT_IMAGE_MEDIA,
+  providerAttachmentLabel,
+  withChatAttachmentContext,
+  withChatFileAttachmentContext,
+  type PreparedAttachmentSource,
+  type ProviderFileAttachment,
+  type ProviderTextAttachment,
+} from "./core/provider-attachment-context.js";
 import {
   chunkExtractedText,
   DOCUMENT_CHUNKING_POLICY,
@@ -77,7 +139,6 @@ import { sanitizeSyncStatus } from "./core/sync/sync-status.js";
 import {
   ATTACHMENT_MEDIA_BY_EXTENSION,
   imageDimensions,
-  MAX_ATTACHMENTS_PER_OWNER,
   readAndValidateAttachment,
 } from "./core/chat-attachments.js";
 import {
@@ -99,14 +160,17 @@ import {
 } from "./core/agent-policy.js";
 import {
   createExecutionBudget,
+  securityProfileDigest,
   serializeExecutionBudget,
 } from "./core/execution-budget.js";
 import {
   ToolGateway,
   discoverLocalCli,
+  redactToolText,
   validatePolicy,
   type ToolGatewayPolicy,
   type ToolRequest,
+  type ToolResult,
 } from "./core/tool-gateway.js";
 import {
   failureIdentity,
@@ -117,6 +181,7 @@ import {
 import { ProtectedProviderVault } from "./core/protected-provider-vault.js";
 import {
   FetchOpenRouterTransport,
+  OpenRouterAgentClient,
   OpenRouterBudgetGate,
   OpenRouterClient,
   decideHostedRoute,
@@ -125,6 +190,13 @@ import {
   type OpenRouterImageInput,
   type ProviderUsageReceipt,
 } from "./core/openrouter-provider.js";
+import {
+  OPENROUTER_AUTOMATION_PROPOSAL_TOOL,
+  openRouterToolApprovalKind,
+  openRouterToolNeedsApproval,
+  openRouterToolRequest,
+  openRouterTools,
+} from "./core/openrouter-tool-gateway.js";
 import { VoiceRuntimeRegistry } from "./core/voice-runtime.js";
 import {
   FastLocalSpeechProcessAdapter,
@@ -142,7 +214,10 @@ import {
   type VoiceEngineId,
 } from "./core/voice-engine.js";
 import { remotePolicyDigest } from "./core/cross-device-control.js";
-import { installedCliModelCatalog } from "./core/provider-model-catalog.js";
+import {
+  installedCliModelCatalog,
+  shutdownInstalledCliModelCatalog,
+} from "./core/provider-model-catalog.js";
 import {
   AGENT_BROWSER_VERSION,
   verifyBrowserClosure,
@@ -155,7 +230,15 @@ import {
 } from "./core/browser-discovery.js";
 import { InAppBrowserController } from "./core/in-app-browser.js";
 import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
-import { assertVisibleCapturePixels, captureReadiness, captureVisibilityStrategy, quickCaptureCropBounds, validateCaptureSettings, type CaptureMode, type CaptureSettings } from "./core/manual-screen-capture.js";
+import {
+  assertVisibleCapturePixels,
+  captureReadiness,
+  captureVisibilityStrategy,
+  quickCaptureCropBounds,
+  validateCaptureSettings,
+  type CaptureMode,
+  type CaptureSettings,
+} from "./core/manual-screen-capture.js";
 import {
   probeMeetingMediaDecoder,
   transcribeMeetingFile,
@@ -193,8 +276,7 @@ const meetingPlaybackGrants = new Map<
   }
 >();
 let meetingMediaDecoderProbe:
-  | ReturnType<typeof probeMeetingMediaDecoder>
-  | undefined;
+  ReturnType<typeof probeMeetingMediaDecoder> | undefined;
 let meetingPlaybackCacheRoot = "";
 const meetingPlaybackPreparations = new Map<string, Promise<string>>();
 
@@ -206,7 +288,8 @@ async function meetingPlaybackPath(audio: {
   const existing = meetingPlaybackPreparations.get(audio.sha256);
   if (existing) return existing;
   const preparation = (async () => {
-    const decoder = await (meetingMediaDecoderProbe ??= probeMeetingMediaDecoder());
+    const decoder = await (meetingMediaDecoderProbe ??=
+      probeMeetingMediaDecoder());
     return (
       await prepareSeekableMeetingPlayback({
         sourcePath: audio.path,
@@ -252,8 +335,16 @@ function registerMeetingPlaybackProtocol(): void {
     if (range) {
       if (!match) return new Response(null, { status: 416 });
       start = Number(match[1]);
-      end = match[2] ? Math.min(Number(match[2]), fileBytes - 1) : fileBytes - 1;
-      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= fileBytes)
+      end = match[2]
+        ? Math.min(Number(match[2]), fileBytes - 1)
+        : fileBytes - 1;
+      if (
+        !Number.isSafeInteger(start) ||
+        !Number.isSafeInteger(end) ||
+        start < 0 ||
+        start > end ||
+        start >= fileBytes
+      )
         return new Response(null, {
           status: 416,
           headers: { "Content-Range": `bytes */${fileBytes}` },
@@ -267,104 +358,275 @@ function registerMeetingPlaybackProtocol(): void {
         "Content-Length": String(length),
         "Content-Type": grant.mediaType,
       };
-    if (status === 206) headers["Content-Range"] = `bytes ${start}-${end}/${fileBytes}`;
-    if (request.method === "HEAD") return new Response(null, { status, headers });
+    if (status === 206)
+      headers["Content-Range"] = `bytes ${start}-${end}/${fileBytes}`;
+    if (request.method === "HEAD")
+      return new Response(null, { status, headers });
     return new Response(
-      Readable.toWeb(createReadStream(grant.path, { start, end })) as ReadableStream,
+      Readable.toWeb(
+        createReadStream(grant.path, { start, end }),
+      ) as ReadableStream,
       { status, headers },
     );
   });
 }
-async function executeProvisioningCli(workspaceId:string,cli:'az'|'gh',args:string[]){const execution=await toolGateway.execute({version:1,workspaceId,origin:'ai',tool:'local_cli.run',arguments:{cli,args,cwd:'.',timeoutMs:120_000}},gatewayPolicy(workspaceId)),completed=execution.result??await toolGateway.waitForCompletion(execution.runId,125_000);if(completed.receipt.status!=='completed')throw new Error(completed.receipt.summary??`${cli} connector command failed`);return completed.output??JSON.stringify(completed.value??{})}
-async function prepareAutomationProposal(workspaceId:string,chatId:string|undefined,value:unknown){let definition=validateAutomationProposal(value);if(definition.trigger.connectorId==='azure_devops'||definition.trigger.connectorId==='github'){const identity=await discoverConnectorTarget(definition,((cli,args)=>executeProvisioningCli(workspaceId,cli,args)) as CliExecutor);definition=validateAutomationProposal({...definition,provisioning:{...definition.provisioning,...identity}})}const sync=syncService.status(workspaceId),delivery=sync.configured?syncService.planWebhookChannel(workspaceId,definition.trigger.connectorId):{reachability:'not_configured' as const},previewDefinition=validateAutomationProposal({...definition,delivery});definition=validateAutomationProposal({...previewDefinition,provisioning:{...previewDefinition.provisioning,commandPreview:connectorProvisioningPreview(previewDefinition)}});const proposal=store.createAutomationProposal(workspaceId,chatId,definition);for(const window of BrowserWindow.getAllWindows())window.webContents.send('waypoint:automation-proposal-created',{workspaceId,chatId,proposalId:proposal.id});return proposal}
+async function prepareAutomationProposal(
+  workspaceId: string,
+  chatId: string | undefined,
+  value: unknown,
+  verifiedSkill?: { provider: "codex" | "claude" | "grok"; identifier: string },
+) {
+  let definition = validateAutomationProposal(value);
+  assertAutomationSkillVerified(definition, verifiedSkill);
+  const sync = syncService.status(workspaceId),
+    delivery = sync.configured
+      ? syncService.planWebhookChannel(
+          workspaceId,
+          definition.trigger.connectorId,
+        )
+      : { reachability: "not_configured" as const };
+  definition = validateAutomationProposal({ ...definition, delivery });
+  assertAutomationProposalProvisionable(definition);
+  definition = validateAutomationProposal({
+    ...definition,
+    provisioning: {
+      ...definition.provisioning,
+      commandPreview: connectorProvisioningPreview(definition),
+    },
+  });
+  const proposal = store.createAutomationProposal(
+    workspaceId,
+    chatId,
+    definition,
+  );
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send("waypoint:automation-proposal-created", {
+      workspaceId,
+      chatId,
+      proposalId: proposal.id,
+    });
+  return proposal;
+}
 let syncVault: ProtectedSyncVault;
 let peerHostRuntime: PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
 const activeWebhookRuns = new Set<string>();
-const syncAbort = new AbortController();
+const syncAbort = new AbortController(),
+  providerModelCatalogAbort = new AbortController();
 let trustedSenderId: number | undefined;
-const pendingManualCaptures = new Map<string, { workspaceId:string; senderId:number; sourceId: string; sourceName: string; mode: CaptureMode; width:number; height:number; expiresAt: number }>();
-const pendingCaptureVisibilityAcks = new Map<string, { senderId:number; hidden:boolean; resolve:()=>void; timer:ReturnType<typeof setTimeout> }>();
+const pendingManualCaptures = new Map<
+  string,
+  {
+    workspaceId: string;
+    senderId: number;
+    sourceId: string;
+    sourceName: string;
+    mode: CaptureMode;
+    width: number;
+    height: number;
+    expiresAt: number;
+  }
+>();
+const pendingCaptureVisibilityAcks = new Map<
+  string,
+  {
+    senderId: number;
+    hidden: boolean;
+    resolve: () => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
 
-ipcMain.on('waypoint:screen-capture-visibility-ack',(event,input:unknown)=>{
-  const value=input as Record<string,unknown>,token=typeof value?.token==='string'?value.token:'',hidden=value?.hidden;
-  const pending=pendingCaptureVisibilityAcks.get(token);
-  if(!pending||pending.senderId!==event.sender.id||pending.hidden!==hidden)return;
-  clearTimeout(pending.timer);pendingCaptureVisibilityAcks.delete(token);pending.resolve();
-});
+ipcMain.on(
+  "waypoint:screen-capture-visibility-ack",
+  (event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      token = typeof value?.token === "string" ? value.token : "",
+      hidden = value?.hidden;
+    const pending = pendingCaptureVisibilityAcks.get(token);
+    if (
+      !pending ||
+      pending.senderId !== event.sender.id ||
+      pending.hidden !== hidden
+    )
+      return;
+    clearTimeout(pending.timer);
+    pendingCaptureVisibilityAcks.delete(token);
+    pending.resolve();
+  },
+);
 
-function setCaptureOverlayVisibility(sender:WebContents,hidden:boolean):Promise<void>{
-  const token=randomUUID();
-  return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{pendingCaptureVisibilityAcks.delete(token);reject(new Error('Capture interface did not become ready. Try again.'))},2_000);
-    pendingCaptureVisibilityAcks.set(token,{senderId:sender.id,hidden,resolve,timer});
-    sender.send('waypoint:screen-capture-visibility',{token,hidden});
+function setCaptureOverlayVisibility(
+  sender: WebContents,
+  hidden: boolean,
+): Promise<void> {
+  const token = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingCaptureVisibilityAcks.delete(token);
+      reject(new Error("Capture interface did not become ready. Try again."));
+    }, 2_000);
+    pendingCaptureVisibilityAcks.set(token, {
+      senderId: sender.id,
+      hidden,
+      resolve,
+      timer,
+    });
+    sender.send("waypoint:screen-capture-visibility", { token, hidden });
   });
 }
-let captureShortcutState={registered:false,shortcut:'',reason:'Capture shortcut has not been registered yet'};
+let captureShortcutState = {
+  registered: false,
+  shortcut: "",
+  reason: "Capture shortcut has not been registered yet",
+};
 let captureShortcutSuspended = false;
 let quickCaptureActive = false;
-const pendingQuickCaptures = new Map<string, {
-  window: BrowserWindow;
-  workspaceId: string;
-  display: Display;
-  image: NativeImage;
-  sourceId: string;
-  sourceName: string;
-}>();
+const pendingQuickCaptures = new Map<
+  string,
+  {
+    window: BrowserWindow;
+    workspaceId: string;
+    display: Display;
+    image: NativeImage;
+    sourceId: string;
+    sourceName: string;
+  }
+>();
 
 function captureWindow(): BrowserWindow | undefined {
-  return BrowserWindow.getAllWindows().find((item) => !item.isDestroyed() && ![...pendingQuickCaptures.values()].some((pending) => pending.window === item));
+  return BrowserWindow.getAllWindows().find(
+    (item) =>
+      !item.isDestroyed() &&
+      ![...pendingQuickCaptures.values()].some(
+        (pending) => pending.window === item,
+      ),
+  );
 }
 
-function quickCaptureNotice(status: 'completed' | 'failed' | 'canceled', message: string, captureId?: string): void {
-  captureWindow()?.webContents.send('waypoint:screen-capture-completed', { status, message, captureId });
-  if (status !== 'canceled' && Notification.isSupported()) new Notification({ title: 'Waypoint screen capture', body: message, silent: true }).show();
+function quickCaptureNotice(
+  status: "completed" | "failed" | "canceled",
+  message: string,
+  captureId?: string,
+): void {
+  captureWindow()?.webContents.send("waypoint:screen-capture-completed", {
+    status,
+    message,
+    captureId,
+  });
+  if (status !== "canceled" && Notification.isSupported())
+    new Notification({
+      title: "Waypoint screen capture",
+      body: message,
+      silent: true,
+    }).show();
 }
 
-function saveQuickCapture(workspaceId: string, mode: CaptureMode, sourceId: string, sourceName: string, image: NativeImage) {
+function saveQuickCapture(
+  workspaceId: string,
+  mode: CaptureMode,
+  sourceId: string,
+  sourceName: string,
+  image: NativeImage,
+) {
   const size = image.getSize();
   assertVisibleCapturePixels(image.toBitmap(), size.width, size.height);
-  const capture = store.createScreenCapture(workspaceId, {
-    title: `Quick capture · ${sourceName}`,
-    mode,
-    sourceId,
-    sourceName,
-    capturedAt: new Date().toISOString(),
-    width: size.width,
-    height: size.height,
-  }, image.toPNG());
+  const capture = store.createScreenCapture(
+    workspaceId,
+    {
+      title: `Quick capture · ${sourceName}`,
+      mode,
+      sourceId,
+      sourceName,
+      capturedAt: new Date().toISOString(),
+      width: size.width,
+      height: size.height,
+    },
+    image.toPNG(),
+  );
   clipboard.writeImage(image);
-  quickCaptureNotice('completed', 'Captured and copied to the clipboard.', capture.id);
+  quickCaptureNotice(
+    "completed",
+    "Captured and copied to the clipboard.",
+    capture.id,
+  );
   return capture;
 }
 
-async function displayCapture(display: Display): Promise<{ image: NativeImage; sourceId: string; sourceName: string }> {
-  const width = Math.max(1, Math.round(display.bounds.width * display.scaleFactor)),
-    height = Math.max(1, Math.round(display.bounds.height * display.scaleFactor)),
-    sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width, height }, fetchWindowIcons: false }),
-    source = sources.find((item) => item.display_id === String(display.id)) ?? sources[0];
-  if (!source || source.thumbnail.isEmpty()) throw new Error('The display could not be captured.');
-  return { image: source.thumbnail, sourceId: source.id, sourceName: source.name || `Display ${display.id}` };
+async function displayCapture(
+  display: Display,
+): Promise<{ image: NativeImage; sourceId: string; sourceName: string }> {
+  const width = Math.max(
+      1,
+      Math.round(display.bounds.width * display.scaleFactor),
+    ),
+    height = Math.max(
+      1,
+      Math.round(display.bounds.height * display.scaleFactor),
+    ),
+    sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width, height },
+      fetchWindowIcons: false,
+    }),
+    source =
+      sources.find((item) => item.display_id === String(display.id)) ??
+      sources[0];
+  if (!source || source.thumbnail.isEmpty())
+    throw new Error("The display could not be captured.");
+  return {
+    image: source.thumbnail,
+    sourceId: source.id,
+    sourceName: source.name || `Display ${display.id}`,
+  };
 }
 
 async function foregroundWindowTitle(): Promise<string> {
-  if (process.platform !== 'win32') throw new Error('Quick active-window capture is currently available on Windows.');
-  const script = "$sig='[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);'; Add-Type -MemberDefinition $sig -Name Native -Namespace Waypoint; $h=[Waypoint.Native]::GetForegroundWindow(); $b=New-Object System.Text.StringBuilder 1024; [void][Waypoint.Native]::GetWindowText($h,$b,$b.Capacity); [Console]::Write($b.ToString())";
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 2_000, windowsHide: true, maxBuffer: 8_192 });
+  if (process.platform !== "win32")
+    throw new Error(
+      "Quick active-window capture is currently available on Windows.",
+    );
+  const script =
+    '$sig=\'[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);\'; Add-Type -MemberDefinition $sig -Name Native -Namespace Waypoint; $h=[Waypoint.Native]::GetForegroundWindow(); $b=New-Object System.Text.StringBuilder 1024; [void][Waypoint.Native]::GetWindowText($h,$b,$b.Capacity); [Console]::Write($b.ToString())';
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { timeout: 2_000, windowsHide: true, maxBuffer: 8_192 },
+  );
   const title = stdout.trim();
-  if (!title || title === 'Waypoint') throw new Error('No external active window is available to capture.');
+  if (!title || title === "Waypoint")
+    throw new Error("No external active window is available to capture.");
   return title;
 }
 
-async function activeWindowCapture(): Promise<{ image: NativeImage; sourceId: string; sourceName: string }> {
+async function activeWindowCapture(): Promise<{
+  image: NativeImage;
+  sourceId: string;
+  sourceName: string;
+}> {
   const title = await foregroundWindowTitle(),
-    sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 4096, height: 4096 }, fetchWindowIcons: false }),
+    sources = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: { width: 4096, height: 4096 },
+      fetchWindowIcons: false,
+    }),
     normalized = title.toLocaleLowerCase(),
-    source = sources.find((item) => item.name.toLocaleLowerCase() === normalized)
-      ?? sources.find((item) => normalized.includes(item.name.toLocaleLowerCase()) || item.name.toLocaleLowerCase().includes(normalized));
-  if (!source || source.thumbnail.isEmpty()) throw new Error(`The active window “${title}” could not be matched. Try Guided mode.`);
-  return { image: source.thumbnail, sourceId: source.id, sourceName: source.name };
+    source =
+      sources.find((item) => item.name.toLocaleLowerCase() === normalized) ??
+      sources.find(
+        (item) =>
+          normalized.includes(item.name.toLocaleLowerCase()) ||
+          item.name.toLocaleLowerCase().includes(normalized),
+      );
+  if (!source || source.thumbnail.isEmpty())
+    throw new Error(
+      `The active window “${title}” could not be matched. Try Guided mode.`,
+    );
+  return {
+    image: source.thumbnail,
+    sourceId: source.id,
+    sourceName: source.name,
+  };
 }
 
 function quickCaptureOverlayHtml(): string {
@@ -384,94 +646,171 @@ function quickCaptureOverlayHtml(): string {
   </script></body></html>`;
 }
 
-async function startQuickCapture(workspaceId: string, settings: CaptureSettings): Promise<void> {
+async function startQuickCapture(
+  workspaceId: string,
+  settings: CaptureSettings,
+): Promise<void> {
   if (quickCaptureActive) return;
   quickCaptureActive = true;
   try {
-    if (settings.mode === 'window') {
+    if (settings.mode === "window") {
       const capture = await activeWindowCapture();
-      saveQuickCapture(workspaceId, 'window', capture.sourceId, capture.sourceName, capture.image);
+      saveQuickCapture(
+        workspaceId,
+        "window",
+        capture.sourceId,
+        capture.sourceName,
+        capture.image,
+      );
       quickCaptureActive = false;
       return;
     }
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()), capture = await displayCapture(display);
-    if (settings.mode === 'display') {
-      saveQuickCapture(workspaceId, 'display', capture.sourceId, capture.sourceName, capture.image);
+    const display = screen.getDisplayNearestPoint(
+        screen.getCursorScreenPoint(),
+      ),
+      capture = await displayCapture(display);
+    if (settings.mode === "display") {
+      saveQuickCapture(
+        workspaceId,
+        "display",
+        capture.sourceId,
+        capture.sourceName,
+        capture.image,
+      );
       quickCaptureActive = false;
       return;
     }
-    const token = randomUUID(), overlay = new BrowserWindow({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height: display.bounds.height,
-      frame: false,
-      transparent: true,
-      backgroundColor: '#00000000',
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      resizable: false,
-      movable: false,
-      fullscreenable: false,
-      show: false,
-      webPreferences: {
-        preload: path.join(currentDirectory, 'quick-capture-preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        additionalArguments: [`--quick-capture-token=${token}`],
-      },
+    const token = randomUUID(),
+      overlay = new BrowserWindow({
+        x: display.bounds.x,
+        y: display.bounds.y,
+        width: display.bounds.width,
+        height: display.bounds.height,
+        frame: false,
+        transparent: true,
+        backgroundColor: "#00000000",
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        movable: false,
+        fullscreenable: false,
+        show: false,
+        webPreferences: {
+          preload: path.join(currentDirectory, "quick-capture-preload.cjs"),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          additionalArguments: [`--quick-capture-token=${token}`],
+        },
+      });
+    pendingQuickCaptures.set(token, {
+      window: overlay,
+      workspaceId,
+      display,
+      image: capture.image,
+      sourceId: capture.sourceId,
+      sourceName: capture.sourceName,
     });
-    pendingQuickCaptures.set(token, { window: overlay, workspaceId, display, image: capture.image, sourceId: capture.sourceId, sourceName: capture.sourceName });
-    overlay.setAlwaysOnTop(true, 'screen-saver');
+    overlay.setAlwaysOnTop(true, "screen-saver");
     overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    overlay.on('closed', () => { pendingQuickCaptures.delete(token); quickCaptureActive = false; });
-    await overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(quickCaptureOverlayHtml())}`);
+    overlay.on("closed", () => {
+      pendingQuickCaptures.delete(token);
+      quickCaptureActive = false;
+    });
+    await overlay.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(quickCaptureOverlayHtml())}`,
+    );
     overlay.show();
     overlay.focus();
   } catch (error) {
     quickCaptureActive = false;
-    quickCaptureNotice('failed', error instanceof Error ? error.message : 'Quick capture failed.');
+    quickCaptureNotice(
+      "failed",
+      error instanceof Error ? error.message : "Quick capture failed.",
+    );
   }
 }
 
-ipcMain.on('waypoint:quick-capture-select', (event, input: unknown) => {
-  const value = input as Record<string, unknown>, token = typeof value?.token === 'string' ? value.token : '', pending = pendingQuickCaptures.get(token);
+ipcMain.on("waypoint:quick-capture-select", (event, input: unknown) => {
+  const value = input as Record<string, unknown>,
+    token = typeof value?.token === "string" ? value.token : "",
+    pending = pendingQuickCaptures.get(token);
   if (!pending || pending.window.webContents.id !== event.sender.id) return;
   try {
-    const selection = value.bounds as { x: number; y: number; width: number; height: number },
-      crop = quickCaptureCropBounds(selection, pending.display.bounds, pending.image.getSize()),
+    const selection = value.bounds as {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      },
+      crop = quickCaptureCropBounds(
+        selection,
+        pending.display.bounds,
+        pending.image.getSize(),
+      ),
       image = pending.image.crop(crop);
-    saveQuickCapture(pending.workspaceId, 'region', pending.sourceId, `${pending.sourceName} region`, image);
+    saveQuickCapture(
+      pending.workspaceId,
+      "region",
+      pending.sourceId,
+      `${pending.sourceName} region`,
+      image,
+    );
   } catch (error) {
-    quickCaptureNotice('failed', error instanceof Error ? error.message : 'Region capture failed.');
+    quickCaptureNotice(
+      "failed",
+      error instanceof Error ? error.message : "Region capture failed.",
+    );
   } finally {
     pending.window.destroy();
   }
 });
 
-ipcMain.on('waypoint:quick-capture-cancel', (event, input: unknown) => {
-  const token = typeof (input as Record<string, unknown>)?.token === 'string' ? String((input as Record<string, unknown>).token) : '', pending = pendingQuickCaptures.get(token);
+ipcMain.on("waypoint:quick-capture-cancel", (event, input: unknown) => {
+  const token =
+      typeof (input as Record<string, unknown>)?.token === "string"
+        ? String((input as Record<string, unknown>).token)
+        : "",
+    pending = pendingQuickCaptures.get(token);
   if (!pending || pending.window.webContents.id !== event.sender.id) return;
-  quickCaptureNotice('canceled', 'Quick capture canceled.');
+  quickCaptureNotice("canceled", "Quick capture canceled.");
   pending.window.destroy();
 });
 
-function registerCaptureShortcut(workspaceId: string, settings: CaptureSettings): boolean {
-  if(captureShortcutState.shortcut)globalShortcut.unregister(captureShortcutState.shortcut);
+function registerCaptureShortcut(
+  workspaceId: string,
+  settings: CaptureSettings,
+): boolean {
+  if (captureShortcutState.shortcut)
+    globalShortcut.unregister(captureShortcutState.shortcut);
   if (captureShortcutSuspended) {
-    captureShortcutState={registered:false,shortcut:settings.shortcut,reason:'Shortcut paused while recording a replacement'};
+    captureShortcutState = {
+      registered: false,
+      shortcut: settings.shortcut,
+      reason: "Shortcut paused while recording a replacement",
+    };
     return false;
   }
-  const registered=globalShortcut.register(settings.shortcut, () => {
-    if (settings.workflow === 'quick') {
+  const registered = globalShortcut.register(settings.shortcut, () => {
+    if (settings.workflow === "quick") {
       void startQuickCapture(workspaceId, settings);
       return;
     }
     const window = captureWindow();
-    if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); window.webContents.send('waypoint:screen-capture-request') }
+    if (window) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      window.webContents.send("waypoint:screen-capture-request");
+    }
   });
-  captureShortcutState={registered,shortcut:settings.shortcut,reason:registered?'Global screenshot shortcut ready':'The shortcut is owned by macOS, Windows, or another application. Choose a different shortcut in Settings.'};
+  captureShortcutState = {
+    registered,
+    shortcut: settings.shortcut,
+    reason: registered
+      ? "Global screenshot shortcut ready"
+      : "The shortcut is owned by macOS, Windows, or another application. Choose a different shortcut in Settings.",
+  };
   return registered;
 }
 let trustedRendererUrl: string | undefined;
@@ -480,33 +819,342 @@ const activeDocumentIndexes = new Set<string>();
 const activeChunkingProvenance = storedChunkingProvenance(CHUNKING_POLICIES[0]);
 const documentChunkingDigest = chunkingDigest(DOCUMENT_CHUNKING_POLICY);
 const workbench = new CliWorkbench();
+const codexWorkbench = new CodexAppServerWorkbench();
+const claudeWorkbench = new ClaudeAgentWorkbench();
+const grokWorkbench = new GrokAgentWorkbench();
+const activeCodexChats = new Map<
+  string,
+  {
+    runId: string;
+    profileId: string;
+    model?: string;
+  }
+>();
+const deletingChats = new Set<string>();
+const chatLifecycleKey = (workspaceId: string, chatId: string) =>
+  `${workspaceId}:${chatId}`;
+function assertChatMayStart(workspaceId: string, chatId: string): void {
+  if (deletingChats.has(chatLifecycleKey(workspaceId, chatId)))
+    throw new Error("This chat is being deleted and cannot start new AI work");
+}
 let toolGateway: ToolGateway;
 let toolFailureFingerprintKey: Buffer;
 let providerVault: ProtectedProviderVault;
 let webSearchVault: ProtectedWebSearchVault;
 const controlledWebTools = new ControlledWebTools();
-const openRouterClient = new OpenRouterClient(new FetchOpenRouterTransport()),
+const openRouterTransport = new FetchOpenRouterTransport(),
+  openRouterClient = new OpenRouterClient(openRouterTransport),
+  openRouterAgentClient = new OpenRouterAgentClient(openRouterTransport),
   openRouterBudget = new OpenRouterBudgetGate(),
   activeHostedRuns = new Map<
     string,
-    { workspaceId: string; controller: AbortController }
+    {
+      workspaceId: string;
+      chatId: string;
+      controller: AbortController;
+      toolRunIds: Set<string>;
+      completion?: Promise<void>;
+    }
   >();
-const activeAutoTitles=new Map<string,{workspaceId:string;cancel:()=>void}>(),activeAutoTitleTasks=new Set<Promise<void>>(),execFileAsync=promisify(execFile);
-function startAutomaticChatTitle(workspaceId:string,chatId:string,user:string):void{const task=generateAutomaticChatTitle(workspaceId,chatId,user);activeAutoTitleTasks.add(task);void task.finally(()=>activeAutoTitleTasks.delete(task))}
+async function cancelHostedChatRuns(
+  workspaceId: string,
+  chatId: string,
+): Promise<void> {
+  const matches = [...activeHostedRuns.values()].filter(
+    (run) => run.workspaceId === workspaceId && run.chatId === chatId,
+  );
+  for (const run of matches) {
+    run.controller.abort();
+    for (const toolRunId of run.toolRunIds)
+      toolGateway.cancel(workspaceId, toolRunId);
+  }
+  await Promise.allSettled(
+    matches.map((run) => run.completion ?? Promise.resolve()),
+  );
+  if (
+    [...activeHostedRuns.values()].some(
+      (run) => run.workspaceId === workspaceId && run.chatId === chatId,
+    )
+  )
+    throw new Error(
+      "The active hosted AI run could not be stopped, so the chat was not deleted",
+    );
+}
+const providerDecisionResolvers = new Map<
+    string,
+    (input: {
+      status: "accepted" | "accepted_session" | "declined" | "canceled";
+      decision: Record<string, unknown>;
+    }) => Promise<void>
+  >(),
+  providerDecisionGate = new ProviderDecisionGate();
+function awaitProviderDecision(
+  input: {
+    workspaceId: string;
+    chatId: string;
+    executionId: string;
+    provider: "codex" | "claude" | "grok" | "openrouter";
+    request: CodexApprovalRequest;
+  },
+  signal: AbortSignal,
+): Promise<CodexProviderDecision> {
+  if (signal.aborted)
+    return Promise.resolve({
+      status: "canceled",
+      decision: { reason: "execution_canceled" },
+    });
+  const durableRequestId = `${input.provider}:${input.executionId}:${input.request.providerRequestId}`;
+  const fingerprint = providerDecisionFingerprint({
+    provider: input.provider,
+    kind: input.request.kind,
+    title: input.request.title,
+    detail: input.request.detail,
+    options: input.request.options,
+  });
+  return providerDecisionGate.wait(
+    input.executionId,
+    durableRequestId,
+    fingerprint,
+    () => {
+      const stored = store.createProviderRequest({
+        workspaceId: input.workspaceId,
+        chatId: input.chatId,
+        executionId: input.executionId,
+        provider: input.provider,
+        providerRequestId: input.request.providerRequestId,
+        kind: input.request.kind,
+        title: input.request.title,
+        detail: input.request.detail,
+        options: input.request.options,
+      });
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value: CodexProviderDecision) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", onAbort);
+          providerDecisionResolvers.delete(stored!.id);
+          resolve(value);
+        };
+        const onAbort = () =>
+          finish({
+            status: "canceled",
+            decision: { reason: "execution_canceled" },
+          });
+        signal.addEventListener("abort", onAbort, { once: true });
+        providerDecisionResolvers.set(stored!.id, async (value) =>
+          finish(value),
+        );
+      });
+    },
+  );
+}
+const activeAutoTitles = new Map<
+    string,
+    { workspaceId: string; cancel: () => void }
+  >(),
+  activeAutoTitleTasks = new Set<Promise<void>>(),
+  execFileAsync = promisify(execFile);
+function startAutomaticChatTitle(
+  workspaceId: string,
+  chatId: string,
+  user: string,
+): void {
+  const task = generateAutomaticChatTitle(workspaceId, chatId, user);
+  activeAutoTitleTasks.add(task);
+  void task.finally(() => activeAutoTitleTasks.delete(task));
+}
 
-async function generateAutomaticChatTitle(workspaceId:string,chatId:string,user:string):Promise<void>{
-  if(!autoTitleMayStart(store.toolGatewaySettings(workspaceId).stopped)||activeAutoTitles.has(chatId)||!store.claimAutoTitle(workspaceId,chatId))return;
-  const prompt=minimalTitlePrompt(user),controller=new AbortController();let userCanceled=false;
-  activeAutoTitles.set(chatId,{workspaceId,cancel:()=>{userCanceled=true;controller.abort()}});const deadline=setTimeout(()=>controller.abort(),9_000);
-  try{
-    const claude=await detectCli('claude'),root=store.listWorkspaces().find((item)=>item.id===workspaceId)?.localPath;
-    let claudeLane:(()=>Promise<{text:string;model:string}>)|undefined;
-    if(claude.available&&claude.compatible!==false&&claude.executable&&root)try{const help=await execFileAsync(claude.executable,['--help'],{timeout:2_000,maxBuffer:512_000,encoding:'utf8'});if(/--model[\s\S]{0,240}'fable'/.test(String(help.stdout)))claudeLane=async()=>{const titleWorkbench=new CliWorkbench(),events:Array<Record<string,unknown>>=[],running=await titleWorkbench.start(`title-${chatId}`,{cli:'claude',prompt,workspaceRoot:root,profile:{id:'auto-title-v1',name:'Auto title — no tools',roots:[root],filesystem:'read-only',network:'provider-only',tools:[],maxDurationMs:6_000,maxConcurrency:1,approval:'always',peerEligible:false,secretNames:[]},model:'fable',timeoutMs:6_000,maxOutputBytes:16_384,executable:claude.executable!,version:claude.version},(event)=>events.push(event));controller.signal.addEventListener('abort',()=>running.cancel(),{once:true});const terminal=await running.completion;if(terminal.status!=='completed')throw new Error(`claude_title_${terminal.status}`);return{text:canonicalExecutionText('claude',events,256),model:'fable'}}}catch{/* Installed CLI does not truthfully advertise the lightweight alias. */}
-    let openrouterLane:(()=>Promise<{text:string;model:string}>)|undefined;
-    try{const settings=store.openRouterSettings(),usage=store.providerUsage(),key=providerVault.getKey(),bounded={...settings,perRequestCapMicros:10_000};if(openRouterCapability(bounded,true,usage.summary).available)openrouterLane=async()=>{const model='openai/gpt-4.1-nano',release=openRouterBudget.reserve(bounded,usage.summary);try{const result=await openRouterClient.run({workspaceId,role:'everyday',model,prompt,apiKey:key,signal:controller.signal,requestCapMicros:10_000});store.saveProviderUsage(result.receipt);return{text:result.text,model}}catch(error){const receipt=(error as {receipt?:ProviderUsageReceipt}).receipt;if(receipt)store.saveProviderUsage(receipt);throw error}finally{release()}}}catch{/* Protected key/provider/cap unavailable. */}
-    const result=await resolveAutomaticTitle({user,signal:controller.signal,claude:claudeLane,openrouter:openrouterLane,observe:(lane,outcome)=>store.recordAutoTitleAttempt(workspaceId,chatId,lane,outcome)});
-    if(!userCanceled)store.completeAutoTitle(workspaceId,chatId,result.title,result.lane,result.model,result.reason);
-  }finally{clearTimeout(deadline);store.releaseAutoTitle(workspaceId,chatId);activeAutoTitles.delete(chatId)}
+async function generateAutomaticChatTitle(
+  workspaceId: string,
+  chatId: string,
+  user: string,
+): Promise<void> {
+  if (
+    !autoTitleMayStart(store.toolGatewaySettings(workspaceId).stopped) ||
+    activeAutoTitles.has(chatId) ||
+    !store.claimAutoTitle(workspaceId, chatId)
+  )
+    return;
+  const prompt = minimalTitlePrompt(user),
+    controller = new AbortController();
+  let userCanceled = false;
+  activeAutoTitles.set(chatId, {
+    workspaceId,
+    cancel: () => {
+      userCanceled = true;
+      controller.abort();
+    },
+  });
+  try {
+    const [claude, grok] = await Promise.all([
+        detectCli("claude"),
+        detectCli("grok"),
+      ]),
+      root = store
+        .listWorkspaces()
+        .find((item) => item.id === workspaceId)?.localPath;
+    let claudeLane:
+      (() => Promise<{ text: string; model: string }>) | undefined;
+    if (
+      claude.available &&
+      claude.compatible !== false &&
+      claude.executable &&
+      root
+    )
+      try {
+        const help = await execFileAsync(claude.executable, ["--help"], {
+          timeout: 2_000,
+          maxBuffer: 512_000,
+          encoding: "utf8",
+        });
+        if (/--model[\s\S]{0,240}'fable'/.test(String(help.stdout)))
+          claudeLane = async () => {
+            const titleWorkbench = new CliWorkbench(),
+              events: Array<Record<string, unknown>> = [],
+              running = await titleWorkbench.start(
+                `title-${chatId}`,
+                {
+                  cli: "claude",
+                  prompt,
+                  workspaceRoot: root,
+                  profile: {
+                    id: "auto-title-v1",
+                    name: "Auto title — no tools",
+                    roots: [root],
+                    filesystem: "read-only",
+                    network: "provider-only",
+                    tools: [],
+                    maxDurationMs: 0,
+                    maxConcurrency: 1,
+                    approval: "always",
+                    peerEligible: false,
+                    secretNames: [],
+                  },
+                  model: "fable",
+                  executable: claude.executable!,
+                  version: claude.version,
+                },
+                (event) => events.push(event),
+              );
+            controller.signal.addEventListener(
+              "abort",
+              () => running.cancel(),
+              { once: true },
+            );
+            const terminal = await running.completion;
+            if (terminal.status !== "completed")
+              throw new Error(`claude_title_${terminal.status}`);
+            return {
+              text: canonicalExecutionText("claude", events, 256),
+              model: "fable",
+            };
+          };
+      } catch {
+        /* Installed CLI does not truthfully advertise the lightweight alias. */
+      }
+    let grokLane: (() => Promise<{ text: string; model: string }>) | undefined;
+    if (grok.available && grok.compatible !== false && grok.executable && root)
+      grokLane = async () => {
+        const events: ExecutionEvent[] = [],
+          running = await grokWorkbench.start(
+            `title-grok-${chatId}`,
+            {
+              cli: "grok",
+              prompt,
+              workspaceRoot: root,
+              profile: {
+                id: "auto-title-grok-v1",
+                name: "Auto title · Grok · no tools",
+                roots: [root],
+                filesystem: "read-only",
+                network: "provider-only",
+                tools: [],
+                maxDurationMs: 0,
+                maxConcurrency: 1,
+                approval: "always",
+                peerEligible: false,
+                secretNames: [],
+              },
+              executable: grok.executable,
+              version: grok.version,
+              isolatedNoTools: true,
+              onSession: () => undefined,
+              onApproval: async () => ({
+                status: "declined",
+                decision: { reason: "automatic_title_has_no_tools" },
+              }),
+            },
+            (event) => events.push(event),
+          );
+        controller.signal.addEventListener("abort", () => running.cancel(), {
+          once: true,
+        });
+        const terminal = await running.completion;
+        if (terminal.status !== "completed")
+          throw new Error(`grok_title_${terminal.status}`);
+        return {
+          text: canonicalExecutionText("grok", events, 256),
+          model: "CLI default",
+        };
+      };
+    let openrouterLane:
+      (() => Promise<{ text: string; model: string }>) | undefined;
+    try {
+      const settings = store.openRouterSettings(),
+        usage = store.providerUsage(),
+        key = providerVault.getKey(),
+        bounded = { ...settings, perRequestCapMicros: 10_000 };
+      if (openRouterCapability(bounded, true, usage.summary).available)
+        openrouterLane = async () => {
+          const model = "openai/gpt-4.1-nano",
+            release = openRouterBudget.reserve(bounded, usage.summary);
+          try {
+            const result = await openRouterClient.run({
+              workspaceId,
+              role: "everyday",
+              model,
+              prompt,
+              apiKey: key,
+              signal: controller.signal,
+              requestCapMicros: 10_000,
+            });
+            store.saveProviderUsage(result.receipt);
+            return { text: result.text, model };
+          } catch (error) {
+            const receipt = (error as { receipt?: ProviderUsageReceipt })
+              .receipt;
+            if (receipt) store.saveProviderUsage(receipt);
+            throw error;
+          } finally {
+            release();
+          }
+        };
+    } catch {
+      /* Protected key/provider/cap unavailable. */
+    }
+    const result = await resolveAutomaticTitle({
+      user,
+      signal: controller.signal,
+      claude: claudeLane,
+      grok: grokLane,
+      openrouter: openrouterLane,
+      observe: (lane, outcome) =>
+        store.recordAutoTitleAttempt(workspaceId, chatId, lane, outcome),
+    });
+    if (!userCanceled)
+      store.completeAutoTitle(
+        workspaceId,
+        chatId,
+        result.title,
+        result.lane,
+        result.model,
+        result.reason,
+      );
+  } finally {
+    store.releaseAutoTitle(workspaceId, chatId);
+    activeAutoTitles.delete(chatId);
+  }
 }
 let voiceRuntime: VoiceRuntimeRegistry,
   voicePacks: VoicePackManager,
@@ -576,12 +1224,16 @@ const toolWindowWorkspaces = new Map<number, string>();
 const activeRemoteJobs = new Set<string>();
 const activeRemoteExecutions = new Map<
   string,
-  { workspaceId: string; runId: string }
+  { workspaceId: string; runId: string; provider: "codex" | "claude" | "grok" }
 >();
 let browserClosure: ReturnType<typeof verifyBrowserClosure> | undefined,
   browserClosureError = "Browser closure has not been verified.";
 let inAppBrowser: InAppBrowserController;
 const activeReflectionRuns = new Map<string, string>();
+const activeReflectionProviders = new Map<
+  string,
+  "codex" | "claude" | "grok"
+>();
 const killedReflectionWorkspaces = new Set<string>();
 const cancelledReflectionReservations = new Set<string>();
 
@@ -595,7 +1247,8 @@ async function processRemoteJobs(workspaceId: string) {
     const profile = store
         .listSecurityProfiles(workspaceId)
         .find(
-          (item) => item.name === "Autonomous developer" && item.peerEligible,
+          (item) =>
+            item.name === "Developer · approve changes" && item.peerEligible,
         ),
       policy = store.deviceControlPolicy(workspaceId);
     if (!profile || !policy.enabled) return;
@@ -635,34 +1288,62 @@ async function processRemoteJobs(workspaceId: string) {
         );
       } else {
         const cli =
-            claimed.job.capability === "agent.codex" ? "codex" : "claude",
+            claimed.job.capability === "agent.codex"
+              ? "codex"
+              : claimed.job.capability === "agent.grok"
+                ? "grok"
+                : "claude",
           capability = await detectCli(cli),
           runId = `remote-${claimed.job.id}`,
           events: string[] = [];
-        if (!capability.available || !capability.executable)
-          throw new Error(`${cli}_cli_unavailable`);
-        const running = await workbench.start(
-          runId,
-          {
-            cli,
+        if (
+          !capability.available ||
+          capability.compatible === false ||
+          !capability.executable
+        )
+          throw new Error(
+            capability.compatibilityError ?? `${cli}_cli_unavailable`,
+          );
+        const onRemoteEvent = (event: ExecutionEvent) => {
+            if (event.type === "text" && event.text) events.push(event.text);
+          },
+          remoteRequest = {
             prompt: claimed.job.instruction,
             workspaceRoot: profile.roots[0],
             profile: { ...profile, maxConcurrency: 1, secretNames: [] },
             executable: capability.executable,
             version: capability.version,
-            timeoutMs: Math.min(policy.maxDurationMs, claimed.job.timeoutMs),
-            maxOutputBytes: 262_144,
           },
-          (event) => {
-            if (event.type === "text" && event.text) events.push(event.text);
-          },
-        );
-        activeRemoteExecutions.set(claimed.job.id, { workspaceId, runId });
+          running =
+            cli === "grok"
+              ? await grokWorkbench.start(
+                  runId,
+                  {
+                    ...remoteRequest,
+                    cli: "grok",
+                    onSession: () => undefined,
+                    onApproval: async () => ({
+                      status: "declined",
+                      decision: {},
+                    }),
+                  },
+                  onRemoteEvent,
+                )
+              : await workbench.start(
+                  runId,
+                  { ...remoteRequest, cli },
+                  onRemoteEvent,
+                );
+        activeRemoteExecutions.set(claimed.job.id, {
+          workspaceId,
+          runId,
+          provider: cli,
+        });
         const terminal = await running.completion;
         activeRemoteExecutions.delete(claimed.job.id);
         if (terminal.status !== "completed")
           throw new Error(`remote_${cli}_${terminal.status}`);
-        const summary = events.join("").trim().slice(0, 1000);
+        const summary = events.join("").trim();
         store.finishRemoteJob(
           workspaceId,
           claimed.job.id,
@@ -691,15 +1372,254 @@ async function processRemoteJobs(workspaceId: string) {
   }
 }
 
-const activeAutomationWorkspaces=new Set<string>(),activeAutomationProvisioningWorkspaces=new Set<string>();
-async function withWorkspaceReservation<T>(active:Set<string>,workspaceId:string,label:string,operation:()=>Promise<T>):Promise<T>{if(active.has(workspaceId))throw new Error(`Another ${label} operation is already active for this workspace`);active.add(workspaceId);try{return await operation()}finally{active.delete(workspaceId)}}
-async function processAutomationRuns(workspaceId:string){store.evaluateAutomationEvents(workspaceId);if(activeAutomationWorkspaces.has(workspaceId))return;const claimed=store.claimAutomationRun(workspaceId);if(!claimed)return;activeAutomationWorkspaces.add(workspaceId);captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id});let executionId:string|undefined;try{const cli=claimed.action.provider,profile=store.listSecurityProfiles(workspaceId).find((item)=>item.id===claimed.action.securityProfileId);if(!profile)throw new Error('Approved automation security profile is unavailable');const capability=await detectCli(cli);if(!capability.available||capability.compatible===false||!capability.executable)throw new Error(capability.compatibilityError??`${cli} CLI is unavailable`);const chatId=store.createChat(workspaceId,`Automation · ${claimed.title}`),sourceMessageId=store.addMessage(workspaceId,chatId,'user',`Webhook automation started\n\n${claimed.prompt}`),budget=createExecutionBudget({kind:'root',profile,prompt:claimed.prompt,attachmentCount:0});executionId=store.createExecution({workspaceId,chatId,sourceMessageId,cli,model:claimed.action.model,securityProfileId:profile.id,prompt:claimed.prompt,budgetReceipt:serializeExecutionBudget(budget)});const events:ExecutionEvent[]=[],running=await workbench.start(executionId,{cli,prompt:claimed.prompt,workspaceRoot:profile.roots[0],profile,model:claimed.action.model,timeoutMs:Math.min(claimed.action.maxDurationMs,budget.maxDurationMs),maxOutputBytes:budget.maxOutputBytes,executable:capability.executable,version:capability.version},(event)=>{events.push(event);try{store.appendExecutionEvent(executionId!,workspaceId,event)}catch{/* Workspace deletion is blocked while automation work is active. */}});store.startExecution(executionId,workspaceId,running.executable,running.version);store.attachAutomationExecution(workspaceId,claimed.id,chatId,executionId);captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id});void running.completion.then(async(result)=>{await finalizeExecution(store,{runId:executionId!,workspaceId,chatId,cli,result,fallbackEvents:events});store.finishAutomationRun(workspaceId,claimed.id,result.status==='completed'?'completed':result.status==='canceled'?'canceled':'failed',result.status==='completed'?'AI review completed':result.error??`AI review ${result.status}`,result.status==='completed'?undefined:result.status);captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id})}).catch((error)=>{try{store.finishAutomationRun(workspaceId,claimed.id,'failed',error instanceof Error?error.message:'AI review failed','execution_finalization_failed');captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id})}catch{/* Terminal state may already be durable. */}}).finally(()=>activeAutomationWorkspaces.delete(workspaceId))}catch(error){const message=error instanceof Error?error.message:'Automation run failed';if(!executionId&&/concurrency/i.test(message))store.deferAutomationRun(workspaceId,claimed.id);else store.finishAutomationRun(workspaceId,claimed.id,'failed',message,'automation_start_failed');captureWindow()?.webContents.send('waypoint:automation-run-updated',{workspaceId,runId:claimed.id});activeAutomationWorkspaces.delete(workspaceId)}}
+const activeAutomationWorkspaces = new Set<string>(),
+  activeAutomationProvisioningWorkspaces = new Set<string>();
+async function withWorkspaceReservation<T>(
+  active: Set<string>,
+  workspaceId: string,
+  label: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (active.has(workspaceId))
+    throw new Error(
+      `Another ${label} operation is already active for this workspace`,
+    );
+  active.add(workspaceId);
+  try {
+    return await operation();
+  } finally {
+    active.delete(workspaceId);
+  }
+}
 
-function gatewayPolicy(workspaceId: string): ToolGatewayPolicy {
+const activeNativeAutomationExecutions = new Map<
+  string,
+  "codex" | "claude" | "grok"
+>();
+async function processAutomationRunsV2(workspaceId: string) {
+  store.evaluateAutomationEvents(workspaceId);
+  if (activeAutomationWorkspaces.has(workspaceId)) return;
+  const claimed = store.claimAutomationRun(workspaceId);
+  if (!claimed) return;
+  activeAutomationWorkspaces.add(workspaceId);
+  captureWindow()?.webContents.send("waypoint:automation-run-updated", {
+    workspaceId,
+    runId: claimed.id,
+  });
+  let executionId: string | undefined;
+  try {
+    const cli = claimed.action.provider,
+      profile = store
+        .listSecurityProfiles(workspaceId)
+        .find((item) => item.id === claimed.action.securityProfileId);
+    if (!profile)
+      throw new Error("Approved automation security profile is unavailable");
+    const executionRoot = store.assertWorkspaceExecutionRoot(workspaceId);
+    if (
+      !claimed.action.executionRoot ||
+      path.resolve(claimed.action.executionRoot) !==
+        path.resolve(executionRoot) ||
+      claimed.action.profileDigest !== securityProfileDigest(profile)
+    )
+      throw new Error("Approved automation repository authority changed");
+    if (claimed.action.kind === "ai_skill" && !profile.tools.includes("skills"))
+      throw new Error("Approved automation profile does not allow skills");
+    const capability = await detectCli(cli);
+    if (
+      !capability.available ||
+      capability.compatible === false ||
+      !capability.executable
+    )
+      throw new Error(
+        capability.compatibilityError ?? `${cli} CLI is unavailable`,
+      );
+    const chatId = store.createChat(
+        workspaceId,
+        `Automation · ${claimed.title}`,
+      ),
+      sourceMessageId = store.addMessage(
+        workspaceId,
+        chatId,
+        "user",
+        `Webhook automation started\n\n${claimed.prompt}`,
+      ),
+      budget = createExecutionBudget({
+        kind: "root",
+        profile,
+        prompt: claimed.prompt,
+        attachmentCount: 0,
+      });
+    executionId = store.createExecution({
+      workspaceId,
+      chatId,
+      sourceMessageId,
+      cli,
+      model: claimed.action.model,
+      securityProfileId: profile.id,
+      prompt: claimed.prompt,
+      budgetReceipt: serializeExecutionBudget(budget),
+    });
+    const events: ExecutionEvent[] = [],
+      onEvent = (event: ExecutionEvent) => {
+        events.push(event);
+        store.appendExecutionEvent(executionId!, workspaceId, event);
+      },
+      shared = {
+        prompt: claimed.prompt,
+        workspaceRoot: profile.roots[0],
+        profile,
+        model: claimed.action.model,
+        requiredSkillIdentifier:
+          claimed.action.kind === "ai_skill"
+            ? claimed.action.skillIdentifier
+            : undefined,
+        executable: capability.executable,
+        version: capability.version,
+        onSession: (providerSessionId: string) =>
+          store.bindProviderSession({
+            workspaceId,
+            chatId,
+            provider: cli,
+            providerSessionId,
+            executionRoot: profile.roots[0],
+            securityProfileId: profile.id,
+            model: claimed.action.model,
+          }),
+        beforeTurn: () => store.assertWorkspaceExecutionRoot(workspaceId),
+        onApproval: (request: CodexApprovalRequest, signal: AbortSignal) =>
+          awaitProviderDecision(
+            {
+              workspaceId,
+              chatId,
+              executionId: executionId!,
+              provider: cli,
+              request,
+            },
+            signal,
+          ),
+      };
+    const running =
+      cli === "codex"
+        ? await codexWorkbench.start(
+            executionId,
+            { ...shared, cli: "codex" },
+            onEvent,
+          )
+        : cli === "grok"
+          ? await grokWorkbench.start(
+              executionId,
+              { ...shared, cli: "grok" },
+              onEvent,
+            )
+          : await claudeWorkbench.start(
+              executionId,
+              { ...shared, cli: "claude" },
+              onEvent,
+            );
+    activeNativeAutomationExecutions.set(executionId, cli);
+    store.startExecution(
+      executionId,
+      workspaceId,
+      running.executable,
+      running.version,
+    );
+    store.attachAutomationExecution(
+      workspaceId,
+      claimed.id,
+      chatId,
+      executionId,
+    );
+    captureWindow()?.webContents.send("waypoint:automation-run-updated", {
+      workspaceId,
+      runId: claimed.id,
+    });
+    void running.completion
+      .then(async (result) => {
+        await finalizeExecution(store, {
+          runId: executionId!,
+          workspaceId,
+          chatId,
+          cli,
+          result,
+          fallbackEvents: events,
+        });
+        store.finishAutomationRun(
+          workspaceId,
+          claimed.id,
+          result.status === "completed"
+            ? "completed"
+            : result.status === "canceled"
+              ? "canceled"
+              : "failed",
+          result.status === "completed"
+            ? "Provider completed the exact approved automation route"
+            : (result.error ?? `AI ${result.status}`),
+          result.status === "completed" ? undefined : result.status,
+        );
+      })
+      .catch((error) => {
+        try {
+          store.finishAutomationRun(
+            workspaceId,
+            claimed.id,
+            "failed",
+            error instanceof Error ? error.message : "AI automation failed",
+            "execution_finalization_failed",
+          );
+        } catch {
+          /* terminal state won */
+        }
+      })
+      .finally(() => {
+        providerDecisionGate.clearExecution(executionId!);
+        activeNativeAutomationExecutions.delete(executionId!);
+        activeAutomationWorkspaces.delete(workspaceId);
+        captureWindow()?.webContents.send("waypoint:automation-run-updated", {
+          workspaceId,
+          runId: claimed.id,
+        });
+      });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Automation run failed";
+    if (executionId) {
+      providerDecisionGate.clearExecution(executionId);
+      try {
+        store.failQueuedExecution(executionId, workspaceId, message);
+      } catch {
+        /* It may already have transitioned; preserve the startup error. */
+      }
+    }
+    if (!executionId && /concurrency/i.test(message))
+      store.deferAutomationRun(workspaceId, claimed.id);
+    else
+      store.finishAutomationRun(
+        workspaceId,
+        claimed.id,
+        "failed",
+        message,
+        "automation_start_failed",
+      );
+    activeAutomationWorkspaces.delete(workspaceId);
+    captureWindow()?.webContents.send("waypoint:automation-run-updated", {
+      workspaceId,
+      runId: claimed.id,
+    });
+  }
+}
+
+function gatewayPolicy(
+  workspaceId: string,
+  securityProfileId?: string,
+): ToolGatewayPolicy {
   const profile = store
     .listSecurityProfiles(workspaceId)
-    .find((item) => item.name === "Autonomous developer");
-  if (!profile) throw new Error("Autonomous developer profile is unavailable");
+    .find((item) =>
+      securityProfileId
+        ? item.id === securityProfileId
+        : item.name === "Developer · approve changes",
+    );
+  if (!profile) throw new Error("Developer approval profile is unavailable");
   const settings = store.toolGatewaySettings(workspaceId),
     environmentSecrets = Object.keys(process.env).filter((name) =>
       /(?:TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|AUTH|API_KEY|PRIVATE_KEY|CREDENTIAL)/i.test(
@@ -748,7 +1668,11 @@ function gatewayPolicy(workspaceId: string): ToolGatewayPolicy {
             browserProfileMode: settings.browserProfileMode,
             browserNetworkLockdownScript:
               settings.browserProfileMode === "existing"
-                ? path.join(process.resourcesPath, "browser-network-lockdown", "lockdown.js")
+                ? path.join(
+                    process.resourcesPath,
+                    "browser-network-lockdown",
+                    "lockdown.js",
+                  )
                 : undefined,
             browserProfileName:
               settings.browserProfileMode === "existing" ? snapshot : undefined,
@@ -902,8 +1826,8 @@ handle("waypoint:open-external", async (_event, input: unknown) => {
   return { opened: true };
 });
 
-function text(value: unknown, field: string, max: number): string {
-  if (typeof value !== "string" || value.length > max)
+function text(value: unknown, field: string, max?: number): string {
+  if (typeof value !== "string" || (max !== undefined && value.length > max))
     throw new Error(`Invalid ${field}`);
   return value;
 }
@@ -911,22 +1835,53 @@ type PreparedChatAttachments = {
   images: CliImageInput[];
   hostedImages: OpenRouterImageInput[];
   textBlocks: ProviderTextAttachment[];
+  fileBlocks: ProviderFileAttachment[];
   receipt: string;
   sources: PreparedAttachmentSource[];
+  cleanup: () => void;
 };
-function assertPreparedChatAttachmentsCurrent(workspaceId:string,chatId:string,sources:PreparedAttachmentSource[]):void{
-  assertPreparedAttachmentSources(sources,store.listChatAttachments(workspaceId,chatId).map((item)=>({id:item.id,sha256:item.sha256})))
+function assertPreparedChatAttachmentsCurrent(
+  workspaceId: string,
+  chatId: string,
+  sources: PreparedAttachmentSource[],
+): void {
+  assertPreparedAttachmentSources(
+    sources,
+    store
+      .listChatAttachments(workspaceId, chatId)
+      .map((item) => ({ id: item.id, sha256: item.sha256 })),
+  );
+}
+function assertPreparedProviderFilesCurrent(
+  files: ProviderFileAttachment[],
+  executionRoot: string,
+): void {
+  const canonicalRoot = realpathSync.native(executionRoot);
+  for (const file of files) {
+    const stat = lstatSync(file.path),
+      canonicalFile = realpathSync.native(file.path),
+      relative = path.relative(canonicalRoot, canonicalFile);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      (relative !== "" &&
+        (relative.startsWith("..") || path.isAbsolute(relative))) ||
+      createHash("sha256").update(readFileSync(canonicalFile)).digest("hex") !==
+        file.sha256
+    )
+      throw new Error(
+        `${file.name}: run-scoped attachment changed before provider launch; retry.`,
+      );
+  }
 }
 async function prepareChatAttachments(
   workspaceId: string,
   chatId: string,
   attachmentIds: string[],
   includeHostedPixels = false,
+  localExecutionRoot?: string,
 ): Promise<PreparedChatAttachments> {
-  if (
-    attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER ||
-    new Set(attachmentIds).size !== attachmentIds.length
-  )
+  if (new Set(attachmentIds).size !== attachmentIds.length)
     throw new Error("Invalid chat attachment selection");
   const metadata = new Map(
     store
@@ -938,73 +1893,140 @@ async function prepareChatAttachments(
   const images: CliImageInput[] = [],
     hostedImages: OpenRouterImageInput[] = [],
     textBlocks: PreparedChatAttachments["textBlocks"] = [],
+    fileBlocks: PreparedChatAttachments["fileBlocks"] = [],
     summaries: string[] = [];
-  let totalSourceBytes = 0,
-    totalImageBytes = 0;
-  for (const attachmentId of attachmentIds) {
-    const item = metadata.get(attachmentId)!,
-      label = providerAttachmentLabel(item.name);
-    totalSourceBytes += item.bytes;
-    if (totalSourceBytes > 50 * 1024 * 1024)
-      throw new Error("Selected attachments exceed the 50 MiB aggregate preparation limit");
-    if (!CHAT_IMAGE_MEDIA.has(item.mediaType) && !CHAT_DOCUMENT_MEDIA.has(item.mediaType))
-      throw new Error(`${label} has no approved chat delivery path`);
-    const prepared = store.prepareAttachmentForProvider(workspaceId, attachmentId, {
-      inlineText: false,
-      filePaths: true,
-      acceptedMediaTypes: [...CHAT_IMAGE_MEDIA, ...CHAT_DOCUMENT_MEDIA],
-      maxBytes: 25 * 1024 * 1024,
-    });
-    if (prepared.kind !== "path")
-      throw new Error(
-        prepared.kind === "unsupported"
-          ? `${label}: ${prepared.reason}`
-          : `${label} could not be prepared for provider delivery`,
-      );
-    if (CHAT_IMAGE_MEDIA.has(item.mediaType)) {
-      totalImageBytes += item.bytes;
-      if (totalImageBytes > 20 * 1024 * 1024)
-        throw new Error("Selected images exceed the 20 MiB aggregate provider limit");
-      const bytes = readFileSync(prepared.path);
-      imageDimensions(item.mediaType, bytes);
-      const image = {
-        path: prepared.path,
-        name: label,
-        mediaType: item.mediaType as CliImageInput["mediaType"],
-        sha256: prepared.sha256,
-      };
-      images.push(image);
-      if (includeHostedPixels)
-        hostedImages.push({
-          name: label,
-          mediaType: image.mediaType,
-          dataBase64: bytes.toString("base64"),
-          sha256: prepared.sha256,
-        });
-      summaries.push(`${label} · image pixels · ${prepared.sha256.slice(0, 12)}`);
-      continue;
+  let snapshotRoot: string | undefined;
+  const cleanup = () => {
+    if (snapshotRoot) {
+      rmSync(snapshotRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+      snapshotRoot = undefined;
     }
-    const extracted = await extractDocumentOffMain(prepared.path, item.mediaType);
-    if (extracted.status !== "extracted")
-      throw new Error(`${label}: ${extracted.message}`);
-    assertAttachmentExtractionDigest(prepared.sha256,extracted.sourceDigest,label);
-    textBlocks.push({
-      id: attachmentId,
-      name: label,
-      mediaType: item.mediaType,
-      sha256: prepared.sha256,
-      text: extracted.text,
-      extractor: extracted.extractor,
-      extractorVersion: extracted.extractorVersion,
-      ...(extracted.pages ? { pages: extracted.pages } : {}),
-    });
-    summaries.push(
-      `${label} · local text via ${extracted.extractor} ${extracted.extractorVersion} · ${prepared.sha256.slice(0, 12)}`,
-    );
+  };
+  try {
+    for (const attachmentId of attachmentIds) {
+      const item = metadata.get(attachmentId)!,
+        label = providerAttachmentLabel(item.name);
+      if (
+        !CHAT_IMAGE_MEDIA.has(item.mediaType) &&
+        !CHAT_DOCUMENT_MEDIA.has(item.mediaType)
+      )
+        throw new Error(`${label} has no approved chat delivery path`);
+      const prepared = store.prepareAttachmentForProvider(
+        workspaceId,
+        attachmentId,
+        {
+          inlineText: false,
+          filePaths: true,
+          acceptedMediaTypes: [...CHAT_IMAGE_MEDIA, ...CHAT_DOCUMENT_MEDIA],
+        },
+      );
+      if (prepared.kind !== "path")
+        throw new Error(
+          prepared.kind === "unsupported"
+            ? `${label}: ${prepared.reason}`
+            : `${label} could not be prepared for provider delivery`,
+        );
+      if (CHAT_IMAGE_MEDIA.has(item.mediaType)) {
+        const bytes = readFileSync(prepared.path);
+        imageDimensions(item.mediaType, bytes);
+        const image = {
+          path: prepared.path,
+          name: label,
+          mediaType: item.mediaType as CliImageInput["mediaType"],
+          sha256: prepared.sha256,
+        };
+        images.push(image);
+        if (includeHostedPixels)
+          hostedImages.push({
+            name: label,
+            mediaType: image.mediaType,
+            dataBase64: bytes.toString("base64"),
+            sha256: prepared.sha256,
+          });
+        summaries.push(
+          `${label} · image pixels · ${prepared.sha256.slice(0, 12)}`,
+        );
+        continue;
+      }
+      if (localExecutionRoot) {
+        snapshotRoot ??= path.join(
+          path.resolve(localExecutionRoot),
+          `.waypoint-cli-attachments-${randomUUID()}`,
+        );
+        mkdirSync(snapshotRoot, { recursive: false, mode: 0o700 });
+        markRunScopedAttachmentDirectory(snapshotRoot);
+        const extension = path.extname(label).toLowerCase(),
+          snapshotPath = path.join(
+            snapshotRoot,
+            `${fileBlocks.length}${extension}`,
+          );
+        copyFileSync(prepared.path, snapshotPath);
+        const copiedDigest = createHash("sha256")
+          .update(readFileSync(snapshotPath))
+          .digest("hex");
+        if (copiedDigest !== prepared.sha256)
+          throw new Error(
+            `${label}: attachment changed during run-scoped snapshot creation; retry.`,
+          );
+        fileBlocks.push({
+          name: label,
+          mediaType: item.mediaType,
+          sha256: prepared.sha256,
+          path: snapshotPath,
+        });
+        summaries.push(
+          `${label} · run-scoped provider file · ${prepared.sha256.slice(0, 12)}`,
+        );
+        continue;
+      }
+      const extracted = await extractDocumentOffMain(
+        prepared.path,
+        item.mediaType,
+      );
+      if (extracted.status !== "extracted")
+        throw new Error(`${label}: ${extracted.message}`);
+      assertAttachmentExtractionDigest(
+        prepared.sha256,
+        extracted.sourceDigest,
+        label,
+      );
+      textBlocks.push({
+        id: attachmentId,
+        name: label,
+        mediaType: item.mediaType,
+        sha256: prepared.sha256,
+        text: extracted.text,
+        extractor: extracted.extractor,
+        extractorVersion: extracted.extractorVersion,
+        ...(extracted.pages ? { pages: extracted.pages } : {}),
+      });
+      summaries.push(
+        `${label} · local text via ${extracted.extractor} ${extracted.extractorVersion} · ${prepared.sha256.slice(0, 12)}`,
+      );
+    }
+    const sources = attachmentIds.map((id) => ({
+      id,
+      sha256: metadata.get(id)!.sha256,
+    }));
+    assertPreparedChatAttachmentsCurrent(workspaceId, chatId, sources);
+    return {
+      images,
+      hostedImages,
+      textBlocks,
+      fileBlocks,
+      receipt: summaries.join("; "),
+      sources,
+      cleanup,
+    };
+  } catch (error) {
+    cleanup();
+    throw error;
   }
-  const sources=attachmentIds.map((id)=>({id,sha256:metadata.get(id)!.sha256}));
-  assertPreparedChatAttachmentsCurrent(workspaceId,chatId,sources);
-  return { images, hostedImages, textBlocks, receipt: summaries.join("; "), sources };
 }
 function directoryBytes(root: string): number {
   try {
@@ -1055,7 +2077,11 @@ function recordVoiceStopRequest(key: string) {
 
 async function collectDiagnostics(workspaceId: string) {
   const local = store.localDiagnostics(workspaceId),
-    capabilities = await Promise.all([detectCli("codex"), detectCli("claude")]);
+    capabilities = await Promise.all([
+      detectCli("codex"),
+      detectCli("claude"),
+      detectCli("grok"),
+    ]);
   return runDiagnostics({
     database: async () => ({
       schemaVersion: local.schemaVersion,
@@ -1110,57 +2136,303 @@ async function collectDiagnostics(workspaceId: string) {
 }
 
 function registerIpc(): void {
-  handle('waypoint:screen-capture-readiness', () => {
-    const permission = process.platform === 'darwin'
-      ? systemPreferences.getMediaAccessStatus('screen') as 'granted'|'denied'|'restricted'|'not-determined'|'unknown'
-      : 'unknown';
-    return {...captureReadiness(process.platform, permission),shortcut:captureShortcutState};
+  handle("waypoint:screen-capture-readiness", () => {
+    const permission =
+      process.platform === "darwin"
+        ? (systemPreferences.getMediaAccessStatus("screen") as
+            "granted" | "denied" | "restricted" | "not-determined" | "unknown")
+        : "unknown";
+    return {
+      ...captureReadiness(process.platform, permission),
+      shortcut: captureShortcutState,
+    };
   });
-  handle('waypoint:screen-capture-settings', (_event, input: unknown) => {
-    const workspaceId = text((input as Record<string, unknown>)?.workspaceId, 'workspace id', 128);
-    const settings=store.screenCaptureSettings(workspaceId);registerCaptureShortcut(workspaceId,settings);return settings;
+  handle("waypoint:screen-capture-settings", (_event, input: unknown) => {
+    const workspaceId = text(
+      (input as Record<string, unknown>)?.workspaceId,
+      "workspace id",
+      128,
+    );
+    const settings = store.screenCaptureSettings(workspaceId);
+    registerCaptureShortcut(workspaceId, settings);
+    return settings;
   });
-  handle('waypoint:screen-capture-settings-update', (_event, input: unknown) => {
-    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, 'workspace id', 128), settings = validateCaptureSettings(value.settings as Parameters<typeof validateCaptureSettings>[0]);
-    const saved = store.setScreenCaptureSettings(workspaceId, settings), shortcutReady = registerCaptureShortcut(workspaceId,saved);
-    return { ...saved, shortcutReady, shortcutReason: shortcutReady ? 'Global shortcut ready' : 'Shortcut is already used by another application' };
-  });
-  handle('waypoint:screen-capture-shortcut-recording', (_event, input: unknown) => {
-    const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace id',128),active=Boolean(value.active),settings=store.screenCaptureSettings(workspaceId);
-    captureShortcutSuspended=active;
-    if(active){if(captureShortcutState.shortcut)globalShortcut.unregister(captureShortcutState.shortcut);captureShortcutState={registered:false,shortcut:settings.shortcut,reason:'Shortcut paused while recording a replacement'};return captureShortcutState}
-    registerCaptureShortcut(workspaceId,settings);return captureShortcutState;
-  });
-  handle('waypoint:screen-capture-sources', async (event, input: unknown) => {
-    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId,'workspace id',128), mode = text(value.mode, 'capture mode', 16) as CaptureMode;
+  handle(
+    "waypoint:screen-capture-settings-update",
+    (_event, input: unknown) => {
+      const value = input as Record<string, unknown>,
+        workspaceId = text(value.workspaceId, "workspace id", 128),
+        settings = validateCaptureSettings(
+          value.settings as Parameters<typeof validateCaptureSettings>[0],
+        );
+      const saved = store.setScreenCaptureSettings(workspaceId, settings),
+        shortcutReady = registerCaptureShortcut(workspaceId, saved);
+      return {
+        ...saved,
+        shortcutReady,
+        shortcutReason: shortcutReady
+          ? "Global shortcut ready"
+          : "Shortcut is already used by another application",
+      };
+    },
+  );
+  handle(
+    "waypoint:screen-capture-shortcut-recording",
+    (_event, input: unknown) => {
+      const value = input as Record<string, unknown>,
+        workspaceId = text(value.workspaceId, "workspace id", 128),
+        active = Boolean(value.active),
+        settings = store.screenCaptureSettings(workspaceId);
+      captureShortcutSuspended = active;
+      if (active) {
+        if (captureShortcutState.shortcut)
+          globalShortcut.unregister(captureShortcutState.shortcut);
+        captureShortcutState = {
+          registered: false,
+          shortcut: settings.shortcut,
+          reason: "Shortcut paused while recording a replacement",
+        };
+        return captureShortcutState;
+      }
+      registerCaptureShortcut(workspaceId, settings);
+      return captureShortcutState;
+    },
+  );
+  handle("waypoint:screen-capture-sources", async (event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace id", 128),
+      mode = text(value.mode, "capture mode", 16) as CaptureMode;
     store.screenCaptureSettings(workspaceId);
-    if (!['region','window','display'].includes(mode)) throw new Error('Invalid capture mode');
-    for (const [token, item] of pendingManualCaptures) if (item.expiresAt < Date.now()) pendingManualCaptures.delete(token);
-    const sources = await desktopCapturer.getSources({ types: mode === 'window' ? ['window'] : ['screen'], thumbnailSize: { width: 3840, height: 2160 }, fetchWindowIcons: true });
+    if (!["region", "window", "display"].includes(mode))
+      throw new Error("Invalid capture mode");
+    for (const [token, item] of pendingManualCaptures)
+      if (item.expiresAt < Date.now()) pendingManualCaptures.delete(token);
+    const sources = await desktopCapturer.getSources({
+      types: mode === "window" ? ["window"] : ["screen"],
+      thumbnailSize: { width: 3840, height: 2160 },
+      fetchWindowIcons: true,
+    });
     return sources.map((source) => {
-      const size = source.thumbnail.getSize(), token = randomUUID();
-      pendingManualCaptures.set(token, { workspaceId,senderId:event.sender.id,sourceId: source.id, sourceName: source.name, mode, width:size.width, height:size.height, expiresAt: Date.now() + 120_000 });
-      return { token, name: source.name, displayId: source.display_id, thumbnailDataUrl: source.thumbnail.resize({ width: Math.min(560, size.width) }).toDataURL(), width: size.width, height: size.height };
+      const size = source.thumbnail.getSize(),
+        token = randomUUID();
+      pendingManualCaptures.set(token, {
+        workspaceId,
+        senderId: event.sender.id,
+        sourceId: source.id,
+        sourceName: source.name,
+        mode,
+        width: size.width,
+        height: size.height,
+        expiresAt: Date.now() + 120_000,
+      });
+      return {
+        token,
+        name: source.name,
+        displayId: source.display_id,
+        thumbnailDataUrl: source.thumbnail
+          .resize({ width: Math.min(560, size.width) })
+          .toDataURL(),
+        width: size.width,
+        height: size.height,
+      };
     });
   });
-  handle('waypoint:screen-capture-create', async (event, input: unknown) => {
-    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, 'workspace id', 128), token = text(value.token, 'capture token', 128), pending = pendingManualCaptures.get(token);
-    if (!pending || pending.expiresAt < Date.now()||pending.workspaceId!==workspaceId||pending.senderId!==event.sender.id) throw new Error('Capture selection expired or belongs to another workspace. Choose the source again.');
+  handle("waypoint:screen-capture-create", async (event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace id", 128),
+      token = text(value.token, "capture token", 128),
+      pending = pendingManualCaptures.get(token);
+    if (
+      !pending ||
+      pending.expiresAt < Date.now() ||
+      pending.workspaceId !== workspaceId ||
+      pending.senderId !== event.sender.id
+    )
+      throw new Error(
+        "Capture selection expired or belongs to another workspace. Choose the source again.",
+      );
     pendingManualCaptures.delete(token);
-    const window=BrowserWindow.fromWebContents(event.sender),visibility=captureVisibilityStrategy(pending.mode);
-    try{if(visibility.hideWindow){window?.hide();await new Promise((resolve)=>setTimeout(resolve,180))}else if(visibility.hideOverlay)await setCaptureOverlayVisibility(event.sender,true);const sources=await desktopCapturer.getSources({types:pending.mode==='window'?['window']:['screen'],thumbnailSize:{width:pending.width,height:pending.height},fetchWindowIcons:false}),source=sources.find((item)=>item.id===pending.sourceId);if(!source||source.thumbnail.isEmpty())throw new Error('The selected source is no longer available. Choose it again.');const size=source.thumbnail.getSize();try{assertVisibleCapturePixels(source.thumbnail.toBitmap(),size.width,size.height)}catch(error){if(error instanceof Error&&error.message==='screen_capture_no_visible_pixels')throw new Error('Capture returned no visible pixels. Check Screen Recording permission, make sure the selected window is visible, then try again.',{cause:error});throw error}const png=source.thumbnail.toPNG();return store.createScreenCapture(workspaceId, { title: `Screenshot · ${pending.sourceName}`, mode: pending.mode, sourceId: pending.sourceId, sourceName: pending.sourceName, capturedAt: new Date().toISOString(), width: size.width, height: size.height }, png)}finally{if(visibility.hideWindow){window?.show();window?.focus()}else if(visibility.hideOverlay)await setCaptureOverlayVisibility(event.sender,false).catch(()=>undefined)}
+    const window = BrowserWindow.fromWebContents(event.sender),
+      visibility = captureVisibilityStrategy(pending.mode);
+    try {
+      if (visibility.hideWindow) {
+        window?.hide();
+        await new Promise((resolve) => setTimeout(resolve, 180));
+      } else if (visibility.hideOverlay)
+        await setCaptureOverlayVisibility(event.sender, true);
+      const sources = await desktopCapturer.getSources({
+          types: pending.mode === "window" ? ["window"] : ["screen"],
+          thumbnailSize: { width: pending.width, height: pending.height },
+          fetchWindowIcons: false,
+        }),
+        source = sources.find((item) => item.id === pending.sourceId);
+      if (!source || source.thumbnail.isEmpty())
+        throw new Error(
+          "The selected source is no longer available. Choose it again.",
+        );
+      const size = source.thumbnail.getSize();
+      try {
+        assertVisibleCapturePixels(
+          source.thumbnail.toBitmap(),
+          size.width,
+          size.height,
+        );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "screen_capture_no_visible_pixels"
+        )
+          throw new Error(
+            "Capture returned no visible pixels. Check Screen Recording permission, make sure the selected window is visible, then try again.",
+            { cause: error },
+          );
+        throw error;
+      }
+      const png = source.thumbnail.toPNG();
+      return store.createScreenCapture(
+        workspaceId,
+        {
+          title: `Screenshot · ${pending.sourceName}`,
+          mode: pending.mode,
+          sourceId: pending.sourceId,
+          sourceName: pending.sourceName,
+          capturedAt: new Date().toISOString(),
+          width: size.width,
+          height: size.height,
+        },
+        png,
+      );
+    } finally {
+      if (visibility.hideWindow) {
+        window?.show();
+        window?.focus();
+      } else if (visibility.hideOverlay)
+        await setCaptureOverlayVisibility(event.sender, false).catch(
+          () => undefined,
+        );
+    }
   });
-  handle('waypoint:screen-capture-cancel-sources',(event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>)?.workspaceId,'workspace id',128);for(const[token,pending]of pendingManualCaptures)if(pending.workspaceId===workspaceId&&pending.senderId===event.sender.id)pendingManualCaptures.delete(token);return{canceled:true}});
-  handle('waypoint:screen-capture-import-browser', async (_event,input:unknown)=>{const workspaceId=text((input as Record<string,unknown>)?.workspaceId,'workspace id',128),capture=await inAppBrowser.capturePng(workspaceId);return store.createScreenCapture(workspaceId,{title:`Browser · ${capture.title}`.slice(0,120),mode:'browser',sourceId:createHash('sha256').update(capture.url).digest('hex'),sourceName:new URL(capture.url).hostname,capturedAt:new Date().toISOString(),width:capture.width,height:capture.height},capture.png)});
-  handle('waypoint:screen-capture-list', (_event, input: unknown) => store.listScreenCaptures(text((input as Record<string, unknown>)?.workspaceId, 'workspace id', 128)));
-  handle('waypoint:screen-capture-read', (_event, input: unknown) => { const value=input as Record<string,unknown>;return store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128)) });
-  handle('waypoint:screen-capture-update', (_event, input: unknown) => { const value=input as Record<string,unknown>;return store.updateScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),value.layers,value.flattenedBytes instanceof Uint8Array?value.flattenedBytes:undefined) });
-  handle('waypoint:screen-capture-copy', (_event, input: unknown) => { const value=input as Record<string,unknown>,capture=store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128));clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(capture.dataBase64,'base64')));return{copied:true} });
-  handle('waypoint:screen-capture-save', async (_event, input: unknown) => { const value=input as Record<string,unknown>,capture=store.readScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128)),result=await dialog.showSaveDialog({title:'Save screenshot',defaultPath:'Waypoint screenshot.png',filters:[{name:'PNG image',extensions:['png']}],properties:['createDirectory','showOverwriteConfirmation']});if(result.canceled||!result.filePath)return{canceled:true};writeFileSync(result.filePath,Buffer.from(capture.dataBase64,'base64'),{mode:0o600});return{canceled:false} });
-  handle('waypoint:screen-capture-add-chat', (_event, input: unknown) => {const value=input as Record<string,unknown>;return store.addScreenCaptureToChat(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128),text(value.chatId,'chat id',128))});
-  handle('waypoint:screen-capture-add-knowledge', (_event, input: unknown) => {const value=input as Record<string,unknown>;return store.addScreenCaptureToKnowledge(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128))});
-  handle('waypoint:screen-capture-delete', (_event, input: unknown) => {const value=input as Record<string,unknown>;store.deleteScreenCapture(text(value.workspaceId,'workspace id',128),text(value.captureId,'capture id',128));return{deleted:true}});
-  const assertBrowserWorkspace = (event: IpcMainInvokeEvent, workspaceId: string) => {
+  handle("waypoint:screen-capture-cancel-sources", (event, input: unknown) => {
+    const workspaceId = text(
+      (input as Record<string, unknown>)?.workspaceId,
+      "workspace id",
+      128,
+    );
+    for (const [token, pending] of pendingManualCaptures)
+      if (
+        pending.workspaceId === workspaceId &&
+        pending.senderId === event.sender.id
+      )
+        pendingManualCaptures.delete(token);
+    return { canceled: true };
+  });
+  handle(
+    "waypoint:screen-capture-import-browser",
+    async (_event, input: unknown) => {
+      const workspaceId = text(
+          (input as Record<string, unknown>)?.workspaceId,
+          "workspace id",
+          128,
+        ),
+        capture = await inAppBrowser.capturePng(workspaceId);
+      return store.createScreenCapture(
+        workspaceId,
+        {
+          title: `Browser · ${capture.title}`.slice(0, 120),
+          mode: "browser",
+          sourceId: createHash("sha256").update(capture.url).digest("hex"),
+          sourceName: new URL(capture.url).hostname,
+          capturedAt: new Date().toISOString(),
+          width: capture.width,
+          height: capture.height,
+        },
+        capture.png,
+      );
+    },
+  );
+  handle("waypoint:screen-capture-list", (_event, input: unknown) =>
+    store.listScreenCaptures(
+      text(
+        (input as Record<string, unknown>)?.workspaceId,
+        "workspace id",
+        128,
+      ),
+    ),
+  );
+  handle("waypoint:screen-capture-read", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.readScreenCapture(
+      text(value.workspaceId, "workspace id", 128),
+      text(value.captureId, "capture id", 128),
+    );
+  });
+  handle("waypoint:screen-capture-update", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.updateScreenCapture(
+      text(value.workspaceId, "workspace id", 128),
+      text(value.captureId, "capture id", 128),
+      value.layers,
+      value.flattenedBytes instanceof Uint8Array
+        ? value.flattenedBytes
+        : undefined,
+    );
+  });
+  handle("waypoint:screen-capture-copy", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      capture = store.readScreenCapture(
+        text(value.workspaceId, "workspace id", 128),
+        text(value.captureId, "capture id", 128),
+      );
+    clipboard.writeImage(
+      nativeImage.createFromBuffer(Buffer.from(capture.dataBase64, "base64")),
+    );
+    return { copied: true };
+  });
+  handle("waypoint:screen-capture-save", async (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      capture = store.readScreenCapture(
+        text(value.workspaceId, "workspace id", 128),
+        text(value.captureId, "capture id", 128),
+      ),
+      result = await dialog.showSaveDialog({
+        title: "Save screenshot",
+        defaultPath: "Waypoint screenshot.png",
+        filters: [{ name: "PNG image", extensions: ["png"] }],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    writeFileSync(result.filePath, Buffer.from(capture.dataBase64, "base64"), {
+      mode: 0o600,
+    });
+    return { canceled: false };
+  });
+  handle("waypoint:screen-capture-add-chat", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.addScreenCaptureToChat(
+      text(value.workspaceId, "workspace id", 128),
+      text(value.captureId, "capture id", 128),
+      text(value.chatId, "chat id", 128),
+    );
+  });
+  handle("waypoint:screen-capture-add-knowledge", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.addScreenCaptureToKnowledge(
+      text(value.workspaceId, "workspace id", 128),
+      text(value.captureId, "capture id", 128),
+    );
+  });
+  handle("waypoint:screen-capture-delete", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    store.deleteScreenCapture(
+      text(value.workspaceId, "workspace id", 128),
+      text(value.captureId, "capture id", 128),
+    );
+    return { deleted: true };
+  });
+  const assertBrowserWorkspace = (
+    event: IpcMainInvokeEvent,
+    workspaceId: string,
+  ) => {
     if (toolWindowWorkspaces.get(event.sender.id) !== workspaceId)
       throw new Error("browser_workspace_scope_denied");
   };
@@ -1237,7 +2509,9 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       sourceIds = value.sourceIds,
-      provider = value.provider === "claude" ? "claude" : "codex",
+      provider = ["codex", "claude", "grok"].includes(String(value.provider))
+        ? (String(value.provider) as "codex" | "claude" | "grok")
+        : "codex",
       reservation = `pending-${randomUUID()}`;
     if (store.toolGatewaySettings(workspaceId).stopped)
       throw new Error("Workspace stop is active");
@@ -1275,10 +2549,6 @@ function registerIpc(): void {
           sourceIds as string[],
         ),
         serialized = JSON.stringify(sources);
-      if (Buffer.byteLength(serialized) > 500_000)
-        throw new Error(
-          "Selected reflection sources exceed the bounded analysis envelope",
-        );
       const preliminary = store.createReflectionRun(
         workspaceId,
         sourceIds as string[],
@@ -1291,7 +2561,7 @@ function registerIpc(): void {
           (item) =>
             item.filesystem === "read-only" &&
             item.network === "provider-only" &&
-            !item.tools.length,
+            item.tools.every((tool) => tool === "provider-native"),
         );
       if (!profile)
         throw new Error(
@@ -1308,23 +2578,49 @@ function registerIpc(): void {
       store.markReflectionRunReviewing(workspaceId, runId);
       const prompt = `You are Waypoint's bounded memory reflection reviewer. Analyze only the exact local sources below. Do not use tools, files, network, or outside facts. Return exactly one marker block and nothing else: <waypoint-reflection>[{"kind":"duplicate|stale|contradiction","title":"...","beforeBody":"...","proposedBody":"...","rationale":"...","sourceIds":["exact source IDs"]}]</waypoint-reflection>. Never choose a winner for a contradiction; leave proposedBody empty. Sources: ${serialized}`,
         events: ExecutionEvent[] = [];
-      const execution = await workbench.start(
-          `reflection-${runId}`,
-          {
-            cli: provider,
-            prompt,
-            workspaceRoot: profile.roots[0],
-            profile: { ...profile, maxConcurrency: 1, secretNames: [] },
-            executable: capability.executable,
-            version: capability.version,
-            timeoutMs: 120_000,
-            maxOutputBytes: 262_144,
-          },
-          (event) => {
-            if (event.type === "text" && event.text) events.push(event);
-          },
-        ),
-        terminal = await execution.completion;
+      const reflectionRunId = `reflection-${runId}`,
+        onReflectionEvent = (event: ExecutionEvent) => {
+          if (event.type === "text" && event.text) events.push(event);
+        },
+        execution =
+          provider === "grok"
+            ? await grokWorkbench.start(
+                reflectionRunId,
+                {
+                  cli: "grok",
+                  prompt,
+                  workspaceRoot: profile.roots[0],
+                  profile: {
+                    ...profile,
+                    tools: [],
+                    maxConcurrency: 1,
+                    secretNames: [],
+                  },
+                  isolatedNoTools: true,
+                  executable: capability.executable,
+                  version: capability.version,
+                  onSession: () => undefined,
+                  onApproval: async () => ({
+                    status: "declined",
+                    decision: {},
+                  }),
+                },
+                onReflectionEvent,
+              )
+            : await workbench.start(
+                reflectionRunId,
+                {
+                  cli: provider,
+                  prompt,
+                  workspaceRoot: profile.roots[0],
+                  profile: { ...profile, maxConcurrency: 1, secretNames: [] },
+                  executable: capability.executable,
+                  version: capability.version,
+                },
+                onReflectionEvent,
+              );
+      activeReflectionProviders.set(runId, provider);
+      const terminal = await execution.completion;
       if (terminal.status !== "completed")
         throw new Error(
           `reflection_${terminal.status}:${terminal.error ?? terminal.status}`,
@@ -1392,7 +2688,10 @@ function registerIpc(): void {
         activeReflectionRuns.delete(workspaceId);
       killedReflectionWorkspaces.delete(workspaceId);
       cancelledReflectionReservations.delete(reservation);
-      if (runId) cancelledReflectionReservations.delete(runId);
+      if (runId) {
+        cancelledReflectionReservations.delete(runId);
+        activeReflectionProviders.delete(runId);
+      }
     }
   });
   handle("waypoint:reflection-cancel", (_event, input: unknown) => {
@@ -1404,7 +2703,11 @@ function registerIpc(): void {
       runId = activeReflectionRuns.get(workspaceId);
     if (!runId) return { canceled: false };
     cancelledReflectionReservations.add(runId);
-    if (!runId.startsWith("pending-")) workbench.cancel(`reflection-${runId}`);
+    if (!runId.startsWith("pending-")) {
+      if (activeReflectionProviders.get(runId) === "grok")
+        grokWorkbench.cancel(`reflection-${runId}`);
+      else workbench.cancel(`reflection-${runId}`);
+    }
     return { canceled: true };
   });
   handle("waypoint:reflection-resolve", (_event, input: unknown) => {
@@ -1859,10 +3162,10 @@ function registerIpc(): void {
       strategicModel: text(value.strategicModel, "strategic model ID", 200),
       everydayModel: text(value.everydayModel, "everyday model ID", 200),
       attachmentModel: text(value.attachmentModel, "image model ID", 200),
-      fallbackProvider: ["codex", "claude"].includes(
+      fallbackProvider: ["codex", "claude", "grok"].includes(
         String(value.fallbackProvider),
       )
-        ? (value.fallbackProvider as "codex" | "claude")
+        ? (value.fallbackProvider as "codex" | "claude" | "grok")
         : undefined,
       monthlyCapMicros: Number(value.monthlyCapMicros),
       ytdCapMicros: Number(value.ytdCapMicros),
@@ -1875,25 +3178,40 @@ function registerIpc(): void {
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       chatId = text(value.chatId, "chat ID", 64),
       sourceMessageId = text(value.sourceMessageId, "source message ID", 64),
-      prompt = text(value.prompt, "prompt", 2_000_000),
-      securityProfileId=text(value.securityProfileId,"security profile ID",64),
+      prompt = text(value.prompt, "prompt"),
+      securityProfileId = text(
+        value.securityProfileId,
+        "security profile ID",
+        64,
+      ),
       role =
         value.role === "strategic"
           ? ("strategic" as const)
           : ("everyday" as const);
+    assertChatMayStart(workspaceId, chatId);
     const attachmentIds = Array.isArray(value.attachmentIds)
       ? value.attachmentIds.map((item) => text(item, "attachment ID", 64))
       : [];
-    const automationProfile=store.listSecurityProfiles(workspaceId).find((item)=>item.id===securityProfileId);if(!automationProfile)throw new Error('Security profile is unavailable');
+    const automationProfile = store
+      .listSecurityProfiles(workspaceId)
+      .find((item) => item.id === securityProfileId);
+    if (!automationProfile) throw new Error("Security profile is unavailable");
+    const hostedPolicy = gatewayPolicy(workspaceId, securityProfileId),
+      hostedTools = openRouterTools(automationProfile),
+      hostedToolNames = new Set(hostedTools.map((item) => item.function.name));
     const settings = store.openRouterSettings(),
       usage = store.providerUsage(),
       apiKey = providerVault.getKey(),
       subscriptions = (
-        await Promise.all([detectCli("codex"), detectCli("claude")])
+        await Promise.all([
+          detectCli("codex"),
+          detectCli("claude"),
+          detectCli("grok"),
+        ])
       )
         .filter((item) => item.available && item.compatible !== false)
-        .map((item) => item.name),
-      fallback = (provider: "codex" | "claude", reason: string) => {
+        .map((item) => item.name as "codex" | "claude" | "grok"),
+      fallback = (provider: "codex" | "claude" | "grok", reason: string) => {
         const timestamp = new Date().toISOString(),
           receipt: ProviderUsageReceipt = {
             id: randomUUID(),
@@ -1928,6 +3246,7 @@ function registerIpc(): void {
     });
     if (route.provider !== "openrouter")
       return fallback(route.provider, route.reason);
+    store.assertWorkspaceExecutionRoot(workspaceId);
     const preparedAttachments = await prepareChatAttachments(
         workspaceId,
         chatId,
@@ -1948,6 +3267,11 @@ function registerIpc(): void {
         prompt,
         productHelpLibrary,
       );
+    assertPreparedChatAttachmentsCurrent(
+      workspaceId,
+      chatId,
+      preparedAttachments.sources,
+    );
     let release: () => void;
     try {
       release = openRouterBudget.reserve(settings, usage.summary);
@@ -1960,15 +3284,24 @@ function registerIpc(): void {
         );
       throw error;
     }
+    assertChatMayStart(workspaceId, chatId);
     const runId = store.createHostedRun(
+        workspaceId,
+        chatId,
+        sourceMessageId,
+        role,
+        attachmentRoute.model,
+        securityProfileId,
+      ),
+      controller = new AbortController();
+    const activeHostedRun = {
       workspaceId,
       chatId,
-      sourceMessageId,
-      role,
-      attachmentRoute.model,
-    ),
-      controller = new AbortController();
-    activeHostedRuns.set(runId, { workspaceId, controller });
+      controller,
+      toolRunIds: new Set<string>(),
+      completion: undefined as Promise<void> | undefined,
+    };
+    activeHostedRuns.set(runId, activeHostedRun);
     if (helpSelection.sources.length)
       store.addHostedRunEvent(
         workspaceId,
@@ -1991,18 +3324,195 @@ function registerIpc(): void {
         attachmentRoute.reason,
       );
     store.startHostedRun(workspaceId, runId);
-    assertPreparedChatAttachmentsCurrent(workspaceId,chatId,preparedAttachments.sources);
-    void openRouterClient.run({
+    const approvedHostedOperations = new Set<string>();
+    let nativeAutomationSummary: string | undefined,
+      nativeAutomationResult:
+        | { proposalId: string; status: string; summary?: string }
+        | undefined,
+      nativeAutomationInFlight:
+        | Promise<{ proposalId: string; status: string; summary?: string }>
+        | undefined;
+    const onAutomationProposal = async (definition: unknown) => {
+      if (nativeAutomationResult) return nativeAutomationResult;
+      if (nativeAutomationInFlight) return nativeAutomationInFlight;
+      nativeAutomationInFlight = (async () => {
+        const proposal = await prepareAutomationProposal(
+          workspaceId,
+          chatId,
+          definition,
+        );
+        nativeAutomationSummary = automationProposalPreparedSummary(
+          proposal.definition,
+        );
+        nativeAutomationResult = {
+          proposalId: proposal.id,
+          status: proposal.status,
+          summary: nativeAutomationSummary,
+        };
+        return nativeAutomationResult;
+      })();
+      try {
+        return await nativeAutomationInFlight;
+      } finally {
+        nativeAutomationInFlight = undefined;
+      }
+    };
+    activeHostedRun.completion = openRouterAgentClient
+      .run({
         workspaceId,
         role,
         model: attachmentRoute.model,
-        prompt: withAutomationProposalTool({prompt:withCurrentDateTime(helpSelection.prompt),chatId,provider:'openrouter',model:attachmentRoute.model,securityProfileId,maxDurationMs:automationProfile.maxDurationMs}),
+        prompt: withAutomationProposalTool({
+          prompt: withCurrentDateTime(helpSelection.prompt),
+          chatId,
+          provider: "openrouter",
+          securityProfileId,
+        }),
         images: preparedAttachments.hostedImages,
         apiKey,
         signal: controller.signal,
         requestCapMicros: settings.perRequestCapMicros ?? 100_000,
+        tools: hostedTools,
+        onToolCall: (call) =>
+          store.addHostedRunEvent(
+            workspaceId,
+            runId,
+            "progress",
+            `Tool requested · ${call.name}`,
+          ),
+        onTextDelta: (text) =>
+          store.appendHostedAssistantText(workspaceId, runId, text),
+        executeTool: async (call) => {
+          store.assertWorkspaceExecutionRoot(workspaceId);
+          if (call.name === OPENROUTER_AUTOMATION_PROPOSAL_TOOL) {
+            try {
+              const result = await onAutomationProposal(
+                call.arguments.definition,
+              );
+              return JSON.stringify({ ...result, status: "pending" });
+            } catch (error) {
+              return JSON.stringify({
+                status: "rejected",
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Automation proposal validation failed",
+                provisioned: false,
+                enabled: false,
+              });
+            }
+          }
+          const request = openRouterToolRequest(
+            workspaceId,
+            chatId,
+            call,
+            hostedToolNames,
+          );
+          const approvalOperation = createHash("sha256")
+            .update(`${request.tool}\n${JSON.stringify(request.arguments)}`)
+            .digest("hex");
+          if (
+            automationProfile.approval !== "never" &&
+            openRouterToolNeedsApproval(request) &&
+            !approvedHostedOperations.has(approvalOperation)
+          ) {
+            let safeArguments: unknown;
+            try {
+              safeArguments = JSON.parse(
+                redactToolText(
+                  JSON.stringify(request.arguments),
+                  hostedPolicy.secretNames,
+                ),
+              );
+            } catch {
+              safeArguments = "[redacted arguments]";
+            }
+            const decision = await awaitProviderDecision(
+              {
+                workspaceId,
+                chatId,
+                executionId: runId,
+                provider: "openrouter",
+                request: {
+                  providerRequestId: call.id,
+                  kind: openRouterToolApprovalKind(request),
+                  title: `OpenRouter requests ${request.tool}`,
+                  detail: { tool: request.tool, arguments: safeArguments },
+                  options: [
+                    { id: "decline", label: "Decline" },
+                    { id: "allow_once", label: "Allow once" },
+                    { id: "allow_session", label: "Allow for session" },
+                  ],
+                },
+              },
+              controller.signal,
+            );
+            if (decision.status === "accepted_session")
+              approvedHostedOperations.add(approvalOperation);
+            if (!["accepted", "accepted_session"].includes(decision.status))
+              return JSON.stringify({
+                status: "denied",
+                code: "user_declined",
+                tool: request.tool,
+              });
+          }
+          if (controller.signal.aborted)
+            return JSON.stringify({
+              status: "canceled",
+              code: "provider_canceled",
+              tool: request.tool,
+            });
+          const activeRun = activeHostedRuns.get(runId),
+            execution = await toolGateway.execute(
+              request,
+              hostedPolicy,
+              [],
+              (toolRunId) => activeRun?.toolRunIds.add(toolRunId),
+            );
+          let completed: ToolResult;
+          try {
+            completed =
+              execution.result ??
+              (await toolGateway.waitForCompletion(execution.runId));
+          } finally {
+            activeRun?.toolRunIds.delete(execution.runId);
+          }
+          store.addHostedRunEvent(
+            workspaceId,
+            runId,
+            "progress",
+            `${request.tool} · ${completed.receipt.status}`,
+          );
+          return JSON.stringify({
+            status: completed.receipt.status,
+            summary: completed.receipt.summary,
+            code: completed.receipt.code,
+            output: completed.output,
+            value: completed.value,
+            receiptId: completed.receipt.id,
+          });
+        },
       })
-      .then(async({ text: answer, receipt }) =>{const parsed=extractAutomationProposalTool(answer);let display=answer;if(parsed.definition){try{await prepareAutomationProposal(workspaceId,chatId,parsed.definition);display=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I’ve prepared the exact configuration below for your approval. Nothing has been provisioned or enabled.`}catch(error){display=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${error instanceof Error?error.message:'proposal preparation failed'}. Nothing was changed.`}}else if(parsed.error)display=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${parsed.error}. Nothing was changed.`;store.finishHostedRun(workspaceId,runId,"completed",receipt,display)})
+      .then(async ({ text: answer, receipt, toolCalls }) => {
+        if (toolCalls)
+          store.addHostedRunEvent(
+            workspaceId,
+            runId,
+            "progress",
+            `${toolCalls} Tool Gateway call${toolCalls === 1 ? "" : "s"} completed`,
+          );
+        const finalAnswer =
+          nativeAutomationSummary && !answer.includes(nativeAutomationSummary)
+            ? `${answer}${answer ? "\n\n" : ""}${nativeAutomationSummary}`
+            : answer;
+        store.finishHostedRun(
+          workspaceId,
+          runId,
+          "completed",
+          receipt,
+          finalAnswer,
+        );
+      })
       .catch((error: Error & { receipt?: ProviderUsageReceipt }) => {
         const receipt = error.receipt;
         if (receipt)
@@ -2014,6 +3524,8 @@ function registerIpc(): void {
           );
       })
       .finally(() => {
+        preparedAttachments.cleanup();
+        providerDecisionGate.clearExecution(runId);
         release();
         activeHostedRuns.delete(runId);
       });
@@ -2039,6 +3551,8 @@ function registerIpc(): void {
     if (!active || active.workspaceId !== workspaceId)
       return { canceled: false };
     active.controller.abort();
+    for (const toolRunId of active.toolRunIds)
+      toolGateway.cancel(workspaceId, toolRunId);
     return { canceled: true };
   });
   handle("waypoint:tool-gateway-settings", (event, input: unknown) => {
@@ -2077,7 +3591,14 @@ function registerIpc(): void {
     )
       throw new Error("The selected installed browser profile is unavailable");
     await inAppBrowser.close(workspaceId);
-    const closed=await toolGateway.stopAndCloseBrowser(workspaceId,gatewayPolicy(workspaceId));if(!closed&&browserClosure)throw new Error('Close the active browser session before importing a profile snapshot');
+    const closed = await toolGateway.stopAndCloseBrowser(
+      workspaceId,
+      gatewayPolicy(workspaceId),
+    );
+    if (!closed && browserClosure)
+      throw new Error(
+        "Close the active browser session before importing a profile snapshot",
+      );
     const source = path.join(browser.profileRoot, profileId),
       profileName = `${browserId}.${profileId.replaceAll(" ", "_")}`,
       root = path.join(
@@ -2099,7 +3620,7 @@ function registerIpc(): void {
         browserProfileMode: "existing",
         browserProfileName: profileName,
       });
-    if(!settings.stopped)toolGateway.resume(workspaceId);
+    if (!settings.stopped) toolGateway.resume(workspaceId);
     return {
       settings,
       profile: {
@@ -2127,7 +3648,9 @@ function registerIpc(): void {
       gatewayPolicy(workspaceId),
     );
     if (!closed && browserClosure)
-      throw new Error("Close the active browser session before removing its private snapshot");
+      throw new Error(
+        "Close the active browser session before removing its private snapshot",
+      );
     if (current.browserProfileMode === "existing" && profileName)
       rmSync(
         path.join(
@@ -2147,7 +3670,11 @@ function registerIpc(): void {
     return { removed: true as const, settings };
   });
   handle("waypoint:in-app-browser-status", (event, input: unknown) => {
-    const workspaceId = text((input as Record<string, unknown>).workspaceId, "workspace ID", 64);
+    const workspaceId = text(
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
     assertBrowserWorkspace(event, workspaceId);
     return inAppBrowser.status(workspaceId);
   });
@@ -2203,17 +3730,29 @@ function registerIpc(): void {
     );
   });
   handle("waypoint:in-app-browser-close", (event, input: unknown) => {
-    const workspaceId = text((input as Record<string, unknown>).workspaceId, "workspace ID", 64);
+    const workspaceId = text(
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
     assertBrowserWorkspace(event, workspaceId);
     return inAppBrowser.close(workspaceId);
   });
   handle("waypoint:in-app-browser-hide", (event, input: unknown) => {
-    const workspaceId = text((input as Record<string, unknown>).workspaceId, "workspace ID", 64);
+    const workspaceId = text(
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
     assertBrowserWorkspace(event, workspaceId);
     return inAppBrowser.hide(workspaceId);
   });
   handle("waypoint:in-app-browser-clear", (event, input: unknown) => {
-    const workspaceId = text((input as Record<string, unknown>).workspaceId, "workspace ID", 64);
+    const workspaceId = text(
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
     assertBrowserWorkspace(event, workspaceId);
     return inAppBrowser.clear(workspaceId);
   });
@@ -2277,7 +3816,8 @@ function registerIpc(): void {
           );
       }
       if (next.stopped) {
-        for(const active of activeAutoTitles.values())if(active.workspaceId===workspaceId)active.cancel();
+        for (const active of activeAutoTitles.values())
+          if (active.workspaceId === workspaceId) active.cancel();
         const reflectionRun = activeReflectionRuns.get(workspaceId);
         if (reflectionRun) {
           killedReflectionWorkspaces.add(workspaceId);
@@ -2385,6 +3925,70 @@ function registerIpc(): void {
     if (!name) throw new Error("Workspace name is required");
     return store.createWorkspace(name, app.getPath("userData"));
   });
+  handle(
+    "waypoint:choose-workspace-execution-root",
+    async (_event, input: unknown) => {
+      const workspaceId = text(
+          (input as Record<string, unknown>).workspaceId,
+          "workspace ID",
+          64,
+        ),
+        workspace = store
+          .listWorkspaces()
+          .find((item) => item.id === workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      if (
+        store.activeExecutionIds(workspaceId).length ||
+        activeAutomationWorkspaces.has(workspaceId) ||
+        activeAutomationProvisioningWorkspaces.has(workspaceId) ||
+        activeReflectionRuns.has(workspaceId) ||
+        [...activeHostedRuns.values()].some(
+          (run) => run.workspaceId === workspaceId,
+        )
+      )
+        throw new Error(
+          "Wait for active AI work or connector provisioning to finish before changing the repository root",
+        );
+      const chosen = await dialog.showOpenDialog({
+        title:
+          "Choose the repository or working folder Waypoint agents may use",
+        defaultPath: workspace.executionRoot ?? app.getPath("documents"),
+        properties: ["openDirectory", "createDirectory"],
+      });
+      if (chosen.canceled || chosen.filePaths.length !== 1)
+        return { canceled: true, workspace };
+      return {
+        canceled: false,
+        workspace: store.setWorkspaceExecutionRoot(
+          workspaceId,
+          chosen.filePaths[0],
+        ),
+      };
+    },
+  );
+  handle(
+    "waypoint:clear-workspace-execution-root",
+    (_event, input: unknown) => {
+      const workspaceId = text(
+        (input as Record<string, unknown>).workspaceId,
+        "workspace ID",
+        64,
+      );
+      if (
+        store.activeExecutionIds(workspaceId).length ||
+        activeAutomationWorkspaces.has(workspaceId) ||
+        activeAutomationProvisioningWorkspaces.has(workspaceId) ||
+        activeReflectionRuns.has(workspaceId) ||
+        [...activeHostedRuns.values()].some(
+          (run) => run.workspaceId === workspaceId,
+        )
+      )
+        throw new Error(
+          "Wait for active AI work or connector provisioning to finish before changing the repository root",
+        );
+      return store.setWorkspaceExecutionRoot(workspaceId);
+    },
+  );
   handle("waypoint:delete-workspace", async (_event, input: unknown) => {
     const workspaceId = text(
       (input as Record<string, unknown>).workspaceId,
@@ -2449,7 +4053,8 @@ function registerIpc(): void {
       store.setActivityCapturePolicy(workspaceId, { ...capture, paused: true });
     if (peerHostRuntime.status().workspaceId === workspaceId)
       await peerHostRuntime.stop();
-    for(const active of activeAutoTitles.values())if(active.workspaceId===workspaceId)active.cancel();
+    for (const active of activeAutoTitles.values())
+      if (active.workspaceId === workspaceId) active.cancel();
     const workspace = store.deleteWorkspace(workspaceId);
     try {
       syncVault.remove(workspaceId);
@@ -2806,9 +4411,10 @@ function registerIpc(): void {
         "workspace ID",
         64,
       ),
-      [codex, claude] = await Promise.all([
+      [codex, claude, grok] = await Promise.all([
         detectCli("codex"),
         detectCli("claude"),
+        detectCli("grok"),
       ]);
     return {
       policy: store.deviceControlPolicy(workspaceId),
@@ -2836,6 +4442,14 @@ function registerIpc(): void {
             ? "Bounded target-local signed-in CLI delegation is ready."
             : "Claude CLI is unavailable on this device.",
         },
+        {
+          id: "agent.grok",
+          available: grok.available,
+          label: "Grok Build agent",
+          reason: grok.available
+            ? "Bounded target-local signed-in CLI delegation is ready."
+            : "Grok Build CLI is unavailable on this device.",
+        },
       ],
     };
   });
@@ -2860,10 +4474,11 @@ function registerIpc(): void {
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       targetDeviceId = text(value.targetDeviceId, "target device ID", 128),
       instruction = text(value.instruction, "remote instruction", 8000),
-      capability = ["agent.codex", "agent.claude"].includes(
+      capability = ["agent.codex", "agent.claude", "agent.grok"].includes(
         String(value.capability),
       )
-        ? (String(value.capability) as "agent.codex" | "agent.claude")
+        ? (String(value.capability) as
+            "agent.codex" | "agent.claude" | "agent.grok")
         : "waypoint.workspace_summary",
       sync = syncService.status(workspaceId);
     if (!sync.configured || !sync.deviceId)
@@ -2877,7 +4492,12 @@ function registerIpc(): void {
       idempotencyKey: text(value.idempotencyKey, "idempotency key", 128),
       profileDigest: remotePolicyDigest(capability),
       keyEpoch: sync.keyEpoch,
-      timeoutMs: 60_000,
+      timeoutMs:
+        capability === "agent.codex" ||
+        capability === "agent.claude" ||
+        capability === "agent.grok"
+          ? 0
+          : 60_000,
     });
   });
   handle("waypoint:device-control-cancel", (_event, input: unknown) => {
@@ -2885,7 +4505,10 @@ function registerIpc(): void {
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       jobId = text(value.jobId, "remote job ID", 128),
       active = activeRemoteExecutions.get(jobId);
-    if (active?.workspaceId === workspaceId) workbench.cancel(active.runId);
+    if (active?.workspaceId === workspaceId) {
+      if (active.provider === "grok") grokWorkbench.cancel(active.runId);
+      else workbench.cancel(active.runId);
+    }
     return { canceled: store.cancelRemoteJob(workspaceId, jobId) };
   });
   handle("waypoint:device-control-delete", (_event, input: unknown) => {
@@ -2905,29 +4528,67 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       label = text(value.label, "channel label", 80).trim(),
-      connectorId = text(value.connectorId ?? "generic", "webhook connector", 40);
+      connectorId = text(
+        value.connectorId ?? "generic",
+        "webhook connector",
+        40,
+      );
     if (!label) throw new Error("Channel label is required");
-    if (connectorId === "stripe" || connectorId === "resend") throw new Error("Stripe and Resend webhook setup is unavailable until provider signing-secret import is implemented");
-    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.createWebhookChannel(workspaceId, label, connectorId));
+    if (connectorId === "stripe" || connectorId === "resend")
+      throw new Error(
+        "Stripe and Resend webhook setup is unavailable until provider signing-secret import is implemented",
+      );
+    return withWorkspaceReservation(
+      activeAutomationProvisioningWorkspaces,
+      workspaceId,
+      "inbound channel mutation",
+      () => syncService.createWebhookChannel(workspaceId, label, connectorId),
+    );
   });
   handle("waypoint:webhook-channel-rotate", async (_event, input: unknown) => {
-    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId, "workspace ID", 64),channelId=text(value.channelId, "channel ID", 128);
-    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.rotateWebhookChannel(workspaceId,channelId));
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      channelId = text(value.channelId, "channel ID", 128);
+    return withWorkspaceReservation(
+      activeAutomationProvisioningWorkspaces,
+      workspaceId,
+      "inbound channel mutation",
+      () => syncService.rotateWebhookChannel(workspaceId, channelId),
+    );
   });
   handle("waypoint:webhook-channel-revoke", async (_event, input: unknown) => {
-    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId, "workspace ID", 64),channelId=text(value.channelId, "channel ID", 128);
-    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.revokeWebhookChannel(workspaceId,channelId));
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      channelId = text(value.channelId, "channel ID", 128);
+    return withWorkspaceReservation(
+      activeAutomationProvisioningWorkspaces,
+      workspaceId,
+      "inbound channel mutation",
+      () => syncService.revokeWebhookChannel(workspaceId, channelId),
+    );
   });
   handle("waypoint:webhook-channel-delete", async (_event, input: unknown) => {
-    const value = input as Record<string, unknown>,workspaceId=text(value.workspaceId, "workspace ID", 64),channelId=text(value.channelId, "channel ID", 128);
-    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.deleteWebhookChannel(workspaceId,channelId));
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      channelId = text(value.channelId, "channel ID", 128);
+    return withWorkspaceReservation(
+      activeAutomationProvisioningWorkspaces,
+      workspaceId,
+      "inbound channel mutation",
+      () => syncService.deleteWebhookChannel(workspaceId, channelId),
+    );
   });
   handle("waypoint:webhook-kill", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     if (typeof value.active !== "boolean")
       throw new Error("Kill state is invalid");
-    const workspaceId=text(value.workspaceId, "workspace ID", 64);
-    return withWorkspaceReservation(activeAutomationProvisioningWorkspaces,workspaceId,'inbound channel mutation',()=>syncService.setWebhookKill(workspaceId,value.active as boolean));
+    const workspaceId = text(value.workspaceId, "workspace ID", 64);
+    return withWorkspaceReservation(
+      activeAutomationProvisioningWorkspaces,
+      workspaceId,
+      "inbound channel mutation",
+      () => syncService.setWebhookKill(workspaceId, value.active as boolean),
+    );
   });
   handle("waypoint:webhook-fetch", async (_event, input: unknown) => {
     const workspaceId = text(
@@ -2935,7 +4596,16 @@ function registerIpc(): void {
       "workspace ID",
       64,
     );
-    return withWorkspaceReservation(activeWebhookRuns,workspaceId,'inbound fetch',async()=>{const result=await syncService.fetchWebhookEvents(workspaceId, store);await processAutomationRuns(workspaceId);return result});
+    return withWorkspaceReservation(
+      activeWebhookRuns,
+      workspaceId,
+      "inbound fetch",
+      async () => {
+        const result = await syncService.fetchWebhookEvents(workspaceId, store);
+        await processAutomationRunsV2(workspaceId);
+        return result;
+      },
+    );
   });
   handle("waypoint:webhook-events", (_event, input: unknown) =>
     store.listExternalInboundEvents(
@@ -2944,32 +4614,349 @@ function registerIpc(): void {
   );
   handle("waypoint:webhook-connectors", () => WEBHOOK_CONNECTORS);
   handle("waypoint:automation-proposals", (_event, input: unknown) => {
-    const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,"workspace ID",64),chatId=value.chatId===undefined?undefined:text(value.chatId,"chat ID",64);
-    return store.listAutomationProposals(workspaceId,chatId);
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      chatId =
+        value.chatId === undefined
+          ? undefined
+          : text(value.chatId, "chat ID", 64);
+    return store.listAutomationProposals(workspaceId, chatId);
   });
-  handle("waypoint:automation-rules-runs", (_event,input:unknown)=>store.listAutomationRulesAndRuns(text((input as Record<string,unknown>).workspaceId,"workspace ID",64)));
-  handle("waypoint:automation-rule-status", (_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,"workspace ID",64),ruleId=text(value.ruleId,"automation rule ID",64),status=value.enabled===true?'enabled':'killed';store.setAutomationRuleStatus(workspaceId,ruleId,status);if(status==='enabled')void processAutomationRuns(workspaceId);return{ok:true}});
-  handle("waypoint:automation-run-cancel", (_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,"workspace ID",64),runId=text(value.runId,"automation run ID",64),run=store.listAutomationRulesAndRuns(workspaceId).runs.find((item)=>item.id===runId);if(!run)throw new Error('Automation run not found');if(run.status==='queued')store.cancelQueuedAutomationRun(workspaceId,runId);else if(run.status==='running'&&run.executionId)workbench.cancel(String(run.executionId));else if(run.status==='running')throw new Error('Automation run is starting; try cancel again in a moment');else throw new Error('Automation run is already complete');return{ok:true}});
-  handle("waypoint:automation-proposal-decide", async (_event, input: unknown) => {
-    const value=input as Record<string,unknown>,decision=String(value.decision);
-    if(decision!=="approve"&&decision!=="reject")throw new Error("Automation decision is invalid");
-    const workspaceId=text(value.workspaceId,"workspace ID",64),proposalId=text(value.proposalId,"proposal ID",64),proposalDigest=text(value.proposalDigest,"proposal digest",64),reserved=decision==='approve';
-    if(reserved){if(activeAutomationProvisioningWorkspaces.has(workspaceId))throw new Error('Another connector provisioning operation is already active for this workspace');activeAutomationProvisioningWorkspaces.add(workspaceId)}
-    try{
-      const proposal=store.decideAutomationProposal(workspaceId,proposalId,proposalDigest,decision);
-      if(decision==='reject')return proposal;
-      const planned=proposal.definition.delivery;
-      if(!planned.channelId||!planned.endpoint)return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary:'Configure desktop sync or a hosted relay, then create a fresh proposal for approval.'});
-      if(proposal.definition.trigger.connectorId!=='generic'&&planned.reachability!=='public_relay')return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary:'This cloud provider requires a public trusted HTTPS relay. The approved local-network endpoint was not mutated.'});
-      if(proposal.definition.trigger.connectorId==='stripe'||proposal.definition.trigger.connectorId==='resend')return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary:`${proposal.definition.trigger.connectorId} signing-secret import is not configured in this build. No channel or provider endpoint was created.`});
-      store.beginAutomationProvisioning(workspaceId,proposalId,proposalDigest);
-      let delivery:{channelId:string;endpoint:string;reachability:'public_relay'|'local_network'}|undefined,providerMutation:Record<string,unknown>|undefined;
-      try{
-      const channel=await syncService.createWebhookChannel(workspaceId,proposal.definition.title,proposal.definition.trigger.connectorId,planned.channelId);delivery={channelId:channel.channelId,endpoint:channel.endpoint,reachability:channel.transportMode==='hosted-relay'?'public_relay':'local_network'};if(delivery.channelId!==planned.channelId||delivery.endpoint!==planned.endpoint||delivery.reachability!==planned.reachability)throw new Error('Created webhook delivery does not match the approved proposal');store.checkpointAutomationProvisioning(workspaceId,proposalId,proposalDigest,{executed:true,outcome:'partial',summary:'Waypoint inbound channel created; provider configuration is pending.',delivery,rollback:{waypoint:{operation:'revoke_and_delete_channel',channelId:delivery.channelId}}});const definition=proposal.definition,{secret}=syncService.webhookProvisioningSecret(workspaceId,channel.channelId),policy=gatewayPolicy(workspaceId),providerInspection={operation:'inspect_and_delete_exact_endpoint',connectorId:definition.trigger.connectorId,endpoint:delivery.endpoint,organization:definition.provisioning.organization,repository:definition.provisioning.repositoryFullName??definition.provisioning.repository};store.checkpointAutomationProvisioning(workspaceId,proposalId,proposalDigest,{executed:true,outcome:'uncertain',summary:'Provider mutation attempt is starting; final provider outcome has not been reconciled.',delivery,rollback:{waypoint:{operation:'revoke_and_delete_channel',channelId:delivery.channelId},provider:providerInspection}});const result=await provisionConnector({definition,secret,workspaceRoot:path.join(app.getPath('userData'),'automation-provisioning-tmp'),execute:async(cli,args)=>{const execution=await toolGateway.execute({version:1,workspaceId,origin:'ui',tool:'local_cli.run',arguments:{cli,args,cwd:'.',timeoutMs:120_000}},policy,[secret]),completed=execution.result??await toolGateway.waitForCompletion(execution.runId,125_000),receipt=completed.receipt;if(receipt.status!=='completed')throw new Error(receipt.summary??`${cli} connector provisioning failed`);return completed.output??JSON.stringify(completed.value??{})}});providerMutation={connectorId:result.connectorId,externalId:result.externalId,rollback:result.rollback};const rollback={waypoint:{operation:'revoke_and_delete_channel',channelId:delivery.channelId},provider:result.rollback};store.checkpointAutomationProvisioning(workspaceId,proposalId,proposalDigest,{executed:true,outcome:'partial',summary:'Provider hook and Waypoint channel were created; final receipt is pending.',delivery,externalId:result.externalId,providerMutation,rollback});
-        return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'applied',summary:result.summary,externalId:result.externalId,rollback,delivery});
-      }catch(error){if(store.automationProposal(workspaceId,proposalId).status!=='approved')throw error;const summary=error instanceof Error?error.message:'Connector provisioning failed',details=error as {waypointMutation?:Record<string,unknown>;providerMutation?:Record<string,unknown>},waypointMutation=details.waypointMutation,provider=providerMutation??details.providerMutation,uncertain=/outcome is uncertain/i.test(summary)||waypointMutation?.outcome==='uncertain'||provider?.outcome==='uncertain',executed=Boolean(delivery||waypointMutation||provider),rollback={waypoint:delivery?{operation:'revoke_and_delete_channel',channelId:delivery.channelId}:waypointMutation?.rollback,provider:provider?.rollback??(uncertain?{operation:'inspect_for_exact_endpoint',endpoint:delivery?.endpoint??planned.endpoint}:undefined)};return store.finishAutomationProvisioning(workspaceId,proposalId,proposalDigest,{status:'failed',summary,delivery,executed,outcome:uncertain?'uncertain':executed?'partial':'known',rollback})}
-    }finally{if(reserved)activeAutomationProvisioningWorkspaces.delete(workspaceId)}
+  handle("waypoint:automation-rules-runs", (_event, input: unknown) =>
+    store.listAutomationRulesAndRuns(
+      text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
+    ),
+  );
+  handle("waypoint:automation-rule-status", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      ruleId = text(value.ruleId, "automation rule ID", 64),
+      status = value.enabled === true ? "enabled" : "killed";
+    store.setAutomationRuleStatus(workspaceId, ruleId, status);
+    if (status === "enabled") void processAutomationRunsV2(workspaceId);
+    return { ok: true };
   });
+  handle("waypoint:automation-run-cancel", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      runId = text(value.runId, "automation run ID", 64),
+      run = store
+        .listAutomationRulesAndRuns(workspaceId)
+        .runs.find((item) => item.id === runId);
+    if (!run) throw new Error("Automation run not found");
+    if (run.status === "queued")
+      store.cancelQueuedAutomationRun(workspaceId, runId);
+    else if (run.status === "running" && run.executionId) {
+      const executionId = String(run.executionId),
+        provider = activeNativeAutomationExecutions.get(executionId),
+        canceled =
+          provider === "codex"
+            ? codexWorkbench.cancel(executionId)
+            : provider === "claude"
+              ? claudeWorkbench.cancel(executionId)
+              : provider === "grok"
+                ? grokWorkbench.cancel(executionId)
+                : workbench.cancel(executionId);
+      if (!canceled)
+        throw new Error("Automation execution is no longer active");
+    } else if (run.status === "running")
+      throw new Error(
+        "Automation run is starting; try cancel again in a moment",
+      );
+    else throw new Error("Automation run is already complete");
+    return { ok: true };
+  });
+  handle(
+    "waypoint:automation-proposal-decide",
+    async (_event, input: unknown) => {
+      const value = input as Record<string, unknown>,
+        decision = String(value.decision);
+      if (decision !== "approve" && decision !== "reject")
+        throw new Error("Automation decision is invalid");
+      const workspaceId = text(value.workspaceId, "workspace ID", 64),
+        proposalId = text(value.proposalId, "proposal ID", 64),
+        proposalDigest = text(value.proposalDigest, "proposal digest", 64),
+        reserved = decision === "approve";
+      if (reserved) {
+        if (activeAutomationProvisioningWorkspaces.has(workspaceId))
+          throw new Error(
+            "Another connector provisioning operation is already active for this workspace",
+          );
+        activeAutomationProvisioningWorkspaces.add(workspaceId);
+      }
+      try {
+        const proposal = store.decideAutomationProposal(
+          workspaceId,
+          proposalId,
+          proposalDigest,
+          decision,
+        );
+        if (decision === "reject") return proposal;
+        const planned = proposal.definition.delivery;
+        if (!planned.channelId || !planned.endpoint)
+          return store.finishAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              status: "failed",
+              summary:
+                "Configure desktop sync or a hosted relay, then create a fresh proposal for approval.",
+            },
+          );
+        if (
+          proposal.definition.trigger.connectorId !== "generic" &&
+          planned.reachability !== "public_relay"
+        )
+          return store.finishAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              status: "failed",
+              summary:
+                "This cloud provider requires a public trusted HTTPS relay. The approved local-network endpoint was not mutated.",
+            },
+          );
+        if (
+          proposal.definition.trigger.connectorId === "stripe" ||
+          proposal.definition.trigger.connectorId === "resend"
+        )
+          return store.finishAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              status: "failed",
+              summary: `${proposal.definition.trigger.connectorId} signing-secret import is not configured in this build. No channel or provider endpoint was created.`,
+            },
+          );
+        if (proposal.definition.trigger.connectorId === "generic")
+          return store.finishAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              status: "failed",
+              summary:
+                "Generic senders require manual inbound-channel setup and a one-time signing-secret handoff. No channel, sender, or automation rule was created; configure and verify the sender first, then create a new automation proposal.",
+            },
+          );
+        store.beginAutomationProvisioning(
+          workspaceId,
+          proposalId,
+          proposalDigest,
+        );
+        let delivery:
+            | {
+                channelId: string;
+                endpoint: string;
+                reachability: "public_relay" | "local_network";
+              }
+            | undefined,
+          providerMutation: Record<string, unknown> | undefined;
+        try {
+          const channel = await syncService.createWebhookChannel(
+            workspaceId,
+            proposal.definition.title,
+            proposal.definition.trigger.connectorId,
+            planned.channelId,
+          );
+          delivery = {
+            channelId: channel.channelId,
+            endpoint: channel.endpoint,
+            reachability:
+              channel.transportMode === "hosted-relay"
+                ? "public_relay"
+                : "local_network",
+          };
+          if (
+            delivery.channelId !== planned.channelId ||
+            delivery.endpoint !== planned.endpoint ||
+            delivery.reachability !== planned.reachability
+          )
+            throw new Error(
+              "Created webhook delivery does not match the approved proposal",
+            );
+          store.checkpointAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              executed: true,
+              outcome: "partial",
+              summary:
+                "Waypoint inbound channel created; provider configuration is pending.",
+              delivery,
+              rollback: {
+                waypoint: {
+                  operation: "revoke_and_delete_channel",
+                  channelId: delivery.channelId,
+                },
+              },
+            },
+          );
+          const definition = proposal.definition,
+            { secret } = syncService.webhookProvisioningSecret(
+              workspaceId,
+              channel.channelId,
+            ),
+            policy = gatewayPolicy(workspaceId),
+            providerInspection = {
+              operation: "inspect_and_delete_exact_endpoint",
+              connectorId: definition.trigger.connectorId,
+              endpoint: delivery.endpoint,
+              organization: definition.provisioning.organization,
+              repository:
+                definition.provisioning.repositoryFullName ??
+                definition.provisioning.repository,
+            };
+          store.checkpointAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              executed: true,
+              outcome: "uncertain",
+              summary:
+                "Provider mutation attempt is starting; final provider outcome has not been reconciled.",
+              delivery,
+              rollback: {
+                waypoint: {
+                  operation: "revoke_and_delete_channel",
+                  channelId: delivery.channelId,
+                },
+                provider: providerInspection,
+              },
+            },
+          );
+          const result = await provisionConnector({
+            definition,
+            secret,
+            workspaceRoot: path.join(
+              app.getPath("userData"),
+              "automation-provisioning-tmp",
+            ),
+            execute: async (cli, args) => {
+              const execution = await toolGateway.execute(
+                  {
+                    version: 1,
+                    workspaceId,
+                    origin: "ui",
+                    tool: "local_cli.run",
+                    arguments: { cli, args, cwd: "." },
+                  },
+                  policy,
+                  [secret],
+                ),
+                completed =
+                  execution.result ??
+                  (await toolGateway.waitForCompletion(execution.runId)),
+                receipt = completed.receipt;
+              if (receipt.status !== "completed")
+                throw new Error(
+                  receipt.summary ?? `${cli} connector provisioning failed`,
+                );
+              return completed.output ?? JSON.stringify(completed.value ?? {});
+            },
+          });
+          providerMutation = {
+            connectorId: result.connectorId,
+            externalId: result.externalId,
+            targetIdentity: result.targetIdentity,
+            rollback: result.rollback,
+          };
+          const rollback = {
+            waypoint: {
+              operation: "revoke_and_delete_channel",
+              channelId: delivery.channelId,
+            },
+            provider: result.rollback,
+          };
+          store.checkpointAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              executed: true,
+              outcome: "partial",
+              summary:
+                "Provider hook and Waypoint channel were created; final receipt is pending.",
+              delivery,
+              externalId: result.externalId,
+              providerMutation,
+              rollback,
+            },
+          );
+          return store.finishAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              status: "applied",
+              summary: result.summary,
+              externalId: result.externalId,
+              rollback,
+              delivery,
+            },
+          );
+        } catch (error) {
+          if (
+            store.automationProposal(workspaceId, proposalId).status !==
+            "approved"
+          )
+            throw error;
+          const summary =
+              error instanceof Error
+                ? error.message
+                : "Connector provisioning failed",
+            details = error as {
+              waypointMutation?: Record<string, unknown>;
+              providerMutation?: Record<string, unknown>;
+            },
+            waypointMutation = details.waypointMutation,
+            provider = providerMutation ?? details.providerMutation,
+            uncertain =
+              /outcome is uncertain/i.test(summary) ||
+              waypointMutation?.outcome === "uncertain" ||
+              provider?.outcome === "uncertain",
+            executed = Boolean(delivery || waypointMutation || provider),
+            rollback = {
+              waypoint: delivery
+                ? {
+                    operation: "revoke_and_delete_channel",
+                    channelId: delivery.channelId,
+                  }
+                : waypointMutation?.rollback,
+              provider:
+                provider?.rollback ??
+                (uncertain
+                  ? {
+                      operation: "inspect_for_exact_endpoint",
+                      endpoint: delivery?.endpoint ?? planned.endpoint,
+                    }
+                  : undefined),
+            };
+          return store.finishAutomationProvisioning(
+            workspaceId,
+            proposalId,
+            proposalDigest,
+            {
+              status: "failed",
+              summary,
+              delivery,
+              executed,
+              outcome: uncertain ? "uncertain" : executed ? "partial" : "known",
+              rollback,
+            },
+          );
+        }
+      } finally {
+        if (reserved)
+          activeAutomationProvisioningWorkspaces.delete(workspaceId);
+      }
+    },
+  );
   handle("waypoint:webhook-event-delete", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     store.deleteExternalInboundEvent(
@@ -3055,21 +5042,33 @@ function registerIpc(): void {
     );
     return { ok: true };
   });
-  handle("waypoint:delete-object", (_event, input: unknown) => {
+  handle("waypoint:delete-object", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
       kind = text(value.kind, "object kind", 20),
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       objectId = text(value.objectId, "object ID", 64);
     if (!["document", "chat", "memory"].includes(kind))
       throw new Error("Invalid deletable object kind");
-    if(kind==='chat'){const active=activeAutoTitles.get(objectId);if(active?.workspaceId===workspaceId)active.cancel()}
-    deleteWithExecutionCancellation(
-      store,
-      workbench,
-      workspaceId,
-      kind as "document" | "chat" | "memory",
-      objectId,
-    );
+    const lifecycleKey = chatLifecycleKey(workspaceId, objectId);
+    if (kind === "chat") {
+      if (deletingChats.has(lifecycleKey))
+        throw new Error("This chat is already being deleted");
+      deletingChats.add(lifecycleKey);
+      const active = activeAutoTitles.get(objectId);
+      if (active?.workspaceId === workspaceId) active.cancel();
+    }
+    try {
+      if (kind === "chat") await cancelHostedChatRuns(workspaceId, objectId);
+      await deleteWithExecutionCancellation(
+        store,
+        [codexWorkbench, claudeWorkbench, grokWorkbench, workbench],
+        workspaceId,
+        kind as "document" | "chat" | "memory",
+        objectId,
+      );
+    } finally {
+      if (kind === "chat") deletingChats.delete(lifecycleKey);
+    }
     return { ok: true };
   });
   handle("waypoint:attach-document", async (_event, input: unknown) => {
@@ -3131,13 +5130,6 @@ function registerIpc(): void {
         canceled: true,
         attachments: store.listChatAttachments(workspaceId, chatId),
       };
-    const existing = store
-      .listChatAttachments(workspaceId, chatId)
-      .filter((attachment) => attachment.ownerId === chatId).length;
-    if (existing + chosen.filePaths.length > MAX_ATTACHMENTS_PER_OWNER)
-      throw new Error(
-        `A chat message can queue no more than ${MAX_ATTACHMENTS_PER_OWNER} files`,
-      );
     const validated = chosen.filePaths.map((sourcePath) => {
         const mediaType =
           ATTACHMENT_MEDIA_BY_EXTENSION[path.extname(sourcePath).toLowerCase()];
@@ -3183,29 +5175,66 @@ function registerIpc(): void {
     );
   });
   handle("waypoint:add-pasted-chat-image", (_event, input: unknown) => {
-    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, "workspace ID", 64), chatId = text(value.chatId, "chat ID", 64),
-      name = text(value.name, "attachment name", 240), mediaType = text(value.mediaType, "attachment media type", 40), bytes = value.bytes;
-    if (!(bytes instanceof Uint8Array)) throw new Error("Pasted image bytes are invalid");
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      chatId = text(value.chatId, "chat ID", 64),
+      name = text(value.name, "attachment name", 240),
+      mediaType = text(value.mediaType, "attachment media type", 40),
+      bytes = value.bytes;
+    if (!(bytes instanceof Uint8Array))
+      throw new Error("Pasted image bytes are invalid");
     imageDimensions(mediaType, bytes);
     const decoded = nativeImage.createFromBuffer(Buffer.from(bytes));
-    if (decoded.isEmpty()) throw new Error("Pasted image is corrupt or cannot be decoded safely");
-    const id = store.addAttachmentBytes(workspaceId, chatId, name, mediaType, bytes), attachment = store.listChatAttachments(workspaceId, chatId).find((item) => item.id === id);
+    if (decoded.isEmpty())
+      throw new Error("Pasted image is corrupt or cannot be decoded safely");
+    const id = store.addAttachmentBytes(
+        workspaceId,
+        chatId,
+        name,
+        mediaType,
+        bytes,
+      ),
+      attachment = store
+        .listChatAttachments(workspaceId, chatId)
+        .find((item) => item.id === id);
     if (!attachment) throw new Error("Pasted image could not be queued");
     return { attachment };
   });
   handle("waypoint:attachment-image-preview", (_event, input: unknown) => {
-    const value = input as Record<string, unknown>, workspaceId = text(value.workspaceId, "workspace ID", 64), attachmentId = text(value.attachmentId, "attachment ID", 64),
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      attachmentId = text(value.attachmentId, "attachment ID", 64),
       variant = text(value.variant, "preview variant", 12);
-    if (variant !== "thumbnail" && variant !== "viewer") throw new Error("Invalid preview variant");
+    if (variant !== "thumbnail" && variant !== "viewer")
+      throw new Error("Invalid preview variant");
     const { metadata, bytes } = store.readAttachment(workspaceId, attachmentId);
-    if (!metadata.mediaType.startsWith("image/")) throw new Error("Only image attachments can be previewed");
+    if (!metadata.mediaType.startsWith("image/"))
+      throw new Error("Only image attachments can be previewed");
     const image = nativeImage.createFromBuffer(bytes);
-    if (image.isEmpty()) throw new Error("Image preview is unavailable because the file is corrupt");
-    const source = image.getSize(), maxEdge = variant === "thumbnail" ? 360 : 2400, scale = Math.min(1, maxEdge / Math.max(source.width, source.height)),
-      resized = scale < 1 ? image.resize({ width: Math.max(1, Math.round(source.width * scale)), height: Math.max(1, Math.round(source.height * scale)), quality: "good" }) : image,
-      size = resized.getSize(), png = resized.toPNG();
+    if (image.isEmpty())
+      throw new Error(
+        "Image preview is unavailable because the file is corrupt",
+      );
+    const source = image.getSize(),
+      maxEdge = variant === "thumbnail" ? 360 : 2400,
+      scale = Math.min(1, maxEdge / Math.max(source.width, source.height)),
+      resized =
+        scale < 1
+          ? image.resize({
+              width: Math.max(1, Math.round(source.width * scale)),
+              height: Math.max(1, Math.round(source.height * scale)),
+              quality: "good",
+            })
+          : image,
+      size = resized.getSize(),
+      png = resized.toPNG();
     if (!png.byteLength) throw new Error("Image preview could not be rendered");
-    return { mediaType: "image/png", dataBase64: png.toString("base64"), width: size.width, height: size.height };
+    return {
+      mediaType: "image/png",
+      dataBase64: png.toString("base64"),
+      width: size.width,
+      height: size.height,
+    };
   });
   handle("waypoint:delete-attachment", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
@@ -3330,9 +5359,7 @@ function registerIpc(): void {
     for (const [id, run] of meetingTranscriptionRuns)
       if (run.workspaceId === workspaceId && run.meetingId === meetingId)
         cancelMeetingRun(id);
-    let audio:
-      | ReturnType<WorkspaceStore["meetingAudio"]>
-      | undefined;
+    let audio: ReturnType<WorkspaceStore["meetingAudio"]> | undefined;
     try {
       audio = store.meetingAudio(workspaceId, meetingId);
     } catch {
@@ -3460,80 +5487,92 @@ function registerIpc(): void {
     });
     return { runId };
   });
-  handle("waypoint:meeting-transcription-recording", async (event, input: unknown) => {
-    const value = input as Record<string, unknown>,
-      runId = text(value.runId, "transcription run ID", 64),
-      workspaceId = text(value.workspaceId, "workspace ID", 64),
-      meetingId = text(value.meetingId, "meeting ID", 64),
-      run = meetingTranscriptionRuns.get(runId);
-    if (
-      !run ||
-      run.workspaceId !== workspaceId ||
-      run.meetingId !== meetingId ||
-      run.inFlight
-    )
-      throw new Error("Meeting transcription run is invalid");
-    const decoder = await (meetingMediaDecoderProbe ??= probeMeetingMediaDecoder());
-    if (!decoder.available || !decoder.command) {
-      cancelMeetingRun(runId);
-      throw new Error(decoder.reason);
-    }
-    const audio = store.meetingAudio(workspaceId, meetingId);
-    run.inFlight = true;
-    try {
-      await transcribeMeetingFile({
-        audioPath: audio.path,
-        decoderCommand: decoder.command,
-        temporaryRoot: path.join(app.getPath("userData"), "meeting-transcription-tmp"),
-        signal: run.controller.signal,
-        transcribe: async (bytes, signal) => {
-          const result = await meetingTranscription.transcribe(bytes, signal),
-            part = result.text.trim().slice(0, 100_000);
-          if (!part) throw new Error("Meeting transcript segment was empty");
-          if (run.characters + part.length > 500_000)
-            throw new Error("Meeting transcript exceeds bounds");
-          run.parts.push(part);
-          run.characters += part.length;
-          run.nextIndex++;
-          return { text: part };
-        },
-        onProgress: (progress) =>
-          event.sender.send("waypoint:meeting-transcription-progress", {
-            workspaceId,
-            meetingId,
-            runId,
-            ...progress,
-          }),
-      });
-      const meeting = store
-        .listMeetings(workspaceId)
-        .find((item) => item.id === meetingId);
+  handle(
+    "waypoint:meeting-transcription-recording",
+    async (event, input: unknown) => {
+      const value = input as Record<string, unknown>,
+        runId = text(value.runId, "transcription run ID", 64),
+        workspaceId = text(value.workspaceId, "workspace ID", 64),
+        meetingId = text(value.meetingId, "meeting ID", 64),
+        run = meetingTranscriptionRuns.get(runId);
       if (
-        !meetingTranscriptionRuns.has(runId) ||
-        !meeting ||
-        meeting.status !== "ready" ||
-        store.toolGatewaySettings(workspaceId).stopped ||
-        run.baseline !==
-          JSON.stringify([meeting.transcript, meeting.transcriptStatus]) ||
-        !run.parts.length
+        !run ||
+        run.workspaceId !== workspaceId ||
+        run.meetingId !== meetingId ||
+        run.inFlight
       )
-        throw new Error(
-          "Meeting transcription could not be committed because its source or policy changed",
+        throw new Error("Meeting transcription run is invalid");
+      const decoder = await (meetingMediaDecoderProbe ??=
+        probeMeetingMediaDecoder());
+      if (!decoder.available || !decoder.command) {
+        cancelMeetingRun(runId);
+        throw new Error(decoder.reason);
+      }
+      const audio = store.meetingAudio(workspaceId, meetingId);
+      run.inFlight = true;
+      try {
+        await transcribeMeetingFile({
+          audioPath: audio.path,
+          decoderCommand: decoder.command,
+          temporaryRoot: path.join(
+            app.getPath("userData"),
+            "meeting-transcription-tmp",
+          ),
+          signal: run.controller.signal,
+          transcribe: async (bytes, signal) => {
+            const result = await meetingTranscription.transcribe(bytes, signal),
+              part = result.text.trim().slice(0, 100_000);
+            if (!part) throw new Error("Meeting transcript segment was empty");
+            if (run.characters + part.length > 500_000)
+              throw new Error("Meeting transcript exceeds bounds");
+            run.parts.push(part);
+            run.characters += part.length;
+            run.nextIndex++;
+            return { text: part };
+          },
+          onProgress: (progress) =>
+            event.sender.send("waypoint:meeting-transcription-progress", {
+              workspaceId,
+              meetingId,
+              runId,
+              ...progress,
+            }),
+        });
+        const meeting = store
+          .listMeetings(workspaceId)
+          .find((item) => item.id === meetingId);
+        if (
+          !meetingTranscriptionRuns.has(runId) ||
+          !meeting ||
+          meeting.status !== "ready" ||
+          store.toolGatewaySettings(workspaceId).stopped ||
+          run.baseline !==
+            JSON.stringify([meeting.transcript, meeting.transcriptStatus]) ||
+          !run.parts.length
+        )
+          throw new Error(
+            "Meeting transcription could not be committed because its source or policy changed",
+          );
+        clearInterval(run.stopTimer);
+        meetingTranscriptionRuns.delete(runId);
+        const transcript = run.parts.join("\n\n");
+        run.parts.length = 0;
+        store.updateMeetingTranscript(
+          workspaceId,
+          meetingId,
+          transcript,
+          false,
         );
-      clearInterval(run.stopTimer);
-      meetingTranscriptionRuns.delete(runId);
-      const transcript = run.parts.join("\n\n");
-      run.parts.length = 0;
-      store.updateMeetingTranscript(workspaceId, meetingId, transcript, false);
-      return { transcript, provider: "Fast Local Whisper tiny.en" };
-    } catch (error) {
-      cancelMeetingRun(runId);
-      throw error;
-    } finally {
-      const current = meetingTranscriptionRuns.get(runId);
-      if (current) current.inFlight = false;
-    }
-  });
+        return { transcript, provider: "Fast Local Whisper tiny.en" };
+      } catch (error) {
+        cancelMeetingRun(runId);
+        throw error;
+      } finally {
+        const current = meetingTranscriptionRuns.get(runId);
+        if (current) current.inFlight = false;
+      }
+    },
+  );
   handle(
     "waypoint:meeting-transcription-segment",
     async (_event, input: unknown) => {
@@ -3745,14 +5784,38 @@ function registerIpc(): void {
       text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
     ),
   );
-  handle("waypoint:ensure-chat-title", (_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64);if(!autoTitleMayStart(store.toolGatewaySettings(workspaceId).stopped))return{started:false};const candidate=store.autoTitleCandidate(workspaceId,chatId);if(!candidate)return{started:false};startAutomaticChatTitle(workspaceId,chatId,candidate.user);return{started:true}});
-  handle("waypoint:rename-chat",(_event,input:unknown)=>{const value=input as Record<string,unknown>,workspaceId=text(value.workspaceId,'workspace ID',64),chatId=text(value.chatId,'chat ID',64);store.renameChat(workspaceId,chatId,text(value.title,'chat title',72));const active=activeAutoTitles.get(chatId);if(active&&active.workspaceId===workspaceId)active.cancel();return{ok:true}});
+  handle("waypoint:ensure-chat-title", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      chatId = text(value.chatId, "chat ID", 64);
+    if (!autoTitleMayStart(store.toolGatewaySettings(workspaceId).stopped))
+      return { started: false };
+    const candidate = store.autoTitleCandidate(workspaceId, chatId);
+    if (!candidate) return { started: false };
+    startAutomaticChatTitle(workspaceId, chatId, candidate.user);
+    return { started: true };
+  });
+  handle("waypoint:rename-chat", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      chatId = text(value.chatId, "chat ID", 64);
+    store.renameChat(workspaceId, chatId, text(value.title, "chat title", 72));
+    const active = activeAutoTitles.get(chatId);
+    if (active && active.workspaceId === workspaceId) active.cancel();
+    return { ok: true };
+  });
   handle("waypoint:cli-capabilities", async () =>
-    Promise.all([detectCli("codex"), detectCli("claude")]),
+    Promise.all([detectCli("codex"), detectCli("claude"), detectCli("grok")]),
   );
   handle("waypoint:cli-model-catalog", async () =>
     installedCliModelCatalog(
-      await Promise.all([detectCli("codex"), detectCli("claude")]),
+      await Promise.all([
+        detectCli("codex"),
+        detectCli("claude"),
+        detectCli("grok"),
+      ]),
+      undefined,
+      providerModelCatalogAbort.signal,
     ),
   );
   handle("waypoint:chat-model-preferences", (_event, input: unknown) =>
@@ -3762,11 +5825,11 @@ function registerIpc(): void {
   );
   handle("waypoint:chat-model-preference", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
-    if (!["codex", "claude"].includes(String(value.provider)))
+    if (!["codex", "claude", "grok"].includes(String(value.provider)))
       throw new Error("Chat provider is invalid");
     return store.setChatModelPreference(
       text(value.workspaceId, "workspace ID", 64),
-      value.provider as "codex" | "claude",
+      value.provider as "codex" | "claude" | "grok",
       String(value.model ?? ""),
     );
   });
@@ -3775,7 +5838,7 @@ function registerIpc(): void {
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       chatId = text(value.chatId, "chat ID", 64),
       preferred = text(value.preferred, "preferred provider", 20);
-    if (!["codex", "claude"].includes(preferred))
+    if (!["codex", "claude", "grok"].includes(preferred))
       throw new Error("Unsupported preferred provider");
     const profileId = text(value.securityProfileId, "security profile ID", 64);
     if (
@@ -3798,8 +5861,9 @@ function registerIpc(): void {
       capabilities: await Promise.all([
         detectCli("codex"),
         detectCli("claude"),
+        detectCli("grok"),
       ]),
-      preferred: preferred as "codex" | "claude",
+      preferred: preferred as "codex" | "claude" | "grok",
       allowFallback: value.allowFallback === true,
       securityProfileId: profileId,
       attachments: ids.map((id) => ({
@@ -3814,6 +5878,74 @@ function registerIpc(): void {
       text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
     ),
   );
+  handle("waypoint:list-provider-sessions", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.listProviderSessions(
+      text(value.workspaceId, "workspace ID", 64),
+      value.chatId ? text(value.chatId, "chat ID", 64) : undefined,
+    );
+  });
+  handle("waypoint:reset-provider-session", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      provider = text(value.provider, "provider", 20);
+    if (!["codex", "claude", "grok"].includes(provider))
+      throw new Error("Provider is invalid");
+    return {
+      reset: store.resetProviderSession(
+        text(value.workspaceId, "workspace ID", 64),
+        text(value.chatId, "chat ID", 64),
+        provider as "codex" | "claude" | "grok",
+      ),
+    };
+  });
+  handle("waypoint:list-provider-requests", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.listProviderRequests(
+      text(value.workspaceId, "workspace ID", 64),
+      value.chatId ? text(value.chatId, "chat ID", 64) : undefined,
+    );
+  });
+  handle(
+    "waypoint:resolve-provider-request",
+    async (_event, input: unknown) => {
+      const value = input as Record<string, unknown>,
+        workspaceId = text(value.workspaceId, "workspace ID", 64),
+        id = text(value.id, "provider request ID", 64),
+        status = text(value.status, "provider decision", 30);
+      if (
+        !["accepted", "accepted_session", "declined", "canceled"].includes(
+          status,
+        )
+      )
+        throw new Error("Provider decision is invalid");
+      const decision =
+          value.decision &&
+          typeof value.decision === "object" &&
+          !Array.isArray(value.decision)
+            ? (value.decision as Record<string, unknown>)
+            : {},
+        request = store.providerRequest(workspaceId, id);
+      if (!request) throw new Error("Provider request was not found");
+      const resolver = providerDecisionResolvers.get(id);
+      if (!resolver)
+        throw new Error(
+          "This provider request is no longer attached to a live run",
+        );
+      const resolved = store.resolveProviderRequest(
+        workspaceId,
+        id,
+        status as "accepted" | "accepted_session" | "declined" | "canceled",
+        auditableProviderDecision(request, decision),
+      );
+      providerDecisionResolvers.delete(id);
+      await resolver({
+        status: status as
+          "accepted" | "accepted_session" | "declined" | "canceled",
+        decision,
+      });
+      return resolved;
+    },
+  );
   handle("waypoint:list-executions", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     const workspaceId = text(value.workspaceId, "workspace ID", 64),
@@ -3827,9 +5959,11 @@ function registerIpc(): void {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
       chatId = text(value.chatId, "chat ID", 64);
+    assertChatMayStart(workspaceId, chatId);
     const cli = text(value.cli, "CLI", 20);
-    if (!["codex", "claude"].includes(cli)) throw new Error("Unsupported CLI");
-    let prompt = text(value.prompt, "prompt", 2_000_000);
+    if (!["codex", "claude", "grok"].includes(cli))
+      throw new Error("Unsupported CLI");
+    let prompt = text(value.prompt, "prompt");
     const userPrompt = prompt;
     const profileId = text(value.securityProfileId, "security profile ID", 64),
       parentExecutionId = value.parentExecutionId
@@ -3843,10 +5977,7 @@ function registerIpc(): void {
       attachmentIds = Array.isArray(value.attachmentIds)
         ? value.attachmentIds.map((item) => text(item, "attachment ID", 64))
         : [];
-    if (
-      attachmentIds.length > MAX_ATTACHMENTS_PER_OWNER ||
-      new Set(attachmentIds).size !== attachmentIds.length
-    )
+    if (new Set(attachmentIds).size !== attachmentIds.length)
       throw new Error("Invalid chat attachment selection");
     const workspace = store
       .listWorkspaces()
@@ -3862,7 +5993,7 @@ function registerIpc(): void {
         type: text(value.taskType, "child task type", 20),
         instruction: prompt,
         parentExecutionId,
-        provider: cli as "codex" | "claude",
+        provider: cli as "codex" | "claude" | "grok",
         securityProfileId: profileId,
         profileMaxDurationMs: profile.maxDurationMs,
       });
@@ -3891,8 +6022,9 @@ function registerIpc(): void {
         capabilities: await Promise.all([
           detectCli("codex"),
           detectCli("claude"),
+          detectCli("grok"),
         ]),
-        preferred: cli as "codex" | "claude",
+        preferred: cli as "codex" | "claude" | "grok",
         allowFallback: false,
         securityProfileId: profileId,
         attachments: attachmentIds.map((id) => ({
@@ -3901,70 +6033,189 @@ function registerIpc(): void {
           bytes: attachmentMetadata.get(id)!.bytes,
         })),
       });
-    assertRoute(route, cli as "codex" | "claude", profileId);
+    assertRoute(route, cli as "codex" | "claude" | "grok", profileId);
+    const canonicalExecutionRoot =
+      store.assertWorkspaceExecutionRoot(workspaceId);
     const preparedAttachments = await prepareChatAttachments(
       workspaceId,
       chatId,
       attachmentIds,
+      false,
+      cli === "grok" ? canonicalExecutionRoot : undefined,
     );
     prompt = withChatAttachmentContext(prompt, preparedAttachments.textBlocks);
-    const passedToCli = [...attachmentIds],
-      unsupported: Array<{ id: string; reason: string }> = [];
-    const helpSelection = parentExecutionId
-      ? undefined
-      : withProductHelp(prompt, userPrompt, productHelpLibrary);
+    prompt = withChatFileAttachmentContext(
+      prompt,
+      preparedAttachments.fileBlocks,
+    );
+    const providerAttachmentRoute = route.providers.find(
+        (item) => item.provider === cli,
+      )!,
+      passedToCli = [...providerAttachmentRoute.deliverableAttachmentIds],
+      unsupported: Array<{ id: string; reason: string }> =
+        providerAttachmentRoute.localOnlyAttachmentIds.map((id) => ({
+          id,
+          reason: `${cli} does not advertise this attachment media type through its native protocol`,
+        }));
+    const interactiveSlashSkillMatch = !parentExecutionId
+        ? userPrompt.trimStart().match(/^\/([a-z0-9][a-z0-9._-]*)(?:\s|$)/i)
+        : null,
+      interactiveSlashSkillIdentifier = interactiveSlashSkillMatch?.[1],
+      isInteractiveSlashSkill = Boolean(interactiveSlashSkillIdentifier);
+    const helpSelection =
+      parentExecutionId || isInteractiveSlashSkill
+        ? undefined
+        : withProductHelp(prompt, userPrompt, productHelpLibrary);
     if (helpSelection) prompt = helpSelection.prompt;
-    prompt = withAutomationProposalTool({prompt:withCurrentDateTime(prompt),chatId,provider:cli as 'codex'|'claude',model:value.model?text(value.model,"model",120):undefined,securityProfileId:profileId,maxDurationMs:profile.maxDurationMs});
-    const budget = createExecutionBudget({
-      kind: parentExecutionId ? "child" : "root",
-      profile,
-      prompt,
-      attachmentCount: attachmentIds.length,
-    });
-    if (parentExecutionId)
-      validateOneChildDelegation(
-        store.listExecutions(workspaceId, chatId),
+    const selectedModel = value.model
+      ? text(value.model, "model", 120)
+      : undefined;
+    if (!isInteractiveSlashSkill) {
+      prompt = withCurrentDateTime(prompt);
+      if (!parentExecutionId)
+        prompt = withAutomationProposalTool({
+          prompt,
+          chatId,
+          provider: cli as "codex" | "claude" | "grok",
+          model: selectedModel,
+          securityProfileId: profileId,
+        });
+    }
+    if (cli === "codex" && !parentExecutionId) {
+      const activeKey = `${workspaceId}:${chatId}`,
+        active = activeCodexChats.get(activeKey);
+      if (active) {
+        if (
+          !codexTurnCanBeSteered(active, {
+            profileId,
+            model: selectedModel,
+          })
+        ) {
+          preparedAttachments.cleanup();
+          throw new Error(
+            "Finish or cancel the active Codex turn before changing its model or authority profile",
+          );
+        }
+        if (attachmentIds.length) {
+          preparedAttachments.cleanup();
+          throw new Error(
+            "Image and document attachments cannot be added while steering an active Codex turn",
+          );
+        }
+        if (await codexWorkbench.steer(active.runId, prompt)) {
+          preparedAttachments.cleanup();
+          return {
+            runId: active.runId,
+            status: "running",
+            steered: true,
+            attachmentDelivery: { passedToCli: [], unsupported: [] },
+          };
+        }
+        activeCodexChats.delete(activeKey);
+      }
+    }
+    let runId: string;
+    try {
+      const budget = createExecutionBudget({
+        kind: parentExecutionId ? "child" : "root",
+        profile,
+        prompt,
+        attachmentCount: attachmentIds.length,
+      });
+      if (parentExecutionId)
+        validateOneChildDelegation(
+          store.listExecutions(workspaceId, chatId),
+          parentExecutionId,
+          profileId,
+        );
+      assertChatMayStart(workspaceId, chatId);
+      runId = store.createExecution({
+        workspaceId,
+        chatId,
+        sourceMessageId,
+        cli: cli as "codex" | "claude" | "grok",
+        routedCliVersion: route.providers.find((item) => item.provider === cli)
+          ?.version,
+        model: selectedModel,
+        securityProfileId: profileId,
+        prompt,
         parentExecutionId,
-        profileId,
-      );
-    const runId = store.createExecution({
-      workspaceId,
-      chatId,
-      sourceMessageId,
-      cli: cli as "codex" | "claude",
-      routedCliVersion: route.providers.find((item) => item.provider === cli)
-        ?.version,
-      model: value.model ? text(value.model, "model", 120) : undefined,
-      securityProfileId: profileId,
-      prompt,
-      parentExecutionId,
-      depth: parentExecutionId ? 1 : 0,
-      taskType: childTask?.type,
-      budgetReceipt: serializeExecutionBudget(budget),
-    });
-    if (helpSelection?.sources.length)
-      store.appendExecutionEvent(runId, workspaceId, {
-        type: "diagnostic",
-        name: `Waypoint Help · ${helpSelection.sources.length} source${helpSelection.sources.length === 1 ? "" : "s"}`,
-        text: helpSelection.sources
-          .map((source) => `${source.title} [${source.sha256.slice(0, 12)}]`)
-          .join("; "),
-        rawType: `waypoint-help:${helpSelection.helpVersion}`,
+        depth: parentExecutionId ? 1 : 0,
+        taskType: childTask?.type,
+        budgetReceipt: serializeExecutionBudget(budget),
       });
-    if (preparedAttachments.receipt)
-      store.appendExecutionEvent(runId, workspaceId, {
-        type: "diagnostic",
-        name: `Attachment delivery · ${attachmentIds.length} source${attachmentIds.length === 1 ? "" : "s"}`,
-        text: preparedAttachments.receipt,
-        rawType: "waypoint-attachments:v1",
-      });
+      if (helpSelection?.sources.length)
+        store.appendExecutionEvent(runId, workspaceId, {
+          type: "diagnostic",
+          name: `Waypoint Help · ${helpSelection.sources.length} source${helpSelection.sources.length === 1 ? "" : "s"}`,
+          text: helpSelection.sources
+            .map((source) => `${source.title} [${source.sha256.slice(0, 12)}]`)
+            .join("; "),
+          rawType: `waypoint-help:${helpSelection.helpVersion}`,
+        });
+      if (preparedAttachments.receipt)
+        store.appendExecutionEvent(runId, workspaceId, {
+          type: "diagnostic",
+          name: `Attachment delivery · ${attachmentIds.length} source${attachmentIds.length === 1 ? "" : "s"}`,
+          text: preparedAttachments.receipt,
+          rawType: "waypoint-attachments:v1",
+        });
+    } catch (error) {
+      preparedAttachments.cleanup();
+      throw error;
+    }
     const fallbackEvents: ExecutionEvent[] = [];
+    let nativeAutomationPrepared = false,
+      nativeAutomationSummary: string | undefined,
+      nativeAutomationResult:
+        | { proposalId: string; status: string; summary?: string }
+        | undefined,
+      nativeAutomationInFlight:
+        | Promise<{ proposalId: string; status: string; summary?: string }>
+        | undefined;
+    const onAutomationProposal = !parentExecutionId
+      ? async (definition: Record<string, unknown>) => {
+          if (nativeAutomationResult) return nativeAutomationResult;
+          if (nativeAutomationInFlight) return nativeAutomationInFlight;
+          nativeAutomationInFlight = (async () => {
+            const validated = validateAutomationProposal(definition),
+              proposal = await prepareAutomationProposal(
+                workspaceId,
+                chatId,
+                validated,
+                validated.action.kind === "ai_skill"
+                  ? {
+                      provider: cli as "codex" | "claude" | "grok",
+                      identifier: validated.action.skillIdentifier,
+                    }
+                  : undefined,
+              );
+            nativeAutomationPrepared = true;
+            nativeAutomationSummary = automationProposalPreparedSummary(
+              proposal.definition,
+            );
+            nativeAutomationResult = {
+              proposalId: proposal.id,
+              status: proposal.status,
+              summary: nativeAutomationSummary,
+            };
+            return nativeAutomationResult;
+          })();
+          try {
+            return await nativeAutomationInFlight;
+          } finally {
+            nativeAutomationInFlight = undefined;
+          }
+        }
+      : undefined;
     try {
       const running = await startDurableChild({
         workspaceId,
         runId,
         detect: async () => {
-          const capability = await detectCli(cli as "codex" | "claude");
+          const capability = await detectCli(
+            cli as "codex" | "claude" | "grok",
+          );
           if (capability.available && capability.compatible === false)
             throw new Error(capability.compatibilityError);
           const routedVersion = route.providers.find(
@@ -3977,33 +6228,266 @@ function registerIpc(): void {
           return capability;
         },
         executionExists: (owner, id) => store.executionIsQueued(owner, id),
-        spawn: (capability) =>
-          workbench.start(
-            runId,
-            {
-              cli: cli as "codex" | "claude",
+        spawn: (capability) => {
+          const model = selectedModel,
+            sharedRequest = {
               prompt,
-              workspaceRoot: profile.roots[0],
+              workspaceRoot: canonicalExecutionRoot,
               profile,
-              model: value.model ? text(value.model, "model", 120) : undefined,
+              model,
               executable: capability.executable,
               version: capability.version,
               parentRunId: parentExecutionId,
               depth: parentExecutionId ? 1 : 0,
-              timeoutMs: budget.maxDurationMs,
-              maxOutputBytes: budget.maxOutputBytes,
-              images: preparedAttachments.images,
-              beforeSpawn:()=>assertPreparedChatAttachmentsCurrent(workspaceId,chatId,preparedAttachments.sources),
+              images: cli === "grok" ? [] : preparedAttachments.images,
+              beforeSpawn: () => {
+                const currentExecutionRoot =
+                  store.assertWorkspaceExecutionRoot(workspaceId);
+                assertPreparedChatAttachmentsCurrent(
+                  workspaceId,
+                  chatId,
+                  preparedAttachments.sources,
+                );
+                assertPreparedProviderFilesCurrent(
+                  preparedAttachments.fileBlocks,
+                  currentExecutionRoot,
+                );
+              },
             },
-            (event) => {
+            onEvent = (event: ExecutionEvent) => {
               fallbackEvents.push(event);
               try {
                 store.appendExecutionEvent(runId, workspaceId, event);
               } catch {
                 /* The in-memory stream preserves terminal output; deletion revokes persistence authority. */
               }
+            };
+          if (cli === "codex") {
+            const existing = store.providerSession(
+                workspaceId,
+                chatId,
+                "codex",
+              ) as
+                | {
+                    status: string;
+                    executionRoot: string;
+                    securityProfileId: string;
+                    model?: string;
+                    providerSessionId: string;
+                  }
+                | undefined,
+              providerSessionId =
+                existing?.status === "active" &&
+                existing.executionRoot === profile.roots[0] &&
+                existing.securityProfileId === profile.id &&
+                (existing.model ?? undefined) === model
+                  ? String(existing.providerSessionId)
+                  : undefined;
+            const conversationPrompt = existing && !providerSessionId
+              ? `[Waypoint conversation history bridged into a fresh tool-capable provider session]\n${store
+                  .chatMessages(workspaceId, chatId)
+                  .filter(
+                    (message) =>
+                      message.id !== sourceMessageId &&
+                      message.role !== "system",
+                  )
+                  .map((message) => `[${message.role}]\n${message.body}`)
+                  .join("\n\n")}\n\n[Current request]\n${sharedRequest.prompt}`
+              : sharedRequest.prompt;
+            return codexWorkbench.start(
+              runId,
+              {
+                ...sharedRequest,
+                prompt: conversationPrompt,
+                cli: "codex",
+                providerSessionId,
+                onAutomationProposal,
+                requiredSkillIdentifier: interactiveSlashSkillIdentifier,
+                beforeTurn: () => {
+                  const currentExecutionRoot =
+                    store.assertWorkspaceExecutionRoot(workspaceId);
+                  assertPreparedChatAttachmentsCurrent(
+                    workspaceId,
+                    chatId,
+                    preparedAttachments.sources,
+                  );
+                  assertPreparedProviderFilesCurrent(
+                    preparedAttachments.fileBlocks,
+                    currentExecutionRoot,
+                  );
+                },
+                onSession: (sessionId) => {
+                  store.bindProviderSession({
+                    workspaceId,
+                    chatId,
+                    provider: "codex",
+                    providerSessionId: sessionId,
+                    executionRoot: canonicalExecutionRoot,
+                    securityProfileId: profile.id,
+                    model,
+                  });
+                },
+                onApproval: (request, signal) =>
+                  awaitProviderDecision(
+                    {
+                      workspaceId,
+                      chatId,
+                      executionId: runId,
+                      provider: "codex",
+                      request,
+                    },
+                    signal,
+                  ),
+              },
+              onEvent,
+            );
+          }
+          if (cli === "grok") {
+            const existing = store.providerSession(
+                workspaceId,
+                chatId,
+                "grok",
+              ) as
+                | {
+                    status: string;
+                    executionRoot: string;
+                    securityProfileId: string;
+                    model?: string;
+                    providerSessionId: string;
+                  }
+                | undefined,
+              providerSessionId =
+                existing?.status === "active" &&
+                existing.executionRoot === profile.roots[0] &&
+                existing.securityProfileId === profile.id &&
+                (existing.model ?? undefined) === model
+                  ? String(existing.providerSessionId)
+                  : undefined;
+            const conversationPrompt = existing && !providerSessionId
+              ? `[Waypoint conversation history bridged into a fresh tool-capable provider session]\n${store
+                  .chatMessages(workspaceId, chatId)
+                  .filter(
+                    (message) =>
+                      message.id !== sourceMessageId &&
+                      message.role !== "system",
+                  )
+                  .map((message) => `[${message.role}]\n${message.body}`)
+                  .join("\n\n")}\n\n[Current request]\n${sharedRequest.prompt}`
+              : sharedRequest.prompt;
+            return grokWorkbench.start(
+              runId,
+              {
+                ...sharedRequest,
+                prompt: conversationPrompt,
+                cli: "grok",
+                providerSessionId,
+                onAutomationProposal,
+                requiredSkillIdentifier: interactiveSlashSkillIdentifier,
+                beforeTurn: () => {
+                  const currentExecutionRoot =
+                    store.assertWorkspaceExecutionRoot(workspaceId);
+                  assertPreparedChatAttachmentsCurrent(
+                    workspaceId,
+                    chatId,
+                    preparedAttachments.sources,
+                  );
+                  assertPreparedProviderFilesCurrent(
+                    preparedAttachments.fileBlocks,
+                    currentExecutionRoot,
+                  );
+                },
+                onSession: (sessionId) => {
+                  store.bindProviderSession({
+                    workspaceId,
+                    chatId,
+                    provider: "grok",
+                    providerSessionId: sessionId,
+                    executionRoot: canonicalExecutionRoot,
+                    securityProfileId: profile.id,
+                    model,
+                  });
+                },
+                onApproval: (request, signal) =>
+                  awaitProviderDecision(
+                    {
+                      workspaceId,
+                      chatId,
+                      executionId: runId,
+                      provider: "grok",
+                      request,
+                    },
+                    signal,
+                  ),
+              },
+              onEvent,
+            );
+          }
+          const existing = store.providerSession(
+              workspaceId,
+              chatId,
+              "claude",
+            ) as
+              | {
+                  status: string;
+                  executionRoot: string;
+                  securityProfileId: string;
+                  model?: string;
+                  providerSessionId: string;
+                }
+              | undefined,
+            providerSessionId =
+              existing?.status === "active" &&
+              existing.executionRoot === profile.roots[0] &&
+              existing.securityProfileId === profile.id &&
+              (existing.model ?? undefined) === model
+                ? String(existing.providerSessionId)
+                : undefined;
+          return claudeWorkbench.start(
+            runId,
+            {
+              ...sharedRequest,
+              cli: "claude",
+              providerSessionId,
+              onAutomationProposal,
+              beforeTurn: () => {
+                const currentExecutionRoot =
+                  store.assertWorkspaceExecutionRoot(workspaceId);
+                assertPreparedChatAttachmentsCurrent(
+                  workspaceId,
+                  chatId,
+                  preparedAttachments.sources,
+                );
+                assertPreparedProviderFilesCurrent(
+                  preparedAttachments.fileBlocks,
+                  currentExecutionRoot,
+                );
+              },
+              onSession: (sessionId) => {
+                store.bindProviderSession({
+                  workspaceId,
+                  chatId,
+                  provider: "claude",
+                  providerSessionId: sessionId,
+                  executionRoot: canonicalExecutionRoot,
+                  securityProfileId: profile.id,
+                  model,
+                });
+              },
+              onApproval: (request, signal) =>
+                awaitProviderDecision(
+                  {
+                    workspaceId,
+                    chatId,
+                    executionId: runId,
+                    provider: "claude",
+                    request,
+                  },
+                  signal,
+                ),
             },
-          ),
+            onEvent,
+          );
+        },
         markRunning: (child) =>
           store.startExecution(
             runId,
@@ -4012,27 +6496,78 @@ function registerIpc(): void {
             child.version,
           ),
       });
+      if (cli === "codex" && !parentExecutionId)
+        activeCodexChats.set(`${workspaceId}:${chatId}`, {
+          runId,
+          profileId,
+          model: selectedModel,
+        });
       void running.completion
-        .then(async(result) => {
-          let answerOverride:string|undefined;
-          if(result.status==='completed'){
-            const parsed=extractAutomationProposalTool(canonicalExecutionText(cli as 'codex'|'claude',fallbackEvents));
-            if(parsed.definition){
-              try{await prepareAutomationProposal(workspaceId,chatId,parsed.definition);answerOverride=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I’ve prepared the exact configuration below for your approval. Nothing has been provisioned or enabled.`}
-              catch(error){answerOverride=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${error instanceof Error?error.message:'proposal preparation failed'}. Nothing was changed.`}
-            }else if(parsed.error)answerOverride=`${parsed.displayAnswer}${parsed.displayAnswer?'\n\n':''}I could not prepare the confirmation card: ${parsed.error}. Nothing was changed.`;
+        .then(async (result) => {
+          let answerOverride: string | undefined;
+          if (result.status === "completed" && nativeAutomationSummary) {
+            const answer = canonicalExecutionText(
+              cli as "codex" | "claude" | "grok",
+              fallbackEvents,
+            );
+            answerOverride = answer.includes(nativeAutomationSummary)
+              ? answer
+              : `${answer}${answer ? "\n\n" : ""}${nativeAutomationSummary}`;
+          } else if (
+            result.status === "completed" &&
+            !parentExecutionId &&
+            !nativeAutomationPrepared
+          ) {
+            const parsed = extractAutomationProposalTool(
+              canonicalExecutionText(
+                cli as "codex" | "claude" | "grok",
+                fallbackEvents,
+              ),
+            );
+            if (parsed.definition) {
+              try {
+                const proposal = await prepareAutomationProposal(
+                  workspaceId,
+                  chatId,
+                  parsed.definition,
+                );
+                answerOverride = `${parsed.displayAnswer}${parsed.displayAnswer ? "\n\n" : ""}${automationProposalPreparedSummary(proposal.definition)}`;
+              } catch (error) {
+                answerOverride = `${parsed.displayAnswer}${parsed.displayAnswer ? "\n\n" : ""}I could not prepare the confirmation card: ${error instanceof Error ? error.message : "proposal preparation failed"}. The automation was not created or provisioned. Repository or tool changes completed earlier in this run were not rolled back.`;
+              }
+            } else if (parsed.error)
+              answerOverride = `${parsed.displayAnswer}${parsed.displayAnswer ? "\n\n" : ""}I could not prepare the confirmation card: ${parsed.error}. The automation was not created or provisioned. Repository or tool changes completed earlier in this run were not rolled back.`;
           }
-          return finalizeExecution(store, {runId,workspaceId,chatId,cli:cli as "codex" | "claude",result,fallbackEvents,answerOverride});
+          return finalizeExecution(store, {
+            runId,
+            workspaceId,
+            chatId,
+            cli: cli as "codex" | "claude" | "grok",
+            result,
+            fallbackEvents,
+            answerOverride,
+          });
         })
         .catch((error) =>
           console.error("Failed to persist terminal execution state", error),
-        );
+        )
+        .finally(() => {
+          preparedAttachments.cleanup();
+          providerDecisionGate.clearExecution(runId);
+          if (cli === "codex") {
+            const key = `${workspaceId}:${chatId}`;
+            if (activeCodexChats.get(key)?.runId === runId)
+              activeCodexChats.delete(key);
+          }
+        });
       return {
         runId,
         status: "running",
         attachmentDelivery: { passedToCli, unsupported },
       };
     } catch (error) {
+      preparedAttachments.cleanup();
+      providerDecisionGate.clearExecution(runId);
       try {
         store.failQueuedExecution(
           runId,
@@ -4067,6 +6602,9 @@ function registerIpc(): void {
         .map(
           (id) =>
             store.cancelQueuedExecution(workspaceId, id) ||
+            codexWorkbench.cancel(id) ||
+            claudeWorkbench.cancel(id) ||
+            grokWorkbench.cancel(id) ||
             workbench.cancel(id),
         )
         .some(Boolean),
@@ -4084,7 +6622,7 @@ function registerIpc(): void {
     return store.captureChat(
       text(value.workspaceId, "workspace ID", 64),
       text(value.title, "title", 300),
-      text(value.body, "body", 2_000_000),
+      text(value.body, "body"),
     );
   });
   handle("waypoint:add-message", (_event, input: unknown) => {
@@ -4099,7 +6637,7 @@ function registerIpc(): void {
       text(value.workspaceId, "workspace ID", 64),
       text(value.chatId, "chat ID", 64),
       role as "user" | "assistant" | "system",
-      text(value.body, "body", 2_000_000),
+      text(value.body, "body"),
       attachmentIds,
     );
   });
@@ -4514,11 +7052,30 @@ function createWindow(): void {
   });
 }
 
+if (process.platform === "win32") {
+  app.setPath(
+    "userData",
+    canonicalWindowsUserData(process.env, app.getPath("home")),
+  );
+  app.setAppUserModelId("com.waypoint.desktop");
+}
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.whenReady().then(() => {
+    initializeRunScopedAttachmentOwnership(app.getPath("userData"));
+    cleanupStaleGrokAutomationDirectories();
+    if (app.isPackaged && process.platform === "win32")
+      cleanupLegacyWindowsInstall({
+        localAppData:
+          process.env.LOCALAPPDATA ??
+          path.join(app.getPath("home"), "AppData", "Local"),
+        currentExecutable: process.execPath,
+      });
     store = new WorkspaceStore(
       path.join(app.getPath("userData"), "waypoint.sqlite"),
+    );
+    cleanupRunScopedAttachmentDirectories(
+      managedWorkspaceExecutionRoots(store),
     );
     try {
       productHelpLibrary = loadProductHelp(
@@ -4538,8 +7095,16 @@ else {
       "meeting-playback-cache",
     );
     rmSync(meetingPlaybackCacheRoot, { recursive: true, force: true });
-    const automationProvisioningTempRoot = path.join(app.getPath("userData"), "automation-provisioning-tmp");
-    rmSync(automationProvisioningTempRoot, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 });
+    const automationProvisioningTempRoot = path.join(
+      app.getPath("userData"),
+      "automation-provisioning-tmp",
+    );
+    rmSync(automationProvisioningTempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 2,
+      retryDelay: 50,
+    });
     mkdirSync(automationProvisioningTempRoot, { recursive: true, mode: 0o700 });
     registerMeetingPlaybackProtocol();
     try {
@@ -4677,17 +7242,116 @@ else {
             },
             summary: "Read workspace summary",
           };
-        if(command==='automation.connectors.list')return{value:WEBHOOK_CONNECTORS,summary:'Listed supported webhook connector contracts'};
-        if(command==='automation.proposal.create'){
-          const chatId=typeof input.chatId==='string'?text(input.chatId,'chat ID',64):undefined;
-          const proposal=await prepareAutomationProposal(workspaceId,chatId,input.definition);
-          return{value:{proposalId:proposal.id,status:proposal.status,proposalDigest:proposal.proposalDigest,question:proposal.question},summary:'Prepared an automation proposal for explicit user confirmation'};
+        if (command === "automation.connectors.list")
+          return {
+            value: WEBHOOK_CONNECTORS,
+            summary: "Listed supported webhook connector contracts",
+          };
+        if (command === "automation.proposal.create") {
+          const chatId =
+            typeof input.chatId === "string"
+              ? text(input.chatId, "chat ID", 64)
+              : undefined;
+          const proposal = await prepareAutomationProposal(
+            workspaceId,
+            chatId,
+            input.definition,
+          );
+          return {
+            value: {
+              proposalId: proposal.id,
+              status: proposal.status,
+              proposalDigest: proposal.proposalDigest,
+              question: proposal.question,
+            },
+            summary: automationProposalPreparedSummary(proposal.definition),
+          };
         }
-        if(command==='browser.status'){const settings=store.toolGatewaySettings(workspaceId),surface=inAppBrowser.status(workspaceId);return{value:{mode:settings.browserProfileMode,profile:settings.browserProfileName,allowedDomains:settings.browserAllowedDomains,stopped:settings.stopped,surface},summary:'Read browser readiness and policy status'}}
-        if(command==='browser.domains.update'){const current=store.toolGatewaySettings(workspaceId),domains=Array.isArray(input.domains)?input.domains.map((item)=>text(item,'browser domain',253)):[];const next=store.setToolGatewaySettings(workspaceId,{...current,browserAllowedDomains:domains});return{value:{allowedDomains:next.browserAllowedDomains},summary:'Updated browser public-domain policy'}}
-        if(command==='screen_capture.status'){return{value:{settings:store.screenCaptureSettings(workspaceId),captures:store.listScreenCaptures(workspaceId).map(({id,title,mode,capturedAt,expiresAt,bytes})=>({id,title,mode,capturedAt,expiresAt,bytes})),readiness:captureReadiness(process.platform,process.platform==='darwin'?systemPreferences.getMediaAccessStatus('screen') as 'granted'|'denied'|'restricted'|'not-determined'|'unknown':'unknown')},summary:'Read manual local screenshot status'}}
-        if(command==='screen_capture.settings.update'){const current=store.screenCaptureSettings(workspaceId),next=store.setScreenCaptureSettings(workspaceId,validateCaptureSettings({workflow:(input.workflow??current.workflow) as CaptureSettings['workflow'],mode:(input.mode??current.mode) as CaptureMode,shortcut:String(input.shortcut??current.shortcut),retentionDays:Number(input.retentionDays??current.retentionDays) as 7|30|90,maxCaptures:Number(input.maxCaptures??current.maxCaptures)}));registerCaptureShortcut(workspaceId,next);return{value:next,summary:'Updated manual screenshot settings'}}
-        if(command==='screen_capture.open'){BrowserWindow.getAllWindows()[0]?.webContents.send('waypoint:screen-capture-request');return{value:{opened:true},summary:'Opened the manual screenshot picker; the user must choose a source'}}
+        if (command === "browser.status") {
+          const settings = store.toolGatewaySettings(workspaceId),
+            surface = inAppBrowser.status(workspaceId);
+          return {
+            value: {
+              mode: settings.browserProfileMode,
+              profile: settings.browserProfileName,
+              allowedDomains: settings.browserAllowedDomains,
+              stopped: settings.stopped,
+              surface,
+            },
+            summary: "Read browser readiness and policy status",
+          };
+        }
+        if (command === "browser.domains.update") {
+          const current = store.toolGatewaySettings(workspaceId),
+            domains = Array.isArray(input.domains)
+              ? input.domains.map((item) => text(item, "browser domain", 253))
+              : [];
+          const next = store.setToolGatewaySettings(workspaceId, {
+            ...current,
+            browserAllowedDomains: domains,
+          });
+          return {
+            value: { allowedDomains: next.browserAllowedDomains },
+            summary: "Updated browser public-domain policy",
+          };
+        }
+        if (command === "screen_capture.status") {
+          return {
+            value: {
+              settings: store.screenCaptureSettings(workspaceId),
+              captures: store
+                .listScreenCaptures(workspaceId)
+                .map(({ id, title, mode, capturedAt, expiresAt, bytes }) => ({
+                  id,
+                  title,
+                  mode,
+                  capturedAt,
+                  expiresAt,
+                  bytes,
+                })),
+              readiness: captureReadiness(
+                process.platform,
+                process.platform === "darwin"
+                  ? (systemPreferences.getMediaAccessStatus("screen") as
+                      | "granted"
+                      | "denied"
+                      | "restricted"
+                      | "not-determined"
+                      | "unknown")
+                  : "unknown",
+              ),
+            },
+            summary: "Read manual local screenshot status",
+          };
+        }
+        if (command === "screen_capture.settings.update") {
+          const current = store.screenCaptureSettings(workspaceId),
+            next = store.setScreenCaptureSettings(
+              workspaceId,
+              validateCaptureSettings({
+                workflow: (input.workflow ??
+                  current.workflow) as CaptureSettings["workflow"],
+                mode: (input.mode ?? current.mode) as CaptureMode,
+                shortcut: String(input.shortcut ?? current.shortcut),
+                retentionDays: Number(
+                  input.retentionDays ?? current.retentionDays,
+                ) as 7 | 30 | 90,
+                maxCaptures: Number(input.maxCaptures ?? current.maxCaptures),
+              }),
+            );
+          registerCaptureShortcut(workspaceId, next);
+          return { value: next, summary: "Updated manual screenshot settings" };
+        }
+        if (command === "screen_capture.open") {
+          BrowserWindow.getAllWindows()[0]?.webContents.send(
+            "waypoint:screen-capture-request",
+          );
+          return {
+            value: { opened: true },
+            summary:
+              "Opened the manual screenshot picker; the user must choose a source",
+          };
+        }
         if (command === "chat.create") {
           const id = store.createChat(
             workspaceId,
@@ -4727,10 +7391,10 @@ else {
                 input.attachmentModel === undefined
                   ? current.attachmentModel
                   : text(input.attachmentModel, "image model ID", 200),
-              fallbackProvider: ["codex", "claude"].includes(
+              fallbackProvider: ["codex", "claude", "grok"].includes(
                 String(input.fallbackProvider),
               )
-                ? (input.fallbackProvider as "codex" | "claude")
+                ? (input.fallbackProvider as "codex" | "claude" | "grok")
                 : current.fallbackProvider,
               monthlyCapMicros:
                 input.monthlyCapMicros === undefined
@@ -4830,34 +7494,36 @@ else {
         value: { sourceUrls: result.sourceUrls },
       };
     });
-    toolGateway.configureBrowser(async (workspaceId, action, workspaceRoot, signal) => {
-      if (!inAppBrowser.status(workspaceId).open) {
-        if (action.command !== "open")
-          throw new Error("Open the Waypoint In-App Browser first");
-        const host = BrowserWindow.getAllWindows()[0],
-          settings = store.toolGatewaySettings(workspaceId);
-        if (!host) throw new Error("browser_window_unavailable");
-        const [width, height] = host.getContentSize();
-        await inAppBrowser.open(
-          workspaceId,
-          host,
-          action.url,
-          settings.browserAllowedDomains,
-          {
-            x: 300,
-            y: 130,
-            width: Math.max(500, width - 340),
-            height: Math.max(360, height - 260),
-          },
-          signal,
-        );
-        return {
-          summary: "Opened URL in Waypoint In-App Browser",
-          output: action.url,
-        };
-      }
-      return inAppBrowser.action(workspaceId, action, workspaceRoot, signal);
-    });
+    toolGateway.configureBrowser(
+      async (workspaceId, action, workspaceRoot, signal) => {
+        if (!inAppBrowser.status(workspaceId).open) {
+          if (action.command !== "open")
+            throw new Error("Open the Waypoint In-App Browser first");
+          const host = BrowserWindow.getAllWindows()[0],
+            settings = store.toolGatewaySettings(workspaceId);
+          if (!host) throw new Error("browser_window_unavailable");
+          const [width, height] = host.getContentSize();
+          await inAppBrowser.open(
+            workspaceId,
+            host,
+            action.url,
+            settings.browserAllowedDomains,
+            {
+              x: 300,
+              y: 130,
+              width: Math.max(500, width - 340),
+              height: Math.max(360, height - 260),
+            },
+            signal,
+          );
+          return {
+            summary: "Opened URL in Waypoint In-App Browser",
+            output: action.url,
+          };
+        }
+        return inAppBrowser.action(workspaceId, action, workspaceRoot, signal);
+      },
+    );
     peerHostRuntime = new PeerHostRuntime(
       path.join(app.getPath("userData"), "peer-host"),
       vault,
@@ -4867,19 +7533,63 @@ else {
         syncService = service;
         registerIpc();
         createWindow();
-        const initialWorkspace=store.listWorkspaces()[0];
-        if(initialWorkspace)registerCaptureShortcut(initialWorkspace.id,store.screenCaptureSettings(initialWorkspace.id));
+        const initialWorkspace = store.listWorkspaces()[0];
+        if (initialWorkspace)
+          registerCaptureShortcut(
+            initialWorkspace.id,
+            store.screenCaptureSettings(initialWorkspace.id),
+          );
         const timer = setInterval(() => {
           for (const workspace of store.listWorkspaces()) {
-            const syncStatus=syncService.status(workspace.id);
-            if(!syncStatus.configured||(syncStatus.transportMode==='desktop-host'&&!syncStatus.peerHost?.running))continue;
-            if(!activeSyncRuns.has(workspace.id)){
-              activeSyncRuns.add(workspace.id);const signal=AbortSignal.any([syncAbort.signal,AbortSignal.timeout(20_000)]);
-              void syncService.syncOnce(workspace.id,store,signal).then(()=>processRemoteJobs(workspace.id)).catch((error)=>{if(!syncAbort.signal.aborted)console.warn('Workspace sync attempt failed',error instanceof Error?error.message:'unknown')}).finally(()=>activeSyncRuns.delete(workspace.id));
+            const syncStatus = syncService.status(workspace.id);
+            if (
+              !syncStatus.configured ||
+              (syncStatus.transportMode === "desktop-host" &&
+                !syncStatus.peerHost?.running)
+            )
+              continue;
+            if (!activeSyncRuns.has(workspace.id)) {
+              activeSyncRuns.add(workspace.id);
+              const signal = AbortSignal.any([
+                syncAbort.signal,
+                AbortSignal.timeout(20_000),
+              ]);
+              void syncService
+                .syncOnce(workspace.id, store, signal)
+                .then(() => processRemoteJobs(workspace.id))
+                .catch((error) => {
+                  if (!syncAbort.signal.aborted)
+                    console.warn(
+                      "Workspace sync attempt failed",
+                      error instanceof Error ? error.message : "unknown",
+                    );
+                })
+                .finally(() => activeSyncRuns.delete(workspace.id));
             }
-            if(!activeWebhookRuns.has(workspace.id)){
-              activeWebhookRuns.add(workspace.id);const signal=AbortSignal.any([syncAbort.signal,AbortSignal.timeout(20_000)]);
-              void syncService.fetchWebhookEvents(workspace.id,store,signal).then(async(result)=>{if(result.imported>0)captureWindow()?.webContents.send('waypoint:webhook-events-imported',{workspaceId:workspace.id,imported:result.imported});await processAutomationRuns(workspace.id)}).catch((error)=>{if(!syncAbort.signal.aborted)console.warn('Workspace webhook receive failed',error instanceof Error?error.message:'unknown')}).finally(()=>activeWebhookRuns.delete(workspace.id));
+            if (!activeWebhookRuns.has(workspace.id)) {
+              activeWebhookRuns.add(workspace.id);
+              const signal = AbortSignal.any([
+                syncAbort.signal,
+                AbortSignal.timeout(20_000),
+              ]);
+              void syncService
+                .fetchWebhookEvents(workspace.id, store, signal)
+                .then(async (result) => {
+                  if (result.imported > 0)
+                    captureWindow()?.webContents.send(
+                      "waypoint:webhook-events-imported",
+                      { workspaceId: workspace.id, imported: result.imported },
+                    );
+                  await processAutomationRunsV2(workspace.id);
+                })
+                .catch((error) => {
+                  if (!syncAbort.signal.aborted)
+                    console.warn(
+                      "Workspace webhook receive failed",
+                      error instanceof Error ? error.message : "unknown",
+                    );
+                })
+                .finally(() => activeWebhookRuns.delete(workspace.id));
             }
           }
         }, 5_000);
@@ -4911,7 +7621,8 @@ else {
     shutdownStarted = true;
     globalShortcut.unregisterAll();
     syncAbort.abort();
-    for(const active of activeAutoTitles.values())active.cancel();
+    providerModelCatalogAbort.abort();
+    for (const active of activeAutoTitles.values()) active.cancel();
     const browserShutdown = Promise.all(
       (store?.listWorkspaces() ?? []).map((workspace) =>
         toolGateway.stopAndCloseBrowser(
@@ -4922,6 +7633,10 @@ else {
     );
     void Promise.allSettled([
       workbench.shutdown(),
+      codexWorkbench.shutdown(),
+      claudeWorkbench.shutdown(),
+      grokWorkbench.shutdown(),
+      shutdownInstalledCliModelCatalog(),
       browserShutdown,
       peerHostRuntime?.stop(),
       Promise.allSettled([...activeAutoTitleTasks]),

@@ -53,7 +53,11 @@ export async function discoverConnectorTarget(definition: AutomationProposalDefi
 }
 
 function assertApprovedTarget(definition: AutomationProposalDefinition, discovered: TargetIdentity) {
-  for (const key of ["projectId", "repositoryId", "repositoryFullName"] as const) if ((definition.provisioning[key] ?? undefined) !== (discovered[key] ?? undefined)) throw new Error(`Provider target ${key} changed after approval; create a fresh proposal`);
+  for (const key of ["projectId", "repositoryId", "repositoryFullName"] as const) {
+    const approved = definition.provisioning[key];
+    if (approved !== undefined && approved !== discovered[key])
+      throw new Error(`Provider target ${key} changed after approval; create a fresh proposal`);
+  }
 }
 
 function azureRequest(definition: AutomationProposalDefinition, endpoint: string, secret: string) {
@@ -80,9 +84,18 @@ function values(value: Record<string, unknown>): Array<Record<string, unknown>> 
 }
 
 export async function provisionConnector(input: { definition: AutomationProposalDefinition; secret: string; workspaceRoot: string; execute: CliExecutor }) {
-  const { definition, secret, workspaceRoot, execute } = input, rawEndpoint = required(definition.delivery.endpoint, "A public webhook endpoint"), endpoint = definition.trigger.connectorId === "generic" ? rawEndpoint : trustedProviderEndpoint(rawEndpoint);
+  const { definition: approvedDefinition, secret, workspaceRoot, execute } = input,
+    rawEndpoint = required(approvedDefinition.delivery.endpoint, "A public webhook endpoint"),
+    endpoint = approvedDefinition.trigger.connectorId === "generic" ? rawEndpoint : trustedProviderEndpoint(rawEndpoint),
+    discovered = approvedDefinition.trigger.connectorId === "azure_devops" || approvedDefinition.trigger.connectorId === "github"
+      ? await discoverConnectorTarget(approvedDefinition, execute)
+      : {},
+    definition: AutomationProposalDefinition = {
+      ...approvedDefinition,
+      provisioning: { ...approvedDefinition.provisioning, ...discovered },
+    };
   if (definition.delivery.reachability !== "public_relay" && definition.trigger.connectorId !== "generic") throw new Error("This cloud connector requires a publicly reachable trusted relay endpoint");
-  if (definition.trigger.connectorId === "azure_devops" || definition.trigger.connectorId === "github") assertApprovedTarget(definition, await discoverConnectorTarget(definition, execute));
+  if (definition.trigger.connectorId === "azure_devops" || definition.trigger.connectorId === "github") assertApprovedTarget(approvedDefinition, discovered);
   const operationRoot = path.join(workspaceRoot, randomUUID());
   mkdirSync(operationRoot, { recursive: true, mode: 0o700 });
   try {
@@ -95,7 +108,7 @@ export async function provisionConnector(input: { definition: AutomationProposal
       const createdExternalId=externalId;
       try { const listed = outputJson(await execute("az", ["devops", "invoke", "--organization", organization, "--area", "hooks", "--resource", "subscriptions", "--http-method", "GET", "--api-version", "7.1", "--output", "json", "--only-show-errors"]), "Azure DevOps service hook reconciliation"), match = values(listed).find((item) => (!externalId||String(item.id)===externalId)&&item.publisherId===body.publisherId&&item.eventType === body.eventType&&item.resourceVersion===body.resourceVersion&&item.consumerId===body.consumerId&&item.consumerActionId===body.consumerActionId&&!['disabled','error'].includes(String(item.status??'enabled').toLowerCase()) && (item.consumerInputs as Record<string, unknown> | undefined)?.url === endpoint && String((item.consumerInputs as Record<string, unknown> | undefined)?.acceptUntrustedCerts)==='false' && (item.publisherInputs as Record<string, unknown> | undefined)?.projectId === body.publisherInputs.projectId && (item.publisherInputs as Record<string, unknown> | undefined)?.repository === body.publisherInputs.repository && ((item.publisherInputs as Record<string, unknown> | undefined)?.branch??undefined)===(body.publisherInputs.branch??undefined));externalId=match?stableId(match.id,"Azure DevOps reconciled service hook ID"):undefined } catch(error){creationError??=error}
       if (!externalId) throw Object.assign(new Error("Azure DevOps hook creation outcome is uncertain; inspect provider hooks for the exact approved endpoint before retrying", { cause: creationError }),{providerMutation:{connectorId:'azure_devops',outcome:'uncertain',endpoint,externalId:createdExternalId,rollback:createdExternalId?{operation:'delete_service_hook',organization,externalId:createdExternalId}:{operation:'inspect_and_delete_exact_endpoint',organization,endpoint}}});
-      return { connectorId: "azure_devops" as const, externalId, summary: "Azure DevOps service hook created and reconciled", rollback: { cli: "az" as const, operation: "delete_service_hook", organization, externalId } };
+      return { connectorId: "azure_devops" as const, externalId, targetIdentity: discovered, summary: "Azure DevOps service hook created and reconciled", rollback: { cli: "az" as const, operation: "delete_service_hook", organization, externalId } };
     }
     if (definition.trigger.connectorId === "github") {
       const repository = githubRepository(definition.provisioning.repositoryFullName ?? definition.provisioning.repository), body = githubRequest(definition, endpoint, secret), file = path.join(operationRoot, "request.json");
@@ -106,9 +119,9 @@ export async function provisionConnector(input: { definition: AutomationProposal
       const createdExternalId=externalId;
       try { const listed = JSON.parse(await execute("gh", ["api", `repos/${repository}/hooks?per_page=100`, "--method", "GET"])); const rows = Array.isArray(listed) ? listed as Array<Record<string, unknown>> : []; const match = rows.find((item) => (!externalId||String(item.id)===externalId)&&item.name===body.name&&item.active===true&&(item.config as Record<string, unknown> | undefined)?.url === endpoint&&(item.config as Record<string, unknown> | undefined)?.content_type==='json'&&String((item.config as Record<string, unknown> | undefined)?.insecure_ssl)==='0'&&Array.isArray(item.events)&&item.events.length===1&&item.events[0]===body.events[0]);externalId=match?stableId(match.id,"GitHub reconciled webhook ID"):undefined } catch(error){creationError??=error}
       if (!externalId) throw Object.assign(new Error("GitHub hook creation outcome is uncertain; inspect repository hooks for the exact approved endpoint before retrying", { cause: creationError }),{providerMutation:{connectorId:'github',outcome:'uncertain',endpoint,externalId:createdExternalId,rollback:createdExternalId?{operation:'delete_repository_hook',repository,externalId:createdExternalId}:{operation:'inspect_and_delete_exact_endpoint',repository,endpoint}}});
-      return { connectorId: "github" as const, externalId, summary: "GitHub webhook created and reconciled", rollback: { cli: "gh" as const, operation: "delete_repository_hook", repository, repositoryId: definition.provisioning.repositoryId, externalId } };
+      return { connectorId: "github" as const, externalId, targetIdentity: discovered, summary: "GitHub webhook created and reconciled", rollback: { cli: "gh" as const, operation: "delete_repository_hook", repository, repositoryId: definition.provisioning.repositoryId, externalId } };
     }
-    if (definition.trigger.connectorId === "generic") return { connectorId: "generic" as const, externalId: "manual", summary: "Generic sender configuration is ready for manual installation", rollback: { operation: "revoke_waypoint_channel" as const, channelId: definition.delivery.channelId } };
+    if (definition.trigger.connectorId === "generic") throw new Error("Generic senders require manual inbound-channel setup and verified signing-secret handoff; automatic provisioning did not run");
     throw new Error(`${definition.trigger.connectorId} automatic provisioning is unavailable until provider API credentials and signing-secret return are configured`);
   } finally { try{rmSync(operationRoot, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 })}catch{/* Startup cleanup retries this private per-operation directory; provider provenance must not be lost. */} }
 }

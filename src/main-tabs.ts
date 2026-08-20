@@ -1,4 +1,5 @@
 export type WorkspaceView =
+  | "office"
   | "briefing"
   | "knowledge"
   | "reflection"

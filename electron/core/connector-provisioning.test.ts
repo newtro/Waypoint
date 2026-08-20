@@ -59,10 +59,78 @@ describe("connector provisioning", () => {
     expect(readdirSync(root)).toEqual([]);
   });
 
+  it("defers target discovery until the approved provisioning transaction", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "waypoint-provision-deferred-")),
+      execute = vi.fn(async (_cli: string, args: string[]) =>
+        args.includes("project")
+          ? '{"id":"project-id"}'
+          : args.includes("repos")
+            ? '{"id":"repo-id"}'
+            : args.includes("POST")
+              ? '{"id":"subscription-id"}'
+              : JSON.stringify({
+                  value: [
+                    {
+                      id: "subscription-id",
+                      publisherId: "tfs",
+                      status: "enabled",
+                      eventType: "git.pullrequest.created",
+                      resourceVersion: "1.0",
+                      consumerId: "webHooks",
+                      consumerActionId: "httpRequest",
+                      consumerInputs: {
+                        url: definition.delivery.endpoint,
+                        acceptUntrustedCerts: "false",
+                      },
+                      publisherInputs: {
+                        projectId: "project-id",
+                        repository: "repo-id",
+                        branch: "refs/heads/main",
+                      },
+                    },
+                  ],
+                }),
+      ),
+      unresolved = {
+        ...definition,
+        provisioning: {
+          mode: "az_devops_invoke" as const,
+          organization: "https://dev.azure.com/example",
+          project: "Project",
+          repository: "Repo",
+          targetBranch: "refs/heads/main",
+        },
+      };
+    await expect(
+      provisionConnector({
+        definition: unresolved,
+        secret: "protected-secret",
+        workspaceRoot: root,
+        execute,
+      }),
+    ).resolves.toMatchObject({
+      externalId: "subscription-id",
+      targetIdentity: { projectId: "project-id", repositoryId: "repo-id" },
+    });
+    expect(execute.mock.calls[0][1]).toContain("project");
+    expect(readdirSync(root)).toEqual([]);
+  });
+
   it("rejects a successful create response until exact provider state is reconciled", async()=>{
     const root=mkdtempSync(path.join(tmpdir(),"waypoint-provision-mismatch-")),execute=vi.fn(async(_cli:string,args:string[])=>{if(args[1]==='repos/owner/repo')return '{"id":99,"full_name":"owner/repo"}';if(args.includes('POST'))return '{"id":42}';return JSON.stringify([{id:42,active:false,events:['pull_request'],config:{url:definition.delivery.endpoint,content_type:'json',insecure_ssl:'0'}}])}),github={...definition,trigger:{connectorId:'github' as const,eventType:'github.pull_request',filters:{}},provisioning:{mode:'gh_cli' as const,repository:'owner/repo',repositoryId:'99',repositoryFullName:'owner/repo'}};
     await expect(provisionConnector({definition:github,secret:'protected-secret',workspaceRoot:root,execute})).rejects.toMatchObject({providerMutation:{externalId:'42',outcome:'uncertain'}});
   });
 
   it('rejects Azure readback when provider behavior fields differ from the approved request',async()=>{const root=mkdtempSync(path.join(tmpdir(),'waypoint-provision-azure-mismatch-')),execute=vi.fn(async(_cli:string,args:string[])=>args.includes('project')?'{"id":"project-id"}':args.includes('repos')?'{"id":"repo-id"}':args.includes('POST')?'{"id":"subscription-id"}':JSON.stringify({value:[{id:'subscription-id',publisherId:'other',status:'enabled',eventType:'git.pullrequest.created',resourceVersion:'9.9',consumerId:'other',consumerActionId:'other',consumerInputs:{url:definition.delivery.endpoint,acceptUntrustedCerts:'false'},publisherInputs:{projectId:'project-id',repository:'repo-id',branch:'refs/heads/main'}}]}));await expect(provisionConnector({definition,secret:'protected-secret',workspaceRoot:root,execute})).rejects.toMatchObject({providerMutation:{externalId:'subscription-id',outcome:'uncertain'}})})
+
+  it("never reports a generic manual sender as automatically provisioned", async () => {
+    const execute = vi.fn(async () => "{}");
+    const generic = {
+      ...definition,
+      trigger: { connectorId: "generic" as const, eventType: "generic.event", filters: {} },
+      provisioning: { mode: "manual" as const },
+    };
+    await expect(provisionConnector({ definition: generic, secret: "protected-secret", workspaceRoot: mkdtempSync(path.join(tmpdir(), "waypoint-provision-generic-")), execute })).rejects.toThrow(/manual inbound-channel setup/);
+    expect(execute).not.toHaveBeenCalled();
+  });
 });

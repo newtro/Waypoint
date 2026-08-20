@@ -23,7 +23,6 @@ import {
 export const TOOL_GATEWAY_VERSION = 1,
   MAX_OUTPUT_BYTES = 262_144,
   MAX_READ_BYTES = 262_144,
-  MAX_WRITE_BYTES = 262_144,
   MAX_LIST_ENTRIES = 500,
   MAX_SEARCH_MATCHES = 200,
   MAX_SEARCH_VISITS = 5_000,
@@ -132,7 +131,12 @@ export interface ToolGatewayHooks {
     request: ToolRequest,
     signal: AbortSignal,
   ): Promise<{ output: string; summary: string; value?: unknown }>;
-  browser?(workspaceId:string,action:BrowserAction,workspaceRoot:string,signal:AbortSignal):Promise<{output?:string;summary:string;value?:unknown}>;
+  browser?(
+    workspaceId: string,
+    action: BrowserAction,
+    workspaceRoot: string,
+    signal: AbortSignal,
+  ): Promise<{ output?: string; summary: string; value?: unknown }>;
   progress(event: ToolProgress): void;
   complete(result: ToolResult): void;
   preflight?(request: ToolRequest): ToolFailurePreflight | undefined;
@@ -180,18 +184,23 @@ const BLOCKED: Array<[RegExp, string]> = [
   ],
 ];
 const SECRET_VALUE =
-  /authorization\s*[:=]\s*(?:(?:bearer|basic)\s+)?[^\s,;]+|(?:bearer|basic)\s+[A-Za-z0-9._~+/-]+=*|(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
-const JSON_SECRET_VALUE = /((?:"|')?(?:authorization|password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie|basicAuthCredentials)(?:"|')?\s*:\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
-const AUTHORIZATION_VALUE = /(authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?[^\s,;}"']+/gi;
+  /authorization\s*[:=]\s*(?:(?:bearer|basic)\s+)?[^\s,;]+|(?:bearer|basic)\s+[A-Za-z0-9._~+/-]+=*|(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie|_gitlab_session)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const JSON_SECRET_VALUE =
+  /((?:"|')?(?:authorization|password|passwd|token|secret|api[_-]?key|private[_-]?key|cookie|basicAuthCredentials|_gitlab_session)(?:"|')?\s*:\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+const AUTHORIZATION_VALUE =
+  /(authorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?[^\s,;}"']+/gi;
 const PRIVATE_KEY =
   /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g;
 const URL_AUTH = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi;
+const HIGH_CONFIDENCE_BARE_CREDENTIAL =
+  /\b(?:github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,255}|whsec_[A-Za-z0-9]{16,255}|sk-(?:ant-)?[A-Za-z0-9_-]{20,255}|xox[baprs]-[A-Za-z0-9-]{16,255}|xapp-[A-Za-z0-9-]{16,255}|xoxe-[A-Za-z0-9-]{16,255}|npm_[A-Za-z0-9]{20,255}|gl[a-z]{2,12}-[A-Za-z0-9_-]{16,255}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/g;
 export function redactToolText(value: string, secretNames: string[] = []) {
   let result = value
     .replace(PRIVATE_KEY, "[REDACTED_PRIVATE_KEY]")
     .replace(URL_AUTH, "$1[REDACTED]@")
     .replace(AUTHORIZATION_VALUE, "$1[REDACTED]")
     .replace(JSON_SECRET_VALUE, '$1"[REDACTED]"')
+    .replace(HIGH_CONFIDENCE_BARE_CREDENTIAL, "[REDACTED_CREDENTIAL]")
     .replace(
       SECRET_VALUE,
       (match) => `${match.split(/[:=]/, 1)[0]}=[REDACTED]`,
@@ -269,7 +278,14 @@ function browserEnvironment(home: string): NodeJS.ProcessEnv {
   return env;
 }
 export function validatePolicy(policy: ToolGatewayPolicy) {
-  if (policy.profileName !== "Autonomous developer")
+  if (
+    ![
+      "Chat · read only",
+      "Developer · approve changes",
+      "Full agent · network enabled",
+      "Bypass permissions · no prompts",
+    ].includes(policy.profileName)
+  )
     throw new Error("tool_profile_unavailable");
   if (
     !policy.roots.length ||
@@ -426,6 +442,33 @@ export function discoverLocalCli(name: "git" | "gh" | "az") {
   };
 }
 
+export function localCliProcessInvocation(
+  name: "git" | "gh" | "az",
+  executable: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { executable: string; args: string[] } {
+  if (platform !== "win32" || !/\.(?:cmd|bat)$/i.test(executable))
+    return { executable, args };
+  if (name !== "az" || !/^az\.cmd$/i.test(path.basename(executable)))
+    throw new Error(`${name} Windows command shim is unsupported`);
+  if (statSync(executable).size > 16_384)
+    throw new Error("Azure CLI Windows shim has an unsupported installer layout");
+  const shim = readFileSync(executable, "utf8");
+  if (
+    Buffer.byteLength(shim, "utf8") > 16_384 ||
+    !/%~dp0\\\.\.\\python\.exe/i.test(shim) ||
+    !/-IBm\s+azure\.cli\s+%\*/i.test(shim)
+  )
+    throw new Error("Azure CLI Windows shim has an unsupported installer layout");
+  const python = path.resolve(path.dirname(executable), "..", "python.exe");
+  accessSync(python, constants.X_OK);
+  return {
+    executable: realpathSync(python),
+    args: ["-IBm", "azure.cli", ...args],
+  };
+}
+
 export class ToolGateway {
   private active = new Map<
     string,
@@ -434,6 +477,7 @@ export class ToolGateway {
       child: ChildProcessWithoutNullStreams;
       requested?: "canceled" | "timed_out";
       forceTimer?: NodeJS.Timeout;
+      treeKill?: Promise<void>;
     }
   >();
   private webActive = new Map<
@@ -460,7 +504,9 @@ export class ToolGateway {
   configureWeb(handler: NonNullable<ToolGatewayHooks["web"]>) {
     this.hooks.web = handler;
   }
-  configureBrowser(handler:NonNullable<ToolGatewayHooks["browser"]>){this.hooks.browser=handler}
+  configureBrowser(handler: NonNullable<ToolGatewayHooks["browser"]>) {
+    this.hooks.browser = handler;
+  }
   descriptors() {
     return [
       { name: "workspace.list_files", version: "1.0.0", effect: "read" },
@@ -475,7 +521,34 @@ export class ToolGateway {
       { name: "waypoint.command", version: "1.0.0", effect: "domain" },
     ] as const;
   }
-  waitForCompletion(runId:string,timeoutMs=120_000):Promise<ToolResult>{const completed=this.completedRuns.get(runId);if(completed){this.completedRuns.delete(runId);return Promise.resolve(completed)}if(!/^[A-Za-z0-9_-]{16,128}$/.test(runId)||!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>300_000)return Promise.reject(new Error('Invalid tool completion wait'));if(this.completionWaiters.has(runId))return Promise.reject(new Error('Tool completion already has a waiter'));return new Promise<ToolResult>((resolve,reject)=>{const timer=setTimeout(()=>{this.completionWaiters.delete(runId);reject(new Error('Tool completion wait timed out'))},timeoutMs);timer.unref?.();this.completionWaiters.set(runId,(result)=>{clearTimeout(timer);resolve(result)})})}
+  waitForCompletion(runId: string, timeoutMs?: number): Promise<ToolResult> {
+    const completed = this.completedRuns.get(runId);
+    if (completed) {
+      this.completedRuns.delete(runId);
+      return Promise.resolve(completed);
+    }
+    if (
+      !/^[A-Za-z0-9_-]{16,128}$/.test(runId) ||
+      (timeoutMs !== undefined &&
+        (!Number.isSafeInteger(timeoutMs) ||
+          timeoutMs < 100 ||
+          timeoutMs > 300_000))
+    )
+      return Promise.reject(new Error("Invalid tool completion wait"));
+    if (this.completionWaiters.has(runId))
+      return Promise.reject(new Error("Tool completion already has a waiter"));
+    return new Promise<ToolResult>((resolve, reject) => {
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+          this.completionWaiters.delete(runId);
+          reject(new Error("Tool completion wait timed out"));
+        }, timeoutMs);
+      timer?.unref?.();
+      this.completionWaiters.set(runId, (result) => {
+        if (timer) clearTimeout(timer);
+        resolve(result);
+      });
+    });
+  }
   stop(workspaceId: string) {
     this.stopped.add(workspaceId);
     for (const [id, item] of this.active)
@@ -545,9 +618,15 @@ export class ToolGateway {
     request: ToolRequest,
     policy: ToolGatewayPolicy,
     runtimeSecretValues: readonly string[] = [],
+    onStarted?: (runId: string) => void,
   ): Promise<{ runId: string; result?: ToolResult }> {
     validatePolicy(policy);
-    const redactRuntime=(value:string)=>runtimeSecretValues.reduce((result,secret)=>secret.length>=4?result.split(secret).join('[REDACTED]'):result,redactToolText(value,policy.secretNames));
+    const redactRuntime = (value: string) =>
+      runtimeSecretValues.reduce(
+        (result, secret) =>
+          secret.length >= 4 ? result.split(secret).join("[REDACTED]") : result,
+        redactToolText(value, policy.secretNames),
+      );
     if (
       request.version !== 1 ||
       !ID.test(request.workspaceId) ||
@@ -682,10 +761,7 @@ export class ToolGateway {
       if (request.tool === "workspace.write_file") {
         const relative = String(request.arguments.path ?? ""),
           content = request.arguments.content;
-        if (
-          typeof content !== "string" ||
-          Buffer.byteLength(content) > MAX_WRITE_BYTES
-        )
+        if (typeof content !== "string")
           return {
             runId,
             result: this.denied(base, "invalid_file_content", policy),
@@ -801,6 +877,7 @@ export class ToolGateway {
             reason?: "canceled" | "timed_out";
           };
         this.webActive.set(runId, active);
+        onStarted?.(runId);
         this.hooks.progress({
           runId,
           workspaceId: request.workspaceId,
@@ -944,6 +1021,7 @@ export class ToolGateway {
               reason?: "canceled" | "timed_out";
             } = { workspaceId: request.workspaceId, controller };
           this.webActive.set(runId, active);
+          onStarted?.(runId);
           const timer = setTimeout(() => {
             active.reason = "timed_out";
             controller.abort();
@@ -1030,13 +1108,12 @@ export class ToolGateway {
             runId,
             result: this.denied(base, "cli_unavailable", policy),
           };
-        file = found.executable;
-        args = Array.isArray(request.arguments.args)
+        const requestedArgs = Array.isArray(request.arguments.args)
           ? request.arguments.args.map(String)
           : [];
         if (
-          args.length > 100 ||
-          args.some(
+          requestedArgs.length > 100 ||
+          requestedArgs.some(
             (arg) =>
               arg.length > 4096 ||
               [...arg].some((character) =>
@@ -1048,6 +1125,13 @@ export class ToolGateway {
             runId,
             result: this.denied(base, "invalid_arguments", policy),
           };
+        const invocation = localCliProcessInvocation(
+          cli as "git" | "gh" | "az",
+          found.executable,
+          requestedArgs,
+        );
+        file = invocation.executable;
+        args = invocation.args;
       } else {
         file =
           process.platform === "win32"
@@ -1058,17 +1142,11 @@ export class ToolGateway {
             ? ["/d", "/s", "/c", command]
             : ["-lc", command];
       }
-      base.summary = redactToolText(command, policy.secretNames).slice(0, 500);
+      base.summary = redactRuntime(command).slice(0, 500);
       if (/\bgit\s+commit\b/i.test(command))
         base.notification = "Git commit permitted by trusted-workspace policy";
       if (/\bgit\s+push\b/i.test(command))
         base.notification = "Git push permitted by trusted-workspace policy";
-      const requestedTimeout =
-        request.arguments.timeoutMs === undefined
-          ? policy.maxDurationMs
-          : Number(request.arguments.timeoutMs);
-      if (!Number.isSafeInteger(requestedTimeout) || requestedTimeout < 100)
-        return { runId, result: this.denied(base, "invalid_timeout", policy) };
       const child = this.spawnProcess(file, args, {
         cwd,
         env: environment,
@@ -1081,8 +1159,10 @@ export class ToolGateway {
         child: ChildProcessWithoutNullStreams;
         requested?: "canceled" | "timed_out";
         forceTimer?: NodeJS.Timeout;
+        treeKill?: Promise<void>;
       };
       this.active.set(runId, active);
+      onStarted?.(runId);
       this.hooks.progress({
         runId,
         workspaceId: request.workspaceId,
@@ -1124,17 +1204,14 @@ export class ToolGateway {
       };
       child.stdout.on("data", (chunk: string) => consume(chunk, true));
       child.stderr.on("data", (chunk: string) => consume(chunk, false));
-      const timeout = setTimeout(
-        () => this.terminate(runId, active, "timed_out"),
-        Math.min(policy.maxDurationMs, requestedTimeout),
-      );
       const settle = (status: ToolStatus, code?: string, error?: string) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
         if (active.forceTimer) clearTimeout(active.forceTimer);
         this.active.delete(runId);
-        const output = redactRuntime(request.tool === "local_cli.run" ? cliStdout : raw);
+        const output = redactRuntime(
+          request.tool === "local_cli.run" ? cliStdout : raw,
+        );
         this.complete(
           request,
           base,
@@ -1146,7 +1223,7 @@ export class ToolGateway {
           overrideReason,
           remediation,
           code,
-          error?redactRuntime(error):undefined,
+          error ? redactRuntime(error) : undefined,
         );
       };
       child.once("error", (error) =>
@@ -1154,9 +1231,11 @@ export class ToolGateway {
       );
       child.once("close", (code) => {
         const requested = active.requested;
-        settle(
-          requested ?? (code === 0 ? "completed" : "failed"),
-          requested ? undefined : "nonzero_exit",
+        void (active.treeKill ?? Promise.resolve()).then(() =>
+          settle(
+            requested ?? (code === 0 ? "completed" : "failed"),
+            requested ? undefined : "nonzero_exit",
+          ),
         );
       });
       return { runId };
@@ -1180,30 +1259,51 @@ export class ToolGateway {
       child: ChildProcessWithoutNullStreams;
       requested?: "canceled" | "timed_out";
       forceTimer?: NodeJS.Timeout;
+      treeKill?: Promise<void>;
     },
     reason: "canceled" | "timed_out",
   ) {
     if (item.requested) return;
     item.requested = reason;
-    this.signal(item.child, "SIGTERM");
+    item.treeKill = this.signal(item.child, "SIGTERM");
     item.forceTimer = setTimeout(() => {
-      if (this.active.has(runId)) this.signal(item.child, "SIGKILL");
+      if (this.active.has(runId))
+        item.treeKill = this.signal(item.child, "SIGKILL");
     }, 1_000);
     item.forceTimer.unref?.();
   }
   private signal(
     child: ChildProcessWithoutNullStreams,
     signal: "SIGTERM" | "SIGKILL",
-  ) {
+  ): Promise<void> {
+    if (process.platform === "win32" && child.pid) {
+      return new Promise((resolve) => {
+        const executable = path.join(
+            process.env.SystemRoot ?? "C:\\Windows",
+            "System32",
+            "taskkill.exe",
+          ),
+          killer = spawn(executable, ["/PID", String(child.pid), "/T", "/F"], {
+            windowsHide: true,
+            stdio: "ignore",
+          });
+        killer.once("error", () => {
+          child.kill(signal);
+          resolve();
+        });
+        killer.once("close", () => resolve());
+      });
+    }
     if (process.platform !== "win32" && child.pid) {
       try {
         process.kill(-child.pid, signal);
-        return;
+        return Promise.resolve();
       } catch {
         /* child may have exited */
       }
     }
     child.kill(signal);
+    return Promise.resolve();
   }
   private complete(
     request: ToolRequest,
@@ -1259,8 +1359,15 @@ export class ToolGateway {
   ) {
     this.hooks.complete(result);
     this.hooks.learn?.(request, result, overrideReason, remediation);
-    const waiter=this.completionWaiters.get(result.receipt.id);
-    if(waiter){this.completionWaiters.delete(result.receipt.id);waiter(result)}else{this.completedRuns.set(result.receipt.id,result);while(this.completedRuns.size>200)this.completedRuns.delete(this.completedRuns.keys().next().value!)}
+    const waiter = this.completionWaiters.get(result.receipt.id);
+    if (waiter) {
+      this.completionWaiters.delete(result.receipt.id);
+      waiter(result);
+    } else {
+      this.completedRuns.set(result.receipt.id, result);
+      while (this.completedRuns.size > 200)
+        this.completedRuns.delete(this.completedRuns.keys().next().value!);
+    }
   }
   private failureNote(
     value: unknown,

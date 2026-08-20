@@ -26,6 +26,7 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   localPath: string;
+  executionRoot?: string;
   createdAt: string;
 }
 export interface AttachmentMetadata {
@@ -37,6 +38,11 @@ export interface AttachmentMetadata {
   mediaType: string;
   sha256: string;
   bytes: number;
+  syncEligible: boolean;
+  localOnlyReason?:
+    | 'transport_file_size'
+    | 'transport_owner_count'
+    | 'transport_workspace_count';
   createdAt: string;
 }
 export interface ExportArchive {
@@ -52,6 +58,7 @@ export interface SanitizedSyncStatus {
   conflicts: number;
   conflictVariants: number;
   tombstones: number;
+  localOnlyAttachments: number;
   enrollmentAvailable: false;
   connectionConfigured: false;
 }

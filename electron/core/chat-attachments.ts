@@ -5,10 +5,6 @@ import type { AttachmentMetadata } from './types.js'
 
 export type { AttachmentMetadata } from './types.js'
 
-export const MAX_ATTACHMENT_BYTES=25*1024*1024
-export const MAX_ATTACHMENTS_PER_OWNER=20
-export const MAX_ATTACHMENTS_PER_WORKSPACE=500
-
 export const ATTACHMENT_MEDIA_BY_EXTENSION:Readonly<Record<string,string>>={
   '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif',
   '.pdf':'application/pdf','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -48,14 +44,14 @@ export function validateAttachment(name:string,mediaType:string,bytes:Uint8Array
   if(!safeName||safeName.length>240)throw new Error('Attachment filename is invalid')
   const expected=ATTACHMENT_MEDIA_BY_EXTENSION[extension]
   if(!expected||expected!==mediaType||!SUPPORTED_ATTACHMENT_MEDIA_TYPES.has(mediaType))throw new Error('Attachment extension and MIME type are not an allowed pair')
-  if(bytes.byteLength<1||bytes.byteLength>MAX_ATTACHMENT_BYTES)throw new Error(`Attachment must be between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes`)
+  if(bytes.byteLength<1)throw new Error('Attachment must contain at least one byte')
   validateSignature(mediaType,bytes)
   return{safeName,bytes:bytes.byteLength,sha256:createHash('sha256').update(bytes).digest('hex')}
 }
 
 export function readAndValidateAttachment(sourcePath:string,name:string,mediaType:string):{safeName:string;bytes:Buffer;sha256:string}{
   const stat=statSync(sourcePath)
-  if(!stat.isFile()||stat.size<1||stat.size>MAX_ATTACHMENT_BYTES)throw new Error(`Attachment must be a regular file no larger than ${MAX_ATTACHMENT_BYTES} bytes`)
+  if(!stat.isFile()||stat.size<1)throw new Error('Attachment must be a non-empty regular file')
   const bytes=readFileSync(sourcePath),validated=validateAttachment(name,mediaType,bytes)
   return{safeName:validated.safeName,bytes,sha256:validated.sha256}
 }
@@ -65,9 +61,9 @@ export type ProviderAttachmentPreparation=
   |{kind:'path';path:string;mediaType:string;sha256:string;sourceAttachmentId:string}
   |{kind:'unsupported';reason:string;sourceAttachmentId:string}
 
-export function prepareAttachmentForProvider(input:{metadata:AttachmentMetadata;absolutePath:string;capabilities:{inlineText:boolean;filePaths:boolean;acceptedMediaTypes:readonly string[];maxBytes:number}}):ProviderAttachmentPreparation{
+export function prepareAttachmentForProvider(input:{metadata:AttachmentMetadata;absolutePath:string;capabilities:{inlineText:boolean;filePaths:boolean;acceptedMediaTypes:readonly string[];maxBytes?:number}}):ProviderAttachmentPreparation{
   const {metadata,absolutePath,capabilities}=input
-  if(metadata.bytes>capabilities.maxBytes)return{kind:'unsupported',reason:'Attachment exceeds the selected provider capability limit',sourceAttachmentId:metadata.id}
+  if(capabilities.maxBytes!==undefined&&metadata.bytes>capabilities.maxBytes)return{kind:'unsupported',reason:'Attachment exceeds the selected provider capability limit',sourceAttachmentId:metadata.id}
   if(!capabilities.acceptedMediaTypes.includes(metadata.mediaType))return{kind:'unsupported',reason:`The selected provider does not accept ${metadata.mediaType}`,sourceAttachmentId:metadata.id}
   const bytes=readFileSync(absolutePath),digest=createHash('sha256').update(bytes).digest('hex')
   if(bytes.byteLength!==metadata.bytes||digest!==metadata.sha256)throw new Error('Stored attachment integrity check failed')

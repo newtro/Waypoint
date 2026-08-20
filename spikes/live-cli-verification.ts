@@ -11,7 +11,7 @@ try {
     const events: Array<{ type: string; text?: string }> = []
     const run = await new CliWorkbench().start(cli, {
       cli, prompt: 'Reply with exactly WAYPOINT_LIVE_OK. Do not use tools or modify files.',
-      workspaceRoot: root, profile, timeoutMs: 45_000,
+      workspaceRoot: root, profile,
     }, (event) => events.push(event))
     const result = await run.completion
     console.log(JSON.stringify({ cli, result, text: events.filter((event) => event.type === 'text').at(-1)?.text, workspaceFiles: readdirSync(root) }))
@@ -19,13 +19,13 @@ try {
 
   const failed = await new CliWorkbench().start('failure', {
     cli: 'codex', prompt: 'Reply briefly.', workspaceRoot: root, profile,
-    model: 'waypoint-invalid-model-for-failure', timeoutMs: 30_000,
+    model: 'waypoint-invalid-model-for-failure',
   }, () => {})
   console.log(JSON.stringify({ failure: await failed.completion }))
 
   const canceled = await new CliWorkbench().start('cancel', {
     cli: 'claude', prompt: 'Think silently for a long time, do not use tools, then reply.',
-    workspaceRoot: root, profile, timeoutMs: 45_000,
+    workspaceRoot: root, profile,
   }, () => {})
   setTimeout(() => canceled.cancel(), 250)
   console.log(JSON.stringify({ cancellation: await canceled.completion, workspaceFiles: readdirSync(root) }))

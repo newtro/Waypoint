@@ -2,12 +2,14 @@ import {describe,expect,it,vi} from 'vitest'
 import {cancelExecutionsBeforeShutdown,deleteWithExecutionCancellation,startDurableChild,validateOneChildDelegation} from './execution-lifecycle.js'
 
 describe('execution owner lifecycle',()=>{
-  it('cancels every active child before deleting its owning chat',()=>{
-    const order:string[]=[],store={activeExecutionIds:vi.fn(()=>['r1','r2']),deleteObject:vi.fn(()=>order.push('delete'))},registry={cancel:vi.fn((id:string)=>{order.push(`cancel:${id}`);return true}),cancelAll:vi.fn()}
-    deleteWithExecutionCancellation(store,registry,'workspace','chat','chat')
-    expect(order).toEqual(['cancel:r1','cancel:r2','delete']);expect(store.activeExecutionIds).toHaveBeenCalledWith('workspace','chat')
+  it('waits for every active child before deleting its owning chat',async()=>{
+    let ids=['r1','r2'];const order:string[]=[],store={activeExecutionIds:vi.fn(()=>ids),deleteObject:vi.fn(()=>order.push('delete'))},registry={cancel:vi.fn(()=>true),cancelAndWait:vi.fn(async(id:string)=>{order.push(`cancel:${id}`);await Promise.resolve();ids=ids.filter((candidate)=>candidate!==id);order.push(`stopped:${id}`);return true}),cancelAll:vi.fn()}
+    await deleteWithExecutionCancellation(store,registry,'workspace','chat','chat')
+    expect(order).toEqual(['cancel:r1','stopped:r1','cancel:r2','stopped:r2','delete']);expect(store.activeExecutionIds).toHaveBeenCalledWith('workspace','chat')
   })
-  it('cancels all children before shutdown',()=>{const registry={cancel:vi.fn(()=>true),cancelAll:vi.fn()};cancelExecutionsBeforeShutdown(registry);expect(registry.cancelAll).toHaveBeenCalledOnce()})
+  it('refuses deletion when an active child is not owned by a live registry',async()=>{const store={activeExecutionIds:vi.fn(()=>['orphan']),deleteObject:vi.fn()},registry={cancel:vi.fn(()=>false),cancelAndWait:vi.fn(async()=>false),cancelAll:vi.fn()};await expect(deleteWithExecutionCancellation(store,registry,'workspace','chat','chat')).rejects.toThrow(/not deleted/);expect(store.deleteObject).not.toHaveBeenCalled()})
+  it('refuses deletion if new AI work appears while cancellation is being awaited',async()=>{let ids=['old'];const store={activeExecutionIds:vi.fn(()=>ids),deleteObject:vi.fn()},registry={cancel:vi.fn(()=>true),cancelAndWait:vi.fn(async()=>{ids=['new'];return true}),cancelAll:vi.fn()};await expect(deleteWithExecutionCancellation(store,registry,'workspace','chat','chat')).rejects.toThrow(/New AI work/);expect(store.deleteObject).not.toHaveBeenCalled()})
+  it('cancels all children before shutdown',()=>{const registry={cancel:vi.fn(()=>true),cancelAndWait:vi.fn(async()=>true),cancelAll:vi.fn()};cancelExecutionsBeforeShutdown(registry);expect(registry.cancelAll).toHaveBeenCalledOnce()})
   it('does not spawn when chat deletion removes the queued owner during detection',async()=>{
     let resolveDetection!:(value:{available:boolean;executable:string})=>void
     const detection=new Promise<{available:boolean;executable:string}>((resolve)=>{resolveDetection=resolve}),spawn=vi.fn(),exists=vi.fn(()=>false)

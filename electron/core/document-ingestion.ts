@@ -1,5 +1,4 @@
 import {createHash} from 'node:crypto'
-import {fileURLToPath} from 'node:url'
 import type {TextItem} from 'pdfjs-dist/types/src/display/api.js'
 import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs'
 import mammoth from 'mammoth'
@@ -8,7 +7,7 @@ import {chunkingDigest,type ChunkingPolicy} from './embedding-benchmark.js'
 export const DOCUMENT_EXTRACTION_VERSION='local-documents-v1'
 export const DOCUMENT_CHUNKING_POLICY:ChunkingPolicy={id:'document-sentence-window',version:'1',kind:'sentence',maxCharacters:1_200,overlapCharacters:120,productionReady:true}
 export const DOCUMENT_LIMITS={maxBytes:25*1024*1024,maxPages:500,maxCharacters:2_000_000,maxChunks:2_000,timeoutMs:120_000} as const
-const PDF_STANDARD_FONT_DATA_URL=fileURLToPath(new URL('./standard_fonts/',import.meta.resolve('pdfjs-dist/package.json')))
+const PDF_STANDARD_FONT_DATA_URL=new URL('./standard_fonts/',import.meta.resolve('pdfjs-dist/package.json')).href
 export type ExtractedDocument={text:string;extractor:string;extractorVersion:string;pages?:number;warnings:string[]}
 export type DocumentChunk={index:number;startOffset:number;endOffset:number;text:string;textDigest:string;policy:string;policyVersion:string;policyDigest:string}
 

@@ -10,7 +10,7 @@ describe('renderer-safe sync status',()=>{
   ] as const)('derives %s without exposing raw state',(raw,state)=>expect(sanitizeSyncStatus(raw as Record<string,unknown>)).toMatchObject({state,enrollmentAvailable:false,connectionConfigured:false}))
   it('emits only bounded aggregate fields',()=>{
     const result=sanitizeSyncStatus({setupStatus:'local_only',pendingMutations:1,payload:{body:'secret'},localDeviceId:'secret-device',clock:{peer:2},conflicts:-1})
-    expect(result).toEqual({state:'pending',pending:1,conflicts:0,conflictVariants:0,tombstones:0,enrollmentAvailable:false,connectionConfigured:false})
+    expect(result).toEqual({state:'pending',pending:1,conflicts:0,conflictVariants:0,tombstones:0,localOnlyAttachments:0,enrollmentAvailable:false,connectionConfigured:false})
     expect(JSON.stringify(result)).not.toContain('secret')
   })
 })
