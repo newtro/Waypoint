@@ -526,7 +526,7 @@ export class ClaudeAgentWorkbench {
       throw new Error("Claude CLI executable provenance is unavailable");
     const launchOptions = await claudeAgentLaunchOptions(request.executable),
       controller = new AbortController(),
-      root = path.resolve(request.workspaceRoot),
+      root = realpathSync.native(path.resolve(request.workspaceRoot)),
       sessionApprovedTools = new Set<string>();
     if (request.providerSessionId) {
       const prior = await this.sessionInfo(request.providerSessionId, { dir: root });

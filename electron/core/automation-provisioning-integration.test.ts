@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +18,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("production automation provisioning stack", () => {
   it("creates the planned receiver, protects its secret, reconciles Azure, and enables the exact approved skill rule", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "waypoint-provisioning-stack-")),
+    const root = realpathSync.native(
+        mkdtempSync(path.join(tmpdir(), "waypoint-provisioning-stack-")),
+      ),
       store = new WorkspaceStore(path.join(root, "waypoint.sqlite")),
       workspace = store.createWorkspace("Provisioning stack", root),
       profile = store.listSecurityProfiles(workspace.id).find((item) => item.name === "Bypass permissions · no prompts")!,

@@ -13,6 +13,9 @@ import {
 } from "./codex-app-server.js";
 import type { ExecutionEvent, SecurityProfile } from "./ai-workbench.js";
 
+const TEST_ROOT = path.resolve(process.cwd());
+const OUTSIDE_ROOT = path.resolve(TEST_ROOT, "..", "waypoint-outside-root");
+
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
   stdout = new PassThrough();
@@ -30,7 +33,7 @@ function profile(overrides: Partial<SecurityProfile> = {}): SecurityProfile {
   return {
     id: "developer",
     name: "Developer · approve changes",
-    roots: ["D:\\repo"],
+    roots: [TEST_ROOT],
     filesystem: "workspace-write",
     network: "disabled",
     tools: ["shell", "files", "skills", "mcp"],
@@ -46,7 +49,7 @@ function request(overrides: Partial<CodexRunRequest> = {}): CodexRunRequest {
   return {
     cli: "codex",
     prompt: "Inspect the repository",
-    workspaceRoot: "D:\\repo",
+    workspaceRoot: TEST_ROOT,
     profile: profile(),
     executable: "D:\\bin\\codex.cmd",
     version: "0.146.0",
@@ -113,7 +116,7 @@ function successfulServer(
       else if (method === "skills/list")
         send({
           id,
-          result: { data: [{ cwd: "D:\\repo", skills: [], errors: [] }] },
+          result: { data: [{ cwd: TEST_ROOT, skills: [], errors: [] }] },
         });
       else if (method === "mcpServerStatus/list")
         send({ id, result: { data: options.mcpServers ?? [] } });
@@ -143,7 +146,7 @@ function successfulServer(
               type: "commandExecution",
               id: "cmd",
               command: "git status",
-              cwd: options.cwd ?? "D:\\repo",
+              cwd: options.cwd ?? TEST_ROOT,
               status: "inProgress",
             },
           },
@@ -157,7 +160,7 @@ function successfulServer(
               turnId: "turn-1",
               itemId: "cmd",
               command: "git status",
-              cwd: options.cwd ?? "D:\\repo",
+              cwd: options.cwd ?? TEST_ROOT,
               reason: "Inspect working tree",
             },
           });
@@ -171,7 +174,7 @@ function successfulServer(
                 type: "commandExecution",
                 id: "cmd",
                 command: "git status",
-                cwd: "D:\\repo",
+                cwd: options.cwd ?? TEST_ROOT,
                 status: "completed",
                 exitCode: 0,
                 aggregatedOutput: "clean",
@@ -221,7 +224,7 @@ describe("Codex app-server workbench", () => {
       codexSandboxPolicy(request({ profile: profile({ approval: "always" }) })),
     ).toEqual({
       type: "workspaceWrite",
-      writableRoots: ["D:\\repo"],
+      writableRoots: [TEST_ROOT],
       networkAccess: false,
       excludeTmpdirEnvVar: true,
       excludeSlashTmp: true,
@@ -348,7 +351,7 @@ describe("Codex app-server workbench", () => {
     await expect(
       workbench.start(
         "outside",
-        request({ workspaceRoot: "D:\\outside" }),
+        request({ workspaceRoot: OUTSIDE_ROOT }),
         () => undefined,
       ),
     ).rejects.toThrow("outside the security profile");
@@ -379,8 +382,8 @@ describe("Codex app-server workbench", () => {
       messages.find((item) => item.method === "thread/start"),
     ).toMatchObject({
       params: {
-        cwd: "D:\\repo",
-        runtimeWorkspaceRoots: ["D:\\repo"],
+        cwd: TEST_ROOT,
+        runtimeWorkspaceRoots: [TEST_ROOT],
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
         sandbox: "read-only",
@@ -483,7 +486,7 @@ describe("Codex app-server workbench", () => {
                 itemId: "cmd",
                 command:
                   'curl -H "Authorization: Bearer SUPERSECRET" https://example.test',
-                cwd: "D:\\repo",
+                cwd: TEST_ROOT,
                 reason: "token=SUPERSECRET",
               },
             });
@@ -565,7 +568,7 @@ describe("Codex app-server workbench", () => {
                 threadId: "thread-permission",
                 turnId: "turn-permission",
                 itemId: "permission",
-                cwd: "D:\\repo",
+                cwd: TEST_ROOT,
                 permissions: {
                   network: { enabled: true },
                   fileSystem: {
@@ -812,7 +815,7 @@ describe("Codex app-server workbench", () => {
               result: {
                 data: [
                   {
-                    cwd: "D:\\repo",
+                    cwd: TEST_ROOT,
                     errors: [],
                     skills: [
                       {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
@@ -18,8 +18,8 @@ import {
 import type { CodexApprovalRequest } from "./codex-app-server.js";
 import type { SecurityProfile } from "./ai-workbench.js";
 
-const defaultRoot = mkdtempSync(
-  path.join(tmpdir(), "waypoint-claude-default-"),
+const defaultRoot = realpathSync.native(
+  mkdtempSync(path.join(tmpdir(), "waypoint-claude-default-")),
 );
 function profile(overrides: Partial<SecurityProfile> = {}): SecurityProfile {
   return {
@@ -445,7 +445,7 @@ describe("Claude Agent SDK workbench", () => {
     );
   });
 
-  it("keeps Bypass file, shell, network, and MCP authority alongside the proposal tool",async()=>{const repo=mkdtempSync(path.join(tmpdir(),"waypoint-claude-model-tools-")),workbench=new ClaudeAgentWorkbench(fakeQuery(async function*(options){yield init("model-tools",String(options.cwd),{permissionMode:"bypassPermissions"});const hook=options.hooks?.PreToolUse?.[0]?.hooks[0],signal={signal:new AbortController().signal},base={hook_event_name:"PreToolUse" as const,session_id:"model-tools",transcript_path:"transcript",cwd:repo};for(const [tool_name,tool_input] of [["Write",{file_path:path.join(repo,".claude","skills","auto-pr-review.md")}],["Bash",{command:"az devops service-hook create"}],["WebFetch",{url:"https://dev.azure.com"}],["mcp__azure__create_hook",{}]] as const)await expect(hook!({...base,tool_name,tool_input,tool_use_id:tool_name},tool_name,signal)).resolves.toMatchObject({hookSpecificOutput:{permissionDecision:"allow"}});yield success("model-tools")},vi.fn())),running=await workbench.start("model-tools",request({workspaceRoot:repo,profile:profile({roots:[repo],name:"Bypass permissions · no prompts",network:"enabled",approval:"never"}),onAutomationProposal:vi.fn(async()=>({proposalId:"p",status:"pending"}))}),()=>undefined);expect((await running.completion).status).toBe("completed")});
+  it("keeps Bypass file, shell, network, and MCP authority alongside the proposal tool",async()=>{const repo=realpathSync.native(mkdtempSync(path.join(tmpdir(),"waypoint-claude-model-tools-"))),workbench=new ClaudeAgentWorkbench(fakeQuery(async function*(options){yield init("model-tools",String(options.cwd),{permissionMode:"bypassPermissions"});const hook=options.hooks?.PreToolUse?.[0]?.hooks[0],signal={signal:new AbortController().signal},base={hook_event_name:"PreToolUse" as const,session_id:"model-tools",transcript_path:"transcript",cwd:repo};for(const [tool_name,tool_input] of [["Write",{file_path:path.join(repo,".claude","skills","auto-pr-review.md")}],["Bash",{command:"az devops service-hook create"}],["WebFetch",{url:"https://dev.azure.com"}],["mcp__azure__create_hook",{}]] as const)await expect(hook!({...base,tool_name,tool_input,tool_use_id:tool_name},tool_name,signal)).resolves.toMatchObject({hookSpecificOutput:{permissionDecision:"allow"}});yield success("model-tools")},vi.fn())),running=await workbench.start("model-tools",request({workspaceRoot:repo,profile:profile({roots:[repo],name:"Bypass permissions · no prompts",network:"enabled",approval:"never"}),onAutomationProposal:vi.fn(async()=>({proposalId:"p",status:"pending"}))}),()=>undefined);expect((await running.completion).status).toBe("completed")});
   it("keeps Bypass structured file tools inside the selected root while Bash remains host authority",async()=>{const repo=mkdtempSync(path.join(tmpdir(),"waypoint-claude-bypass-structured-")),outside=path.join(tmpdir(),"outside-bypass.txt"),workbench=new ClaudeAgentWorkbench(fakeQuery(async function*(options){yield init("bypass-structured",String(options.cwd),{permissionMode:"bypassPermissions"});const hook=options.hooks?.PreToolUse?.[0]?.hooks[0],signal={signal:new AbortController().signal},base={hook_event_name:"PreToolUse" as const,session_id:"bypass-structured",transcript_path:"transcript",cwd:repo};await expect(hook!({...base,tool_name:"Write",tool_input:{file_path:outside},tool_use_id:"write"},"write",signal)).resolves.toMatchObject({hookSpecificOutput:{permissionDecision:"deny",permissionDecisionReason:expect.stringContaining("outside")}});await expect(hook!({...base,tool_name:"Bash",tool_input:{command:`Set-Content -LiteralPath '${outside}' -Value ok`},tool_use_id:"bash"},"bash",signal)).resolves.toMatchObject({hookSpecificOutput:{permissionDecision:"allow"}});yield success("bypass-structured")},vi.fn())),running=await workbench.start("bypass-structured",request({workspaceRoot:repo,profile:profile({roots:[repo],name:"Bypass permissions · no prompts",network:"enabled",approval:"never"})}),()=>undefined);expect((await running.completion).status).toBe("completed")});
 
   it("fails closed when a resumed CLI reports a different session identity", async () => {
@@ -588,7 +588,7 @@ describe("Claude Agent SDK workbench", () => {
           await expect(
             options.canUseTool!(
               "Read",
-              { file_path: "C:\\Users\\scott\\secret.txt" },
+              { file_path: path.resolve(defaultRoot, "..", "secret.txt") },
               {
                 signal: new AbortController().signal,
                 toolUseID: "outside",

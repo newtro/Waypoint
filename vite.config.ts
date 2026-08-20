@@ -6,8 +6,21 @@ export default defineConfig({
   base: './',
   build: {
     outDir: 'dist',
-    // Keep a deliberate renderer budget so Vite reports real growth instead of
-    // warning on the current 527 kB chat-first shell at its default 500 kB cut-off.
+    // Enforce the renderer budget with real code splitting rather than hiding
+    // growth behind a larger warning threshold.
     chunkSizeWarningLimit: 550,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: "renderer-vendor",
+              test: /node_modules/,
+              maxSize: 500_000,
+            },
+          ],
+        },
+      },
+    },
   },
 })

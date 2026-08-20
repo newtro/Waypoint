@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +26,7 @@ import {
 } from "./grok-agent-acp.js";
 
 const TEST_ROOT = path.resolve(process.cwd());
+const OUTSIDE_ROOT = path.resolve(TEST_ROOT, "..", "waypoint-grok-outside");
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -991,7 +993,7 @@ describe("Grok Build ACP adapter", () => {
         permission: {
           name: "mcp_write_file",
           kind: "other",
-          rawInput: { path: "D:\\outside.txt", content: "unsafe" },
+          rawInput: { path: path.join(OUTSIDE_ROOT, "outside.txt"), content: "unsafe" },
         },
       }),
       running = await workbench.start(
@@ -1020,7 +1022,7 @@ describe("Grok Build ACP adapter", () => {
         {
           name: "batch_operation",
           kind: "other",
-          rawInput: { paths: ["D:\\outside\\secret.txt"] },
+          rawInput: { paths: [path.join(OUTSIDE_ROOT, "secret.txt")] },
         },
       ],
       ["unknown", {}],
@@ -1073,7 +1075,7 @@ describe("Grok Build ACP adapter", () => {
             a: {
               b: {
                 c: {
-                  d: { e: { f: { g: { path: "D:\\outside\\secret.txt" } } } },
+                  d: { e: { f: { g: { path: path.join(OUTSIDE_ROOT, "secret.txt") } } } },
                 },
               },
             },
@@ -1086,7 +1088,7 @@ describe("Grok Build ACP adapter", () => {
           name: "batch_operation",
           kind: "other",
           content: [
-            { type: "diff", path: "D:\\outside\\secret.txt", newText: "pwn" },
+            { type: "diff", path: path.join(OUTSIDE_ROOT, "secret.txt"), newText: "pwn" },
           ],
         },
       ],
@@ -1546,7 +1548,8 @@ describe("Grok Build ACP adapter", () => {
       ),
       stale = mkdtempSync(path.join(parent, "waypoint-grok-automate-home-")),
       unmarked = mkdtempSync(path.join(parent, "waypoint-grok-automate-root-")),
-      unrelated = mkdtempSync(path.join(parent, "other-grok-home-"));
+      unrelated = mkdtempSync(path.join(parent, "other-grok-home-")),
+      canonicalStale = realpathSync.native(stale);
     markGrokAutomationIsolationDirectory(stale);
     writeFileSync(
       path.join(unmarked, ".waypoint-grok-automation.json"),
@@ -1558,7 +1561,9 @@ describe("Grok Build ACP adapter", () => {
       }),
       "utf8",
     );
-    expect(cleanupStaleGrokAutomationDirectories(parent)).toEqual([stale]);
+    expect(cleanupStaleGrokAutomationDirectories(parent)).toEqual([
+      canonicalStale,
+    ]);
     expect(existsSync(unmarked)).toBe(true);
     expect(() =>
       cleanupStaleGrokAutomationDirectories(unrelated),
@@ -1567,7 +1572,7 @@ describe("Grok Build ACP adapter", () => {
   });
 
   it("does not assume the test repository exists outside its selected root", () => {
-    expect(path.win32.isAbsolute(request().workspaceRoot)).toBe(true);
+    expect(path.isAbsolute(request().workspaceRoot)).toBe(true);
   });
 
   it("routes both Grok metadata lanes through the verified no-tools boundary", () => {

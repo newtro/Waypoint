@@ -107,7 +107,7 @@ describe("generic tool gateway", () => {
       shim,
       '@IF EXIST "%~dp0\\..\\python.exe" (\n  "%~dp0\\..\\python.exe" -IBm azure.cli %*\n)',
     );
-    writeFileSync(python, "native placeholder");
+    writeFileSync(python, "native placeholder", { mode: 0o700 });
     expect(
       localCliProcessInvocation(
         "az",

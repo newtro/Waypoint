@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import { WorkspaceStore } from "./store.js";
 
 function preparedRuntime() {
-  const root = mkdtempSync(path.join(tmpdir(), "waypoint-automation-")),
+  const root = realpathSync.native(
+      mkdtempSync(path.join(tmpdir(), "waypoint-automation-")),
+    ),
     store = new WorkspaceStore(path.join(root, "waypoint.sqlite")),
     workspace = store.createWorkspace("Automation", root),
     profile = store.listSecurityProfiles(workspace.id)[0],
@@ -407,8 +409,8 @@ describe("durable webhook automation runtime", () => {
   });
 
   it("reconciles interrupted provisioning as failed with an uncertain external outcome", () => {
-    const root = mkdtempSync(
-        path.join(tmpdir(), "waypoint-automation-interrupted-"),
+    const root = realpathSync.native(
+        mkdtempSync(path.join(tmpdir(), "waypoint-automation-interrupted-")),
       ),
       databasePath = path.join(root, "waypoint.sqlite"),
       store = new WorkspaceStore(databasePath),

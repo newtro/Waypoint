@@ -91,6 +91,6 @@ export function verifyPackagedWindowsResources(resources:string):void{
 }
 
 if(process.argv[1]&&path.resolve(fileURLToPath(import.meta.url))===path.resolve(process.argv[1])){
-  const here=path.dirname(fileURLToPath(import.meta.url)),archive=process.argv[2]??(process.platform==='win32'?path.resolve(here,'../release/win-unpacked/resources/app.asar'):path.resolve(here,'../release/mac-arm64/Waypoint.app/Contents/Resources/app.asar')),resources=path.dirname(archive)
+  const here=path.dirname(fileURLToPath(import.meta.url)),archive=process.argv[2]?path.resolve(process.argv[2]):(process.platform==='win32'?path.resolve(here,'../release/win-unpacked/resources/app.asar'):path.resolve(here,'../release/mac-arm64/Waypoint.app/Contents/Resources/app.asar')),resources=path.dirname(archive)
   verifyPackagedRuntime(archive);verifyPackagedProductHelp(resources);if(process.platform==='win32')verifyPackagedWindowsResources(resources);else verifyPackagedVoice(resources);console.log(`Packaged runtime and platform resource closure verified: ${archive}`)
 }

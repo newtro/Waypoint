@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   openRouterToolApprovalKind,
@@ -7,6 +8,8 @@ import {
 } from "./openrouter-tool-gateway.js";
 import { validatePolicy } from "./tool-gateway.js";
 
+const TEST_ROOT = path.resolve(process.cwd());
+
 const profile = (
   name: string,
   filesystem: "read-only" | "workspace-write",
@@ -15,7 +18,7 @@ const profile = (
 ) => ({
   id: name,
   name,
-  roots: ["C:\\repo"],
+  roots: [TEST_ROOT],
   filesystem,
   network,
   tools,
