@@ -80,7 +80,6 @@ import {
   providerCapabilityPresentation,
 } from "./provider-settings-presentation";
 import { shouldFollowChat } from "./chat-scroll";
-import { ChatMarkdown } from "./chat-markdown";
 import { parseBrowserChatCommand } from "./browser-chat-command";
 import { ScreenCaptureStudio } from "./screen-capture-studio";
 import { confirmModal, promptModal, ModalDialogHost } from "./modal-dialogs";
@@ -117,6 +116,19 @@ const OfficeCommandCenter = lazy(() =>
     default: module.OfficeCommandCenter,
   })),
 );
+const ChatMarkdown = lazy(() =>
+  import("./chat-markdown").then((module) => ({
+    default: module.ChatMarkdown,
+  })),
+);
+
+function ChatBody({ body }: { body: string }) {
+  return (
+    <Suspense fallback={<div className="chat-markdown">{body}</div>}>
+      <ChatMarkdown body={body} />
+    </Suspense>
+  );
+}
 
 type VoiceMode = "push_to_talk" | "hands_free";
 type VoiceState =
@@ -3765,7 +3777,7 @@ export function App() {
               />
             </div>
             <div className="message-content">
-              <ChatMarkdown body={text} />
+              <ChatBody body={text} />
               <small className="execution-live-label">Still working…</small>
             </div>
           </article>
@@ -5052,7 +5064,7 @@ export function App() {
                         <div className="message-content">
                           {message.role === "assistant" ||
                           message.role === "system" ? (
-                            <ChatMarkdown body={message.body} />
+                            <ChatBody body={message.body} />
                           ) : (
                             <p>{message.body}</p>
                           )}

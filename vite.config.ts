@@ -6,21 +6,8 @@ export default defineConfig({
   base: './',
   build: {
     outDir: 'dist',
-    // Enforce the renderer budget with real code splitting rather than hiding
-    // growth behind a larger warning threshold.
+    // Keep a deliberate renderer budget; large optional surfaces are loaded
+    // through explicit React lazy boundaries instead of bundler heuristics.
     chunkSizeWarningLimit: 550,
-    rolldownOptions: {
-      output: {
-        codeSplitting: {
-          groups: [
-            {
-              name: "renderer-vendor",
-              test: /node_modules/,
-              maxSize: 500_000,
-            },
-          ],
-        },
-      },
-    },
   },
 })
