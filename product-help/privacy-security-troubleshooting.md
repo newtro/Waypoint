@@ -19,7 +19,7 @@ Before deleting a workspace, chat, document, meeting, capture, or device relatio
 
 ### A provider says unavailable or disabled
 
-Open **Settings → Models**. For Codex or Claude, check that the installed CLI is supported and signed in. For OpenRouter, confirm a protected key is stored, the provider and live requests are explicitly enabled, a curated model is selected, and cost caps have remaining budget. Entering a key alone does not make paid requests.
+Open **Settings → Models**. For Codex or Claude, check that the installed CLI is supported and signed in. Waypoint searches the sparse Finder/Explorer application path plus reviewed user-local install locations, so a normal `~/.local/bin` Codex install is discoverable without starting a login shell. Compatibility is still version-gated: Waypoint currently validates the Codex app-server protocol in stable CLI 0.146.0 and 0.149.0, and displays other versions rather than starting them silently. For OpenRouter, confirm a protected key is stored, the provider and live requests are explicitly enabled, a curated model is selected, and cost caps have remaining budget. Entering a key alone does not make paid requests.
 
 ### An attachment or document will not process
 
@@ -27,7 +27,7 @@ Confirm the file type and size are supported and the active workspace/chat did n
 
 ### Voice, meetings, or capture is not ready
 
-Open the relevant Settings section and review OS permission, device, shortcut conflict, packaged runtime/model integrity, and bounded media limits. Waypoint never bypasses macOS/Windows consent. A black/invalid screenshot or undecodable audio should produce an actionable failure rather than a false success.
+Open the relevant Settings section and review OS permission, device, shortcut conflict, packaged runtime/model integrity, and bounded media limits. Waypoint never bypasses macOS/Windows consent. A locally rebuilt or ad-hoc-signed macOS app can receive a new code identity, which may require resetting and granting Screen Recording again even when an older Waypoint entry was enabled. Production Developer ID signing is required for stable permission identity across releases. A black/invalid screenshot or undecodable audio should produce an actionable failure rather than a false success.
 
 ### Sync or cross-device work is offline
 

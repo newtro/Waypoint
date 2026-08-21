@@ -26,6 +26,7 @@ const maximumMajorExclusive: Record<CliName, number> = {
   claude: 3,
   grok: 2,
 };
+const validatedCodexVersions = new Set(["0.146.0", "0.149.0"]);
 
 export function parseCliVersion(
   value: string,
@@ -53,14 +54,15 @@ export function cliCompatibility(
       compatible: false,
       error: `${name} ${parsed.join(".")} is newer than Waypoint's validated range. Update Waypoint before running this CLI.`,
     };
+  const parsedLabel = parsed.join(".");
   if (
     name === "codex" &&
-    (parsed.some((part, index) => part !== minimum[index]) ||
-      /0\.146\.0[-+]/.test(version))
+    (!validatedCodexVersions.has(parsedLabel) ||
+      version.trim() !== `codex-cli ${parsedLabel}`)
   )
     return {
       compatible: false,
-      error: `codex ${parsed.join(".")} does not match Waypoint's validated app-server protocol 0.146.0. Install Codex 0.146.0 or update Waypoint before running this CLI.`,
+      error: `codex ${parsedLabel} does not match Waypoint's validated app-server protocols (0.146.0 or 0.149.0). Install a validated Codex CLI or update Waypoint before running this CLI.`,
     };
   const comparison =
     parsed[0] - minimum[0] || parsed[1] - minimum[1] || parsed[2] - minimum[2];

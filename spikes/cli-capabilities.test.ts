@@ -29,10 +29,10 @@ describe("cross-platform CLI capability detection", () => {
     expect(found).toBe("C:\\Tools\\codex.EXE");
   });
 
-  it("finds user-local Claude and the ChatGPT-bundled Codex with a Finder-style PATH", async () => {
+  it("finds user-local CLIs with a Finder-style PATH", async () => {
     const accessible = new Set([
       "/Users/test/.local/bin/claude",
-      "/Applications/ChatGPT.app/Contents/Resources/codex",
+      "/Users/test/.local/bin/codex",
     ]);
     const canAccess = async (candidate: string) => {
       if (!accessible.has(candidate)) throw new Error("missing");
@@ -43,6 +43,16 @@ describe("cross-platform CLI capability detection", () => {
     ).resolves.toBe("/Users/test/.local/bin/claude");
     await expect(
       resolveExecutable("codex", { platform: "darwin", env, canAccess }),
+    ).resolves.toBe("/Users/test/.local/bin/codex");
+    await expect(
+      resolveExecutable("codex", {
+        platform: "darwin",
+        env,
+        canAccess: async (candidate) => {
+          if (candidate !== "/Applications/ChatGPT.app/Contents/Resources/codex")
+            throw new Error("missing");
+        },
+      }),
     ).resolves.toBe("/Applications/ChatGPT.app/Contents/Resources/codex");
     expect(cliSearchDirectories(env, "darwin")).toContain("/opt/homebrew/bin");
   });
@@ -270,15 +280,35 @@ describe("cross-platform CLI capability detection", () => {
     expect(cliCompatibility("codex", "codex-cli 0.146.0")).toEqual({
       compatible: true,
     });
+    expect(cliCompatibility("codex", "codex-cli 0.149.0")).toEqual({
+      compatible: true,
+    });
     expect(
       cliCompatibility("codex", "codex-cli 0.146.0-alpha.9.2"),
     ).toMatchObject({
       compatible: false,
-      error: expect.stringContaining("validated app-server protocol 0.146.0"),
+      error: expect.stringContaining("validated app-server protocols"),
     });
     expect(cliCompatibility("codex", "codex-cli 0.147.0")).toMatchObject({
       compatible: false,
-      error: expect.stringContaining("validated app-server protocol 0.146.0"),
+      error: expect.stringContaining("validated app-server protocols"),
+    });
+    expect(cliCompatibility("codex", "codex-cli 0.149.0-beta.1")).toMatchObject({
+      compatible: false,
+      error: expect.stringContaining("validated app-server protocols"),
+    });
+    for (const unvalidated of [
+      "codex-cli 0.149.0rc1",
+      "codex-cli 0.149.0.1",
+      "codex 0.149.0",
+    ])
+      expect(cliCompatibility("codex", unvalidated)).toMatchObject({
+        compatible: false,
+        error: expect.stringContaining("validated app-server protocols"),
+      });
+    expect(cliCompatibility("codex", "codex-cli 0.150.0")).toMatchObject({
+      compatible: false,
+      error: expect.stringContaining("validated app-server protocols"),
     });
     expect(cliCompatibility("claude", "2.1.220 (Claude Code)")).toEqual({
       compatible: true,

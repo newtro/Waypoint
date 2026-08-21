@@ -490,3 +490,9 @@ Waypoint exposes model-neutral `web.search` and `web.fetch` through the trusted-
 - Pin third-party Actions to immutable commit SHAs. Default workflow authority is read-only; only the terminal release job receives `contents: write`.
 - Protect `main` with pull requests, required `Verify`, resolved conversations, linear history, and no force-push/deletion. Required approvals remain zero while the private repository has only one owner, because authors cannot approve their own pull requests; raise the count when a second reviewer exists. Retain administrator emergency bypass.
 - Release automation has no manual-dispatch path: only a successful CI run for an exact `main` push can publish. Native assets are staged in a resumable draft, downloaded and checksum-verified, and only then published under the repository's immutable-release policy.
+
+# 2026-08-20 — Finder CLI discovery and validated Codex protocols
+
+- Finder/Explorer launches keep their sparse operating-system `PATH`; Waypoint supplements it only with reviewed local install directories such as `~/.local/bin`, `~/.grok/bin`, Homebrew, and the equivalent Windows locations. It never evaluates shell profiles merely to discover a CLI.
+- Waypoint accepts only stable Codex CLI versions whose app-server adapter has current evidence. Codex 0.146.0 remains the protocol-snapshot baseline and 0.149.0 is additionally supported after a signed-in, read-only live completion and session-resume proof on macOS. Other Codex versions remain visible but fail closed until validated.
+- Local ad-hoc macOS signatures are not a stable Screen Recording identity. After installing a newly built development app, reset and re-grant only Waypoint's Screen Recording permission. Production stability requires an authorized Apple Developer ID signing and notarization identity.
