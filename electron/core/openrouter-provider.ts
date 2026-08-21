@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { openRouterModelAcceptsImages } from "./openrouter-model-catalog.js";
 import { imageDimensions, validateAttachment } from "./chat-attachments.js";
+import type { ThinkingEffort } from "../../src/model-thinking.js";
 
 export const OPENROUTER_POLICY_VERSION = 1 as const;
 export const OPENROUTER_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -327,6 +328,7 @@ export interface OpenRouterTransport {
     images: OpenRouterImageInput[];
     signal: AbortSignal;
     requestCapMicros: number;
+    reasoningEffort?: ThinkingEffort;
     onProgress?: (value: { bytes: number; textDelta?: string }) => void;
   }): Promise<{
     responseId: string;
@@ -367,6 +369,7 @@ export interface OpenRouterAgentTransport {
     tools: OpenRouterToolDefinition[];
     signal: AbortSignal;
     requestCapMicros: number;
+    reasoningEffort?: ThinkingEffort;
     onProgress?: (value: { bytes: number; textDelta?: string }) => void;
   }): Promise<{
     responseId: string;
@@ -627,6 +630,7 @@ export class FetchOpenRouterTransport implements OpenRouterTransport {
     images: OpenRouterImageInput[];
     signal: AbortSignal;
     requestCapMicros: number;
+    reasoningEffort?: ThinkingEffort;
     onProgress?: (value: { bytes: number; textDelta?: string }) => void;
   }) {
     const content = input.images.length
@@ -661,6 +665,9 @@ export class FetchOpenRouterTransport implements OpenRouterTransport {
           },
           stream_options: { include_usage: true },
           usage: { include: true },
+          ...(input.reasoningEffort
+            ? { reasoning: { effort: input.reasoningEffort } }
+            : {}),
         }),
       },
     );
@@ -702,6 +709,7 @@ export class FetchOpenRouterTransport implements OpenRouterTransport {
     tools: OpenRouterToolDefinition[];
     signal: AbortSignal;
     requestCapMicros: number;
+    reasoningEffort?: ThinkingEffort;
     onProgress?: (value: { bytes: number; textDelta?: string }) => void;
   }) {
     const response = await this.fetcher(
@@ -728,6 +736,9 @@ export class FetchOpenRouterTransport implements OpenRouterTransport {
           },
           stream_options: { include_usage: true },
           usage: { include: true },
+          ...(input.reasoningEffort
+            ? { reasoning: { effort: input.reasoningEffort } }
+            : {}),
         }),
       },
     );
@@ -828,6 +839,7 @@ export class OpenRouterClient {
     apiKey: string;
     signal: AbortSignal;
     requestCapMicros?: number;
+    reasoningEffort?: ThinkingEffort;
     now?: () => string;
   }): Promise<{ text: string; receipt: ProviderUsageReceipt }> {
     const images = input.images ?? [],
@@ -839,7 +851,7 @@ export class OpenRouterClient {
         .join("|"),
       requestDigest = createHmac("sha256", input.apiKey)
         .update(
-          `${input.workspaceId}\0${input.role}\0${input.model}\0${input.prompt}\0${attachmentDigest}`,
+          `${input.workspaceId}\0${input.role}\0${input.model}\0${input.reasoningEffort ?? "default"}\0${input.prompt}\0${attachmentDigest}`,
         )
         .digest("hex");
     try {
@@ -871,6 +883,7 @@ export class OpenRouterClient {
         images,
         signal: input.signal,
         requestCapMicros,
+        reasoningEffort: input.reasoningEffort,
       });
       const validResponseId = /^[A-Za-z0-9._:-]{1,200}$/.test(
           result.responseId,
@@ -972,6 +985,7 @@ export class OpenRouterAgentClient {
     apiKey: string;
     signal: AbortSignal;
     requestCapMicros: number;
+    reasoningEffort?: ThinkingEffort;
     tools: OpenRouterToolDefinition[];
     executeTool: (call: OpenRouterToolCall) => Promise<string>;
     onToolCall?: (call: OpenRouterToolCall) => void;
@@ -990,7 +1004,7 @@ export class OpenRouterAgentClient {
         .join("|"),
       requestDigest = createHmac("sha256", input.apiKey)
         .update(
-          `${input.workspaceId}\0${input.role}\0${input.model}\0${input.prompt}\0${attachmentDigest}`,
+          `${input.workspaceId}\0${input.role}\0${input.model}\0${input.reasoningEffort ?? "default"}\0${input.prompt}\0${attachmentDigest}`,
         )
         .digest("hex");
     let costMicros = 0,
@@ -1049,6 +1063,7 @@ export class OpenRouterAgentClient {
           tools: input.tools,
           signal: input.signal,
           requestCapMicros: remaining,
+          reasoningEffort: input.reasoningEffort,
           onProgress: (progress) => {
             if (progress.textDelta) {
               streamedText += progress.textDelta;

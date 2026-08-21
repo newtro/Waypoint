@@ -234,6 +234,34 @@
   font-size: 10px;
 }
 
+.model-choice-field { display: block; }
+.thinking-field { display: grid; gap: 5px; margin-top: 9px; }
+.thinking-field > span {
+  color: #69756d;
+  font: 650 8px Manrope, sans-serif;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.thinking-field select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid #d9e1da;
+  border-radius: 8px;
+  background: #f7f9f7;
+  color: #465149;
+  font-size: 9px;
+}
+.thinking-field select:disabled { cursor: not-allowed; opacity: .58; }
+.model-thinking-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.thinking-field.compact { margin: 0; }
+.thinking-field.compact select { max-width: 112px; height: 30px; }
+
 .model-local-note {
   margin: 11px 1px 0;
   color: #7f8982;
@@ -427,6 +455,8 @@ html[data-theme="dark"] .model-route-status span,
 html[data-theme="dark"] .model-route-status > small { color: #87968e; }
 html[data-theme="dark"] .model-lane-card select,
 html[data-theme="dark"] .model-role-field select { border-color: #34473d; background: #101915; color: #cbd6d0; }
+html[data-theme="dark"] .thinking-field > span { color: #87968e; }
+html[data-theme="dark"] .thinking-field select { border-color: #34473d; background: #101915; color: #cbd6d0; }
 html[data-theme="dark"] .model-route-status.warning { border-color: #705832; background: #2b2114; }
 html[data-theme="dark"] .model-activation-row,
 html[data-theme="dark"] .model-credential-row { border-color: #2f4238; background: #131e19; }
@@ -479,6 +509,7 @@ html[data-theme="dark"] .provider-cost-grid progress::-webkit-progress-bar { bac
 }
 
 @media (max-width: 760px) {
+  .model-thinking-grid { grid-template-columns: 1fr; }
   .model-lane-grid,
   .model-role-grid,
   .model-role-grid.attachment-routes { grid-template-columns: 1fr; }

@@ -6,6 +6,8 @@ Waypoint routes normal chat through the user’s installed, signed-in Codex CLI,
 
 Use the provider and curated model selectors in the composer or **Settings → Models**. Settings and composer use the same persisted preferences. Unknown historic model values remain visible as legacy/custom values rather than being silently replaced.
 
+The adjacent **Thinking** selector is model-aware. **Model default** delegates to the provider's documented default; explicit levels appear only when the selected installed or curated model advertises them. Codex uses the installed CLI model inventory, Claude exposes only levels documented for that exact Claude model, Grok distinguishes Grok 4.6 from 4.5, and OpenRouter uses the verified catalog capabilities for the selected hosted model. Changing to a model that cannot use the saved level resets the choice to its model default rather than sending an invalid value.
+
 - **Codex**, **Claude**, and **Grok Build** use their signed-in local CLI subscriptions and expose truthful availability from installed CLI capability probes. Grok readiness additionally requires a compatible installed CLI and a model inventory that proves the active `grok.com` login.
 - **OpenRouter** uses protected OS secret storage, explicit activation, cost caps, warnings, and subscription fallback. It never validates or spends against a key merely because the key was entered.
 - If a selected route is unavailable, Waypoint explains why. Fallback never widens tool or account authority.

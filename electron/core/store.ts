@@ -97,6 +97,12 @@ import {
   type ProviderUsageReceipt,
 } from "./openrouter-provider.js";
 import {
+  EMPTY_THINKING_PREFERENCES,
+  isThinkingEffort,
+  type ThinkingLane,
+  type ThinkingPreferences,
+} from "../../src/model-thinking.js";
+import {
   captureDecision,
   defaultActivityCapturePolicy,
   validateActivityCapturePolicy,
@@ -1037,6 +1043,21 @@ export class WorkspaceStore {
               "UPDATE provider_sessions SET status='stale',updated_at=? WHERE provider IN ('codex','grok') AND status='active'",
             )
             .run(now()),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 47,
+        apply: (database) =>
+          database.exec(`
+            CREATE TABLE IF NOT EXISTS chat_thinking_preferences(
+              workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+              lane TEXT NOT NULL CHECK(lane IN ('codex','claude','grok','openrouterStrategic','openrouterEveryday','openrouterAttachment')),
+              effort TEXT NOT NULL CHECK(effort IN ('','none','minimal','low','medium','high','xhigh','max','ultra')),
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id,lane)
+            );
+          `),
       },
     ]);
     this.db
@@ -3169,6 +3190,7 @@ export class WorkspaceStore {
     cli: "codex" | "claude" | "grok";
     routedCliVersion?: string;
     model?: string;
+    reasoningEffort?: string;
     securityProfileId: string;
     prompt: string;
     depth?: number;
@@ -8736,6 +8758,43 @@ export class WorkspaceStore {
       );
     return next;
   }
+  setOpenRouterRouting(
+    workspaceId: string,
+    value: OpenRouterSettings,
+    thinking: Pick<
+      ThinkingPreferences,
+      | "openrouterStrategic"
+      | "openrouterEveryday"
+      | "openrouterAttachment"
+    >,
+  ): { settings: OpenRouterSettings; thinking: ThinkingPreferences } {
+    if (
+      !this.db.prepare("SELECT 1 FROM workspaces WHERE id=?").get(workspaceId)
+    )
+      throw new Error("Workspace not found");
+    const entries = Object.entries(thinking) as Array<
+      [ThinkingLane, string]
+    >;
+    if (
+      entries.length !== 3 ||
+      entries.some(
+        ([lane, effort]) =>
+          ![
+            "openrouterStrategic",
+            "openrouterEveryday",
+            "openrouterAttachment",
+          ].includes(lane) ||
+          (effort !== "" && !isThinkingEffort(effort)),
+      )
+    )
+      throw new Error("OpenRouter thinking preferences are invalid");
+    return this.transaction(() => {
+      const settings = this.setOpenRouterSettings(value);
+      for (const [lane, effort] of entries)
+        this.setChatThinkingPreference(workspaceId, lane, effort);
+      return { settings, thinking: this.chatThinkingPreferences(workspaceId) };
+    });
+  }
   chatModelPreferences(
     workspaceId: string,
   ): Record<"codex" | "claude" | "grok", string> {
@@ -8776,6 +8835,42 @@ export class WorkspaceStore {
       )
       .run(workspaceId, provider, model, now());
     return this.chatModelPreferences(workspaceId);
+  }
+  chatThinkingPreferences(workspaceId: string): ThinkingPreferences {
+    if (
+      !this.db.prepare("SELECT 1 FROM workspaces WHERE id=?").get(workspaceId)
+    )
+      throw new Error("Workspace not found");
+    const result = { ...EMPTY_THINKING_PREFERENCES };
+    for (const row of this.db
+      .prepare(
+        "SELECT lane,effort FROM chat_thinking_preferences WHERE workspace_id=?",
+      )
+      .all(workspaceId) as Array<{ lane: ThinkingLane; effort: string }>)
+      if (row.effort === "" || isThinkingEffort(row.effort))
+        result[row.lane] = row.effort;
+    return result;
+  }
+  setChatThinkingPreference(
+    workspaceId: string,
+    lane: ThinkingLane,
+    effort: string,
+  ): ThinkingPreferences {
+    if (
+      !this.db.prepare("SELECT 1 FROM workspaces WHERE id=?").get(workspaceId)
+    )
+      throw new Error("Workspace not found");
+    if (
+      !Object.hasOwn(EMPTY_THINKING_PREFERENCES, lane) ||
+      (effort !== "" && !isThinkingEffort(effort))
+    )
+      throw new Error("Chat thinking preference is invalid");
+    this.db
+      .prepare(
+        "INSERT INTO chat_thinking_preferences(workspace_id,lane,effort,updated_at) VALUES (?,?,?,?) ON CONFLICT(workspace_id,lane) DO UPDATE SET effort=excluded.effort,updated_at=excluded.updated_at",
+      )
+      .run(workspaceId, lane, effort, now());
+    return this.chatThinkingPreferences(workspaceId);
   }
   voicePreferences(workspaceId: string) {
     if (

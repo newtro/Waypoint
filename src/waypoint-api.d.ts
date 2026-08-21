@@ -1144,6 +1144,7 @@ declare global {
         parentExecutionId?: string,
         attachmentIds?: string[],
         taskType?: "analyze" | "summarize" | "critique",
+        reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra",
       ): Promise<{
         runId: string;
         status: "running";
@@ -1639,7 +1640,15 @@ declare global {
           version?: string;
           source: "installed-cli";
           ready: boolean;
-          models: Array<{ id: string; label: string; legacy?: boolean }>;
+          models: Array<{
+            id: string;
+            label: string;
+            legacy?: boolean;
+            thinking?: {
+              supported: Array<"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra">;
+              defaultEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            };
+          }>;
           reason: string;
         }>
       >;
@@ -1651,6 +1660,28 @@ declare global {
         provider: "codex" | "claude" | "grok",
         model: string,
       ): Promise<Record<"codex" | "claude" | "grok", string>>;
+      chatThinkingPreferences(workspaceId: string): Promise<
+        Record<
+          | "codex"
+          | "claude"
+          | "grok"
+          | "openrouterStrategic"
+          | "openrouterEveryday"
+          | "openrouterAttachment",
+          "" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        >
+      >;
+      setChatThinkingPreference(
+        workspaceId: string,
+        lane:
+          | "codex"
+          | "claude"
+          | "grok"
+          | "openrouterStrategic"
+          | "openrouterEveryday"
+          | "openrouterAttachment",
+        effort: string,
+      ): ReturnType<Window["waypoint"]["chatThinkingPreferences"]>;
       voiceCapability(): Promise<{
         stt: {
           available: boolean;
@@ -1798,6 +1829,27 @@ declare global {
         perRequestCapMicros: number;
         warningPercent: number;
       }>;
+      updateOpenRouterRouting(
+        workspaceId: string,
+        settings: Parameters<
+          Window["waypoint"]["updateOpenRouterSettings"]
+        >[0],
+        thinking: Pick<
+          Awaited<
+            ReturnType<Window["waypoint"]["chatThinkingPreferences"]>
+          >,
+          | "openrouterStrategic"
+          | "openrouterEveryday"
+          | "openrouterAttachment"
+        >,
+      ): Promise<{
+        settings: Awaited<
+          ReturnType<Window["waypoint"]["updateOpenRouterSettings"]>
+        >;
+        thinking: Awaited<
+          ReturnType<Window["waypoint"]["chatThinkingPreferences"]>
+        >;
+      }>;
       runOpenRouterChat(value: {
         workspaceId: string;
         chatId: string;
@@ -1806,6 +1858,7 @@ declare global {
         role: "strategic" | "everyday";
         securityProfileId: string;
         attachmentIds: string[];
+        reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
       }): Promise<{
         runId?: string;
         status?: "running";

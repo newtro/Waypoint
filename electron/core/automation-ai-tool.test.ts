@@ -11,11 +11,21 @@ import {
 import { validateAutomationProposal } from "./webhook-automations.js";
 
 describe("automation proposal AI tool", () => {
-  it("steers only when the model and selected authority profile are unchanged", () => {
-    const active = { profileId: "bypass", model: "gpt-5" };
+  it("steers only when the model, thinking, and selected authority profile are unchanged", () => {
+    const active = {
+      profileId: "bypass",
+      model: "gpt-5",
+      reasoningEffort: "high" as const,
+    };
     expect(codexTurnCanBeSteered(active, { ...active })).toBe(true);
     expect(
       codexTurnCanBeSteered(active, { ...active, profileId: "developer" }),
+    ).toBe(false);
+    expect(
+      codexTurnCanBeSteered(active, {
+        ...active,
+        reasoningEffort: "xhigh",
+      }),
     ).toBe(false);
   });
 

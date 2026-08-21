@@ -1313,6 +1313,7 @@ export class CodexAppServerWorkbench {
             request.profile.approval !== "never" ? "user" : null,
           sandboxPolicy: codexSandboxPolicy(request),
           model: request.model ?? null,
+          effort: request.reasoningEffort ?? null,
         }),
       );
       turnId = String(object(started.turn).id ?? "");

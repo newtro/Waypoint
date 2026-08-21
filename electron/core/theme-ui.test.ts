@@ -48,4 +48,16 @@ describe("appearance UI contract", () => {
       'html[data-theme="dark"] .capture-preview-actions button.primary',
     );
   });
+
+  it("themes Settings copy, controls, and device invitations in both appearances", () => {
+    const settings = readFileSync("src/settings-workspace.css", "utf8");
+    expect(settings).toContain(".settings-page-body .settings-help");
+    expect(settings).toContain(
+      'html[data-theme="dark"] .settings-page-body select',
+    );
+    expect(settings).toContain('html[data-theme="dark"] .sync-invitation');
+    expect(settings).toContain(".settings-heading-row h3 { margin: 0; color: var(--ink)");
+    expect(settings).toContain('html[data-theme="dark"] .settings-heading-row button');
+    expect(settings).toContain('html[data-theme="dark"] .settings-page-body .provider-row button');
+  });
 });

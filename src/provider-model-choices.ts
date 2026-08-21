@@ -2,6 +2,10 @@ export type ProviderModelChoice = {
   id: string;
   label: string;
   legacy?: boolean;
+  thinking?: {
+    supported: Array<import("./model-thinking.js").ThinkingEffort>;
+    defaultEffort?: import("./model-thinking.js").ThinkingEffort;
+  };
 };
 export function withLegacyModel(
   models: ProviderModelChoice[],

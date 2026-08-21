@@ -44,7 +44,7 @@ describe("Waypoint product Help", () => {
     const compiled = compileProductHelpSource(sourceRoot),
       loaded = loadProductHelp(bundle());
     expect(compiled.manifest.documents).toHaveLength(8);
-    expect(loaded.helpVersion).toBe("2026.08.20.3");
+    expect(loaded.helpVersion).toBe("2026.08.21.1");
     expect(loaded.documents.every((document) => document.content.length > 500)).toBe(
       true,
     );

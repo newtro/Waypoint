@@ -188,6 +188,7 @@ import {
   openRouterCapability,
   selectOpenRouterModel,
   type OpenRouterImageInput,
+  type OpenRouterSettings,
   type ProviderUsageReceipt,
 } from "./core/openrouter-provider.js";
 import {
@@ -218,6 +219,12 @@ import {
   installedCliModelCatalog,
   shutdownInstalledCliModelCatalog,
 } from "./core/provider-model-catalog.js";
+import {
+  isThinkingEffort,
+  localProviderAllowsThinking,
+  type ThinkingEffort,
+} from "../src/model-thinking.js";
+import { openRouterModelThinking } from "./core/openrouter-model-catalog.js";
 import {
   AGENT_BROWSER_VERSION,
   verifyBrowserClosure,
@@ -828,6 +835,7 @@ const activeCodexChats = new Map<
     runId: string;
     profileId: string;
     model?: string;
+    reasoningEffort?: import("../src/model-thinking.js").ThinkingEffort;
   }
 >();
 const deletingChats = new Set<string>();
@@ -2135,6 +2143,26 @@ async function collectDiagnostics(workspaceId: string) {
   });
 }
 
+function openRouterSettingsInput(input: unknown): OpenRouterSettings {
+  const value = input as Record<string, unknown>;
+  return {
+    enabled: value.enabled === true,
+    liveRequestsEnabled: value.liveRequestsEnabled === true,
+    strategicModel: text(value.strategicModel, "strategic model ID", 200),
+    everydayModel: text(value.everydayModel, "everyday model ID", 200),
+    attachmentModel: text(value.attachmentModel, "image model ID", 200),
+    fallbackProvider: ["codex", "claude", "grok"].includes(
+      String(value.fallbackProvider),
+    )
+      ? (value.fallbackProvider as "codex" | "claude" | "grok")
+      : undefined,
+    monthlyCapMicros: Number(value.monthlyCapMicros),
+    ytdCapMicros: Number(value.ytdCapMicros),
+    perRequestCapMicros: Number(value.perRequestCapMicros),
+    warningPercent: Number(value.warningPercent),
+  };
+}
+
 function registerIpc(): void {
   handle("waypoint:screen-capture-readiness", () => {
     const permission =
@@ -3154,24 +3182,40 @@ function registerIpc(): void {
     store.setOpenRouterSettings({ ...current, liveRequestsEnabled: false });
     return { keyConfigured: false };
   });
-  handle("waypoint:openrouter-update-settings", (_event, input: unknown) => {
-    const value = input as Record<string, unknown>;
-    return store.setOpenRouterSettings({
-      enabled: value.enabled === true,
-      liveRequestsEnabled: value.liveRequestsEnabled === true,
-      strategicModel: text(value.strategicModel, "strategic model ID", 200),
-      everydayModel: text(value.everydayModel, "everyday model ID", 200),
-      attachmentModel: text(value.attachmentModel, "image model ID", 200),
-      fallbackProvider: ["codex", "claude", "grok"].includes(
-        String(value.fallbackProvider),
+  handle("waypoint:openrouter-update-settings", (_event, input: unknown) =>
+    store.setOpenRouterSettings(openRouterSettingsInput(input)),
+  );
+  handle("waypoint:openrouter-update-routing", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 64),
+      thinking = value.thinking as Record<string, unknown>,
+      settings = openRouterSettingsInput(value.settings);
+    const preference = (input: unknown): ThinkingEffort | "" => {
+      const effort = String(input ?? "");
+      if (effort && !isThinkingEffort(effort))
+        throw new Error("OpenRouter thinking preference is invalid");
+      return effort as ThinkingEffort | "";
+    };
+    const nextThinking = {
+      openrouterStrategic: preference(thinking.openrouterStrategic),
+      openrouterEveryday: preference(thinking.openrouterEveryday),
+      openrouterAttachment: preference(thinking.openrouterAttachment),
+    };
+    for (const [lane, model] of [
+      ["openrouterStrategic", settings.strategicModel],
+      ["openrouterEveryday", settings.everydayModel],
+      ["openrouterAttachment", settings.attachmentModel],
+    ] as const) {
+      const effort = nextThinking[lane];
+      if (
+        effort &&
+        !openRouterModelThinking(model)?.supported.includes(effort)
       )
-        ? (value.fallbackProvider as "codex" | "claude" | "grok")
-        : undefined,
-      monthlyCapMicros: Number(value.monthlyCapMicros),
-      ytdCapMicros: Number(value.ytdCapMicros),
-      perRequestCapMicros: Number(value.perRequestCapMicros),
-      warningPercent: Number(value.warningPercent),
-    });
+        throw new Error(
+          `The ${lane} thinking level is not supported by its selected model`,
+        );
+    }
+    return store.setOpenRouterRouting(workspaceId, settings, nextThinking);
   });
   handle("waypoint:run-openrouter-chat", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
@@ -3258,6 +3302,10 @@ function registerIpc(): void {
         role,
         hasImages: preparedAttachments.images.length > 0,
       }),
+      thinking = openRouterModelThinking(attachmentRoute.model),
+      rawReasoningEffort = value.reasoningEffort
+        ? text(value.reasoningEffort, "thinking level", 20)
+        : undefined,
       promptWithAttachments = withChatAttachmentContext(
         prompt,
         preparedAttachments.textBlocks,
@@ -3267,6 +3315,19 @@ function registerIpc(): void {
         prompt,
         productHelpLibrary,
       );
+    if (rawReasoningEffort && !isThinkingEffort(rawReasoningEffort)) {
+      preparedAttachments.cleanup();
+      throw new Error(
+        "The selected thinking level is not supported by this OpenRouter model",
+      );
+    }
+    const reasoningEffort = rawReasoningEffort as ThinkingEffort | undefined;
+    if (reasoningEffort && !thinking?.supported.includes(reasoningEffort)) {
+      preparedAttachments.cleanup();
+      throw new Error(
+        "The selected thinking level is not supported by this OpenRouter model",
+      );
+    }
     assertPreparedChatAttachmentsCurrent(
       workspaceId,
       chatId,
@@ -3277,11 +3338,14 @@ function registerIpc(): void {
       release = openRouterBudget.reserve(settings, usage.summary);
     } catch (error) {
       const provider = settings.fallbackProvider;
-      if (provider && subscriptions.includes(provider))
+      if (provider && subscriptions.includes(provider)) {
+        preparedAttachments.cleanup();
         return fallback(
           provider,
           "A concurrent hosted request reserved the remaining cap; using the pre-approved subscription fallback.",
         );
+      }
+      preparedAttachments.cleanup();
       throw error;
     }
     assertChatMayStart(workspaceId, chatId);
@@ -3322,6 +3386,13 @@ function registerIpc(): void {
         runId,
         "progress",
         attachmentRoute.reason,
+      );
+    if (reasoningEffort)
+      store.addHostedRunEvent(
+        workspaceId,
+        runId,
+        "provider",
+        `Thinking · ${reasoningEffort}`,
       );
     store.startHostedRun(workspaceId, runId);
     const approvedHostedOperations = new Set<string>();
@@ -3372,6 +3443,7 @@ function registerIpc(): void {
         apiKey,
         signal: controller.signal,
         requestCapMicros: settings.perRequestCapMicros ?? 100_000,
+        reasoningEffort: reasoningEffort as ThinkingEffort | undefined,
         tools: hostedTools,
         onToolCall: (call) =>
           store.addHostedRunEvent(
@@ -5833,6 +5905,31 @@ function registerIpc(): void {
       String(value.model ?? ""),
     );
   });
+  handle("waypoint:chat-thinking-preferences", (_event, input: unknown) =>
+    store.chatThinkingPreferences(
+      text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
+    ),
+  );
+  handle("waypoint:chat-thinking-preference", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      lane = String(value.lane);
+    if (
+      ![
+        "codex",
+        "claude",
+        "grok",
+        "openrouterStrategic",
+        "openrouterEveryday",
+        "openrouterAttachment",
+      ].includes(lane)
+    )
+      throw new Error("Chat thinking lane is invalid");
+    return store.setChatThinkingPreference(
+      text(value.workspaceId, "workspace ID", 64),
+      lane as import("../src/model-thinking.js").ThinkingLane,
+      String(value.effort ?? ""),
+    );
+  });
   handle("waypoint:propose-chat-route", async (_event, input: unknown) => {
     const value = input as Record<string, unknown>,
       workspaceId = text(value.workspaceId, "workspace ID", 64),
@@ -6068,8 +6165,27 @@ function registerIpc(): void {
         : withProductHelp(prompt, userPrompt, productHelpLibrary);
     if (helpSelection) prompt = helpSelection.prompt;
     const selectedModel = value.model
-      ? text(value.model, "model", 120)
-      : undefined;
+        ? text(value.model, "model", 120)
+        : undefined,
+      rawReasoningEffort = value.reasoningEffort
+        ? text(value.reasoningEffort, "thinking level", 20)
+        : undefined;
+    if (rawReasoningEffort && !isThinkingEffort(rawReasoningEffort))
+      throw new Error(
+        "The selected thinking level is not supported by this provider model",
+      );
+    const reasoningEffort = rawReasoningEffort as ThinkingEffort | undefined;
+    if (
+      reasoningEffort &&
+      !localProviderAllowsThinking(
+        cli as "codex" | "claude" | "grok",
+        selectedModel,
+        reasoningEffort,
+      )
+    )
+      throw new Error(
+        "The selected thinking level is not supported by this provider model",
+      );
     if (!isInteractiveSlashSkill) {
       prompt = withCurrentDateTime(prompt);
       if (!parentExecutionId)
@@ -6089,11 +6205,12 @@ function registerIpc(): void {
           !codexTurnCanBeSteered(active, {
             profileId,
             model: selectedModel,
+            reasoningEffort,
           })
         ) {
           preparedAttachments.cleanup();
           throw new Error(
-            "Finish or cancel the active Codex turn before changing its model or authority profile",
+            "Finish or cancel the active Codex turn before changing its model, thinking level, or authority profile",
           );
         }
         if (attachmentIds.length) {
@@ -6137,6 +6254,7 @@ function registerIpc(): void {
         routedCliVersion: route.providers.find((item) => item.provider === cli)
           ?.version,
         model: selectedModel,
+        reasoningEffort: reasoningEffort as ThinkingEffort | undefined,
         securityProfileId: profileId,
         prompt,
         parentExecutionId,
@@ -6159,6 +6277,12 @@ function registerIpc(): void {
           name: `Attachment delivery · ${attachmentIds.length} source${attachmentIds.length === 1 ? "" : "s"}`,
           text: preparedAttachments.receipt,
           rawType: "waypoint-attachments:v1",
+        });
+      if (reasoningEffort)
+        store.appendExecutionEvent(runId, workspaceId, {
+          type: "policy",
+          name: `Thinking · ${reasoningEffort}`,
+          rawType: "waypoint-thinking:v1",
         });
     } catch (error) {
       preparedAttachments.cleanup();
@@ -6235,6 +6359,7 @@ function registerIpc(): void {
               workspaceRoot: canonicalExecutionRoot,
               profile,
               model,
+              reasoningEffort: reasoningEffort as ThinkingEffort | undefined,
               executable: capability.executable,
               version: capability.version,
               parentRunId: parentExecutionId,
@@ -6501,6 +6626,7 @@ function registerIpc(): void {
           runId,
           profileId,
           model: selectedModel,
+          reasoningEffort,
         });
       void running.completion
         .then(async (result) => {

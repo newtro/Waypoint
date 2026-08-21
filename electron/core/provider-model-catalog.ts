@@ -2,11 +2,20 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { cliExecutionEnvironment } from "../../spikes/cli-capabilities.js";
 import { terminateCodexProcessTree } from "./codex-app-server.js";
+import {
+  isThinkingEffort,
+  providerThinkingEfforts,
+  type ThinkingEffort,
+} from "../../src/model-thinking.js";
 
 export type LocalProviderModel = {
   id: string;
   label: string;
   legacy?: boolean;
+  thinking?: {
+    supported: ThinkingEffort[];
+    defaultEffort?: ThinkingEffort;
+  };
 };
 export type LocalProviderModelCatalog = {
   provider: "codex" | "claude" | "grok";
@@ -132,8 +141,44 @@ export function parseCodexModelCatalog(raw: string): LocalProviderModel[] {
       seen.has(id)
     )
       continue;
+    const rawEfforts = Array.isArray(row.supported_reasoning_levels)
+        ? row.supported_reasoning_levels
+        : Array.isArray(row.supportedReasoningLevels)
+          ? row.supportedReasoningLevels
+          : [],
+      allowed = providerThinkingEfforts("codex", id),
+      supported = rawEfforts
+        .map((item) =>
+          item && typeof item === "object"
+            ? String(
+                (item as Record<string, unknown>).effort ??
+                  (item as Record<string, unknown>).reasoningEffort ??
+                  "",
+              )
+            : "",
+        )
+        .filter(
+          (item): item is ThinkingEffort =>
+            isThinkingEffort(item) && allowed.includes(item),
+        ),
+      defaultEffort = String(
+        row.default_reasoning_level ?? row.defaultReasoningLevel ?? "",
+      );
     seen.add(id);
-    result.push({ id, label });
+    result.push({
+      id,
+      label,
+      ...(supported.length
+        ? {
+            thinking: {
+              supported,
+              ...((supported as string[]).includes(defaultEffort)
+                ? { defaultEffort: defaultEffort as ThinkingEffort }
+                : {}),
+            },
+          }
+        : {}),
+    });
     if (result.length >= 30) break;
   }
   return result;
@@ -151,22 +196,27 @@ export function parseGrokModelCatalog(raw: string): LocalProviderModel[] {
     models.push({
       id,
       label: id.replace(/^grok-/i, "Grok ").replaceAll("-", " "),
+      ...(id === "grok-4.6"
+        ? { thinking: { supported: ["low", "medium", "high", "xhigh"], defaultEffort: "high" } as const }
+        : id === "grok-4.5"
+          ? { thinking: { supported: ["low", "medium", "high"], defaultEffort: "high" } as const }
+          : {}),
     });
   }
   return models;
 }
 
 export const CURATED_CODEX_MODELS: LocalProviderModel[] = [
-  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol — flagship" },
-  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra — balanced" },
-  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna — fast" },
-  { id: "gpt-5.5", label: "GPT-5.5 — previous generation" },
+  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol — flagship", thinking: { supported: ["low", "medium", "high", "xhigh", "max", "ultra"], defaultEffort: "low" } },
+  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra — balanced", thinking: { supported: ["low", "medium", "high", "xhigh", "max", "ultra"], defaultEffort: "medium" } },
+  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna — fast", thinking: { supported: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" } },
+  { id: "gpt-5.5", label: "GPT-5.5 — previous generation", thinking: { supported: ["low", "medium", "high", "xhigh"], defaultEffort: "medium" } },
 ];
 
 export const CURATED_CLAUDE_MODELS: LocalProviderModel[] = [
-  { id: "claude-fable-5", label: "Claude Fable 5 — most capable" },
-  { id: "claude-opus-5", label: "Claude Opus 5 — flagship" },
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — balanced" },
+  { id: "claude-fable-5", label: "Claude Fable 5 — most capable", thinking: { supported: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" } },
+  { id: "claude-opus-5", label: "Claude Opus 5 — flagship", thinking: { supported: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" } },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — balanced", thinking: { supported: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" } },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — fastest" },
 ];
 

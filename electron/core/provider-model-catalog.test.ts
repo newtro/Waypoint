@@ -22,13 +22,36 @@ describe("installed CLI model catalog", () => {
               slug: "gpt-5.6-sol",
               display_name: "GPT-5.6-Sol",
               visibility: "list",
+              default_reasoning_level: "high",
+              supported_reasoning_levels: [
+                { effort: "low" },
+                { effort: "high" },
+                { effort: "invented" },
+              ],
+            },
+            {
+              slug: "future-codex-model",
+              display_name: "Future model",
+              visibility: "list",
+              default_reasoning_level: "high",
+              supported_reasoning_levels: [{ effort: "high" }],
             },
             { slug: "hidden", display_name: "Hidden", visibility: "hide" },
             { slug: "../escape", display_name: "Bad", visibility: "list" },
           ],
         }),
       ),
-    ).toEqual([{ id: "gpt-5.6-sol", label: "GPT-5.6-Sol" }]);
+    ).toEqual([
+      {
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6-Sol",
+        thinking: { supported: ["low", "high"], defaultEffort: "high" },
+      },
+      {
+        id: "future-codex-model",
+        label: "Future model",
+      },
+    ]);
   });
   it("requires signed-in grok.com provenance for the installed Grok catalog", async () => {
     expect(
@@ -36,8 +59,8 @@ describe("installed CLI model catalog", () => {
         "You are logged in with grok.com.\nDefault model: grok-4.6\n  * grok-4.6 (default)\n  - grok-4.5\n",
       ),
     ).toEqual([
-      { id: "grok-4.6", label: "Grok 4.6" },
-      { id: "grok-4.5", label: "Grok 4.5" },
+      { id: "grok-4.6", label: "Grok 4.6", thinking: { supported: ["low", "medium", "high", "xhigh"], defaultEffort: "high" } },
+      { id: "grok-4.5", label: "Grok 4.5", thinking: { supported: ["low", "medium", "high"], defaultEffort: "high" } },
     ]);
     expect(parseGrokModelCatalog("API key configured\n- grok-4.6")).toEqual([]);
     const catalogs = await installedCliModelCatalog(
@@ -61,8 +84,8 @@ describe("installed CLI model catalog", () => {
       ready: true,
       models: [
         { id: "", label: "Grok default (CLI selected)" },
-        { id: "grok-4.6", label: "Grok 4.6" },
-        { id: "grok-4.5", label: "Grok 4.5" },
+        { id: "grok-4.6", label: "Grok 4.6", thinking: { supported: ["low", "medium", "high", "xhigh"], defaultEffort: "high" } },
+        { id: "grok-4.5", label: "Grok 4.5", thinking: { supported: ["low", "medium", "high"], defaultEffort: "high" } },
       ],
     });
   });

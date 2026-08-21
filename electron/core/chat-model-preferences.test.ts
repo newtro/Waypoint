@@ -16,6 +16,23 @@ describe("chat model preferences", () => {
       claude: "",
       grok: "",
     });
+    expect(store.chatThinkingPreferences(first.id)).toEqual({
+      codex: "",
+      claude: "",
+      grok: "",
+      openrouterStrategic: "",
+      openrouterEveryday: "",
+      openrouterAttachment: "",
+    });
+    store.setChatThinkingPreference(first.id, "codex", "ultra");
+    store.setChatThinkingPreference(first.id, "openrouterEveryday", "high");
+    expect(store.chatThinkingPreferences(first.id)).toMatchObject({
+      codex: "ultra",
+      openrouterEveryday: "high",
+    });
+    expect(() =>
+      store.setChatThinkingPreference(first.id, "claude", "impossible"),
+    ).toThrow(/invalid/);
     store.setChatModelPreference(first.id, "codex", "historic-model");
     store.setChatModelPreference(first.id, "claude", "");
     store.setChatModelPreference(first.id, "grok", "grok-4.6");
@@ -36,6 +53,10 @@ describe("chat model preferences", () => {
       claude: "",
       grok: "grok-4.6",
     });
+    expect(reopened.chatThinkingPreferences(first.id)).toMatchObject({
+      codex: "ultra",
+      openrouterEveryday: "high",
+    });
     reopened.close();
     const raw = new DatabaseSync(database);
     raw.exec("PRAGMA foreign_keys=ON");
@@ -45,6 +66,15 @@ describe("chat model preferences", () => {
         raw
           .prepare(
             "SELECT count(*) count FROM chat_model_preferences WHERE workspace_id=?",
+          )
+          .get(first.id) as { count: number }
+      ).count,
+    ).toBe(0);
+    expect(
+      (
+        raw
+          .prepare(
+            "SELECT count(*) count FROM chat_thinking_preferences WHERE workspace_id=?",
           )
           .get(first.id) as { count: number }
       ).count,

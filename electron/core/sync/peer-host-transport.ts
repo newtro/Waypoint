@@ -58,6 +58,10 @@ export function createPinnedPeerFetch(
           headers: init.headers as Record<string, string> | undefined,
           ca: descriptor.certificatePem,
           rejectUnauthorized: true,
+          // Electron's embedded OpenSSL does not treat a directly pinned,
+          // self-signed leaf as a complete CA chain unless partial trust is
+          // explicit. Trust remains limited to this exact stored certificate.
+          allowPartialTrustChain: true,
           servername:
             url.hostname === "127.0.0.1" || url.hostname === "::1"
               ? undefined

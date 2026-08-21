@@ -244,6 +244,7 @@ describe("Codex app-server workbench", () => {
             network: "enabled",
             approval: "never",
           }),
+          reasoningEffort: "ultra",
         }),
         () => undefined,
       );
@@ -260,6 +261,7 @@ describe("Codex app-server workbench", () => {
         approvalPolicy: "never",
         approvalsReviewer: null,
         sandboxPolicy: { type: "dangerFullAccess" },
+        effort: "ultra",
       },
     });
   });

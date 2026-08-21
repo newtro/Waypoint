@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isThinkingEffort, type ThinkingEffort } from "../../src/model-thinking.js";
 import {
   cliExecutionEnvironment,
   cliProcessInvocation,
@@ -55,6 +56,7 @@ export interface RunRequest {
   workspaceRoot: string;
   profile: SecurityProfile;
   model?: string;
+  reasoningEffort?: ThinkingEffort;
   parentRunId?: string;
   depth?: number;
   executable?: string;
@@ -116,6 +118,8 @@ export function validateRequest(request: RunRequest): void {
     throw new Error("Phase 2 profiles must limit concurrency to one");
   if (request.profile.secretNames.length)
     throw new Error("Phase 2 does not inject secrets");
+  if (request.reasoningEffort && !isThinkingEffort(request.reasoningEffort))
+    throw new Error("Thinking level is invalid");
 }
 
 export function adapterArgs(

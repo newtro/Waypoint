@@ -2,9 +2,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const main = readFileSync("src/main.tsx", "utf8"),
-  css = readFileSync("src/provider-settings.css", "utf8");
+  css = readFileSync("src/provider-settings.css", "utf8"),
+  builder = readFileSync("electron-builder.yml", "utf8");
 
 describe("Models and routing settings UI", () => {
+  it("packages the shared thinking contract for the Electron main process", () => {
+    expect(builder).toContain("dist-electron/src/model-thinking.js");
+  });
+
   it("keeps provider behavior behind a structured accessible routing console", () => {
     expect(main).toContain('className="settings-section models-settings-section"');
     expect(main).toContain("Models & routing");
@@ -24,8 +29,33 @@ describe("Models and routing settings UI", () => {
       "Monthly OpenRouter budget used",
       "Year-to-date OpenRouter budget used",
     ]) expect(main).toContain(`aria-label="${label}"`);
+    for (const label of [
+      "Codex thinking",
+      "Claude thinking",
+      "Grok Build thinking",
+      "Strategic thinking",
+      "Everyday thinking",
+      "Image thinking",
+    ]) expect(main).toContain(`label="${label}"`);
     expect(main).toContain('className="model-usage-ledger"');
     expect(main).not.toContain("ready unverified");
+    expect(main).toContain("updateOpenRouterRouting(");
+    expect(main).toContain("openRouterSettingsDraft");
+    expect(main).toContain("hostedSettings.monthlyCapMicros");
+    expect(main).toContain("hostedSettings.fallbackProvider");
+    expect(main).toMatch(
+      /if \(!settingsOpenRef\.current\)\s+setOpenRouterThinkingDraft/,
+    );
+    expect(main).toContain("generation !== openRouterDraftGenerationRef.current");
+    expect(main).toContain("editOpenRouterThinkingDraft((current)");
+    expect(main).toContain("editOpenRouterSettingsDraft({");
+    expect(main).toContain(
+      "window.waypoint.chatThinkingPreferences(workspace.id)",
+    );
+    expect(main).toMatch(
+      /selectedComposerModel\s*=\s*chatCli\s*===\s*"openrouter"[\s\S]*?openRouter\?\.settings\.attachmentModel[\s\S]*?openRouter\?\.settings\.everydayModel/,
+    );
+    expect(main).toContain("openRouterThinkingDraft.openrouterStrategic");
   });
 
   it("has dark and container-responsive model layouts", () => {

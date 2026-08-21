@@ -173,7 +173,11 @@ describe("Claude Agent SDK workbench", () => {
       ),
       running = await workbench.start(
         "run",
-        request({ providerSessionId: "prior-session", onSession }),
+        request({
+          providerSessionId: "prior-session",
+          onSession,
+          reasoningEffort: "max",
+        }),
         (event) => events.push(event),
       ),
       result = await running.completion;
@@ -192,6 +196,7 @@ describe("Claude Agent SDK workbench", () => {
     expect(capture.mock.calls[0][0].options).toMatchObject({
       cwd: defaultRoot,
       resume: "prior-session",
+      effort: "max",
       permissionMode: "default",
       tools: { type: "preset", preset: "claude_code" },
       skills: "all",

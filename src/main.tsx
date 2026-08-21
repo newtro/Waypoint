@@ -63,7 +63,15 @@ import { cancelLateVoiceRun } from "./voice-run-cancellation";
 import {
   openRouterImageModelChoices,
   openRouterModelChoices,
+  openRouterModelThinking,
 } from "../electron/core/openrouter-model-catalog";
+import {
+  EMPTY_THINKING_PREFERENCES,
+  thinkingLabel,
+  type ThinkingEffort,
+  type ThinkingLane,
+  type ThinkingPreferences,
+} from "./model-thinking";
 import {
   responseNoticeAfterRuns,
   runsForSourceMessage,
@@ -130,6 +138,49 @@ function ChatBody({ body }: { body: string }) {
   );
 }
 
+function ThinkingSelect({
+  label,
+  value,
+  supported,
+  defaultEffort,
+  onChange,
+  compact = false,
+}: {
+  label: string;
+  value: ThinkingEffort | "";
+  supported: readonly ThinkingEffort[];
+  defaultEffort?: ThinkingEffort;
+  onChange(value: ThinkingEffort | ""): void;
+  compact?: boolean;
+}) {
+  const legacy = Boolean(value && !supported.includes(value));
+  return (
+    <label className={compact ? "thinking-field compact" : "thinking-field"}>
+      {!compact && <span>{label}</span>}
+      <select
+        aria-label={label}
+        value={value}
+        disabled={!supported.length}
+        onChange={(event) =>
+          onChange(event.target.value as ThinkingEffort | "")
+        }
+      >
+        <option value="">
+          {defaultEffort
+            ? `Model default · ${thinkingLabel(defaultEffort)}`
+            : "Model default"}
+        </option>
+        {legacy && <option value={value}>Saved legacy · {value}</option>}
+        {supported.map((effort) => (
+          <option value={effort} key={effort}>
+            {thinkingLabel(effort)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 type VoiceMode = "push_to_talk" | "hands_free";
 type VoiceState =
   "off" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
@@ -193,6 +244,12 @@ type RollupSettings = Awaited<
 >;
 type OpenRouterStatus = Awaited<
   ReturnType<Window["waypoint"]["openRouterStatus"]>
+>;
+type OpenRouterThinkingDraft = Pick<
+  ThinkingPreferences,
+  | "openrouterStrategic"
+  | "openrouterEveryday"
+  | "openrouterAttachment"
 >;
 type CliModelCatalog = Awaited<
   ReturnType<Window["waypoint"]["cliModelCatalog"]>
@@ -811,6 +868,9 @@ export function App() {
       codex: "",
       claude: "",
       grok: "",
+    }),
+    [chatThinking, setChatThinking] = useState({
+      ...EMPTY_THINKING_PREFERENCES,
     });
   const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]),
     [attachmentBusy, setAttachmentBusy] = useState(false),
@@ -932,7 +992,12 @@ export function App() {
     [pendingPeers, setPendingPeers] = useState<
       Awaited<ReturnType<Window["waypoint"]["pendingSyncEnrollments"]>>
     >([]),
-    [bootstrapBundle, setBootstrapBundle] = useState("");
+    [bootstrapBundle, setBootstrapBundle] = useState(""),
+    [syncInvitation, setSyncInvitation] = useState<{
+      token: string;
+      expiresAt: string;
+    }>(),
+    [inviteBusy, setInviteBusy] = useState(false);
   const [deviceControl, setDeviceControl] =
     useState<Awaited<ReturnType<Window["waypoint"]["deviceControlStatus"]>>>();
   const [briefing, setBriefing] = useState<Briefing>();
@@ -1039,7 +1104,15 @@ export function App() {
         Awaited<ReturnType<Window["waypoint"]["composeCrossWorkspaceRollup"]>>
       >();
   const [openRouter, setOpenRouter] = useState<OpenRouterStatus>(),
-    [openRouterKey, setOpenRouterKeyDraft] = useState("");
+    [openRouterKey, setOpenRouterKeyDraft] = useState(""),
+    [openRouterSettingsDraft, setOpenRouterSettingsDraft] =
+      useState<OpenRouterStatus["settings"]>(),
+    [openRouterThinkingDraft, setOpenRouterThinkingDraft] =
+      useState<OpenRouterThinkingDraft>({
+        openrouterStrategic: "",
+        openrouterEveryday: "",
+        openrouterAttachment: "",
+      });
   const [workspaceDialog, setWorkspaceDialog] = useState<"create" | "delete">(),
     [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [voiceCapability, setVoiceCapability] = useState<VoiceCapability>(),
@@ -1054,6 +1127,8 @@ export function App() {
     [voiceDevices, setVoiceDevices] = useState<MediaDeviceInfo[]>([]),
     [voicePartial, setVoicePartial] = useState("");
   const refreshGate = useRef(new RefreshGate()),
+    settingsOpenRef = useRef(false),
+    openRouterDraftGenerationRef = useRef(0),
     composerRef = useRef<HTMLTextAreaElement>(null),
     transcriptRef = useRef<HTMLElement>(null),
     transcriptFollowingRef = useRef(true),
@@ -1336,7 +1411,22 @@ export function App() {
     );
   }
   async function refreshOpenRouter() {
-    setOpenRouter(await window.waypoint.openRouterStatus());
+    const status = await window.waypoint.openRouterStatus();
+    setOpenRouter(status);
+    openRouterDraftGenerationRef.current += 1;
+    setOpenRouterSettingsDraft(status.settings);
+  }
+  function editOpenRouterSettingsDraft(
+    next: OpenRouterStatus["settings"],
+  ) {
+    openRouterDraftGenerationRef.current += 1;
+    setOpenRouterSettingsDraft(next);
+  }
+  function editOpenRouterThinkingDraft(
+    update: (current: OpenRouterThinkingDraft) => OpenRouterThinkingDraft,
+  ) {
+    openRouterDraftGenerationRef.current += 1;
+    setOpenRouterThinkingDraft(update);
   }
   async function storeOpenRouterKey() {
     if (!openRouterKey) return;
@@ -1348,8 +1438,20 @@ export function App() {
     );
   }
   async function saveOpenRouterSettings() {
-    if (!openRouter) return;
-    await window.waypoint.updateOpenRouterSettings(openRouter.settings);
+    if (!openRouterSettingsDraft || !workspace) return;
+    const result = await window.waypoint.updateOpenRouterRouting(
+      workspace.id,
+      openRouterSettingsDraft,
+      openRouterThinkingDraft,
+    );
+    setChatThinking(result.thinking);
+    setOpenRouterThinkingDraft({
+      openrouterStrategic: result.thinking.openrouterStrategic,
+      openrouterEveryday: result.thinking.openrouterEveryday,
+      openrouterAttachment: result.thinking.openrouterAttachment,
+    });
+    openRouterDraftGenerationRef.current += 1;
+    setOpenRouterSettingsDraft(result.settings);
     await refreshOpenRouter();
     setNotice(
       "OpenRouter preferences saved. Hosted requests occur only when the provider and explicit hosted-request switch are enabled.",
@@ -1387,14 +1489,45 @@ export function App() {
         };
       setOpenRouter({ ...openRouter, settings: next });
       await window.waypoint.updateOpenRouterSettings(next);
+      const lane = imageRoute
+          ? "openrouterAttachment"
+          : "openrouterEveryday",
+        supported = openRouterModelThinking(value)?.supported ?? [];
+      if (chatThinking[lane] && !supported.includes(chatThinking[lane]))
+        await changeThinking(lane, "");
       await refreshOpenRouter();
       return;
     }
+    await changeSubscriptionModel(chatCli, value);
+  }
+  async function changeSubscriptionModel(
+    provider: "codex" | "claude" | "grok",
+    value: string,
+  ) {
     if (!workspace) return;
     setChatModels(
       await window.waypoint.setChatModelPreference(
         workspace.id,
-        chatCli,
+        provider,
+        value,
+      ),
+    );
+    const supported =
+      cliModels
+        .find((item) => item.provider === provider)
+        ?.models.find((item) => item.id === value)?.thinking?.supported ?? [];
+    if (chatThinking[provider] && !supported.includes(chatThinking[provider]))
+      await changeThinking(provider, "");
+  }
+  async function changeThinking(
+    lane: ThinkingLane,
+    value: ThinkingEffort | "",
+  ) {
+    if (!workspace) return;
+    setChatThinking(
+      await window.waypoint.setChatThinkingPreference(
+        workspace.id,
+        lane,
         value,
       ),
     );
@@ -1860,6 +1993,8 @@ export function App() {
     setMeetings(await window.waypoint.listMeetings(workspace.id));
   }
   function activateMainTab(tab: MainTab) {
+    settingsOpenRef.current = tab.kind === "view" && tab.view === "settings";
+    if (settingsOpenRef.current) openRouterDraftGenerationRef.current += 1;
     setMainTabs((current) => addMainTab(current, tab));
     setActiveMainTabId(tab.id);
     setTabMenu(undefined);
@@ -1946,6 +2081,7 @@ export function App() {
       nextSync,
       nextDesktop,
       nextChatModels,
+      nextChatThinking,
       nextVoice,
     ] = await Promise.all([
       window.waypoint.listChats(next.id),
@@ -1961,6 +2097,7 @@ export function App() {
       window.waypoint.syncStatus(next.id),
       window.waypoint.desktopSyncStatus(next.id),
       window.waypoint.chatModelPreferences(next.id),
+      window.waypoint.chatThinkingPreferences(next.id),
       window.waypoint.voicePreferences(next.id),
     ]);
     if (!refreshGate.current.isCurrent(token)) return;
@@ -2005,6 +2142,13 @@ export function App() {
     setSyncStatus(nextSync);
     setDesktopSync(nextDesktop);
     setChatModels(nextChatModels);
+    setChatThinking(nextChatThinking);
+    if (!settingsOpenRef.current)
+      setOpenRouterThinkingDraft({
+        openrouterStrategic: nextChatThinking.openrouterStrategic,
+        openrouterEveryday: nextChatThinking.openrouterEveryday,
+        openrouterAttachment: nextChatThinking.openrouterAttachment,
+      });
     setVoiceMode(nextVoice.mode);
     setVoiceDevice(nextVoice.microphoneId);
     setVoiceEngine(nextVoice.engine);
@@ -2031,6 +2175,8 @@ export function App() {
   }
   async function selectWorkspace(next: WorkspaceSummary) {
     tabsWorkspaceRef.current = undefined;
+    setSyncInvitation(undefined);
+    setInviteBusy(false);
     setWorkspace(next);
     setSelectedChatId(undefined);
     setDrawer(undefined);
@@ -2597,7 +2743,9 @@ export function App() {
   }, [drawer, activityKnowledgeTarget]);
   useEffect(() => {
     if (drawer !== "settings" || !workspace) return;
+    settingsOpenRef.current = true;
     let current = true;
+    const generation = openRouterDraftGenerationRef.current;
     void Promise.all([
       window.waypoint.toolGatewaySettings(workspace.id),
       window.waypoint.toolGatewayReceipts(workspace.id),
@@ -2605,20 +2753,35 @@ export function App() {
       window.waypoint.toolGatewayCapabilities(),
       window.waypoint.openRouterStatus(),
       window.waypoint.browserDiscovery(),
+      window.waypoint.chatThinkingPreferences(workspace.id),
     ])
-      .then(([settings, receipts, failures, caps, provider, browsers]) => {
-        if (!current) return;
-        setToolSettings(settings);
-        setDenyDraft(settings.denyPatterns.join("\n"));
-        setToolReceipts(receipts);
-        setToolFailures(failures);
-        setToolCapabilities(caps);
-        setOpenRouter(provider);
-        setInstalledBrowsers(browsers);
-      })
+      .then(
+        ([settings, receipts, failures, caps, provider, browsers, thinking]) => {
+          if (
+            !current ||
+            !settingsOpenRef.current ||
+            generation !== openRouterDraftGenerationRef.current
+          )
+            return;
+          setToolSettings(settings);
+          setDenyDraft(settings.denyPatterns.join("\n"));
+          setToolReceipts(receipts);
+          setToolFailures(failures);
+          setToolCapabilities(caps);
+          setOpenRouter(provider);
+          setOpenRouterSettingsDraft(provider.settings);
+          setOpenRouterThinkingDraft({
+            openrouterStrategic: thinking.openrouterStrategic,
+            openrouterEveryday: thinking.openrouterEveryday,
+            openrouterAttachment: thinking.openrouterAttachment,
+          });
+          setInstalledBrowsers(browsers);
+        },
+      )
       .catch(showError);
     return () => {
       current = false;
+      settingsOpenRef.current = false;
     };
   }, [drawer, workspace]);
   useEffect(() => {
@@ -3559,6 +3722,12 @@ export function App() {
           role: "everyday",
           securityProfileId: profile,
           attachmentIds,
+          reasoningEffort:
+            chatThinking[
+              queuedHasImage
+                ? "openrouterAttachment"
+                : "openrouterEveryday"
+            ] || undefined,
         });
         let exactRunId: string, runKind: "hosted" | "local";
         if (hosted.fallbackProvider) {
@@ -3572,6 +3741,8 @@ export function App() {
             subscriptionFallbackModel(hosted.fallbackProvider, chatModels),
             undefined,
             attachmentIds,
+            undefined,
+            chatThinking[hosted.fallbackProvider] || undefined,
           );
           exactRunId = fallback.runId;
           runKind = "local";
@@ -3618,6 +3789,7 @@ export function App() {
         undefined,
         attachmentIds,
         undefined,
+        chatThinking[cli] || undefined,
       );
       if (voiceTurn !== undefined && voiceRunRef.current?.turn === voiceTurn)
         voiceRunRef.current.runId = started.runId;
@@ -3675,6 +3847,9 @@ export function App() {
         run.model ? String(run.model) : undefined,
         undefined,
         ids,
+        undefined,
+        chatThinking[String(run.cli) as "codex" | "claude" | "grok"] ||
+          undefined,
       );
       setNotice("Retry started.");
       await refresh();
@@ -4221,15 +4396,56 @@ export function App() {
     }
   }
   async function invitePeer() {
-    if (!workspace) return;
+    if (!workspace || inviteBusy || !desktopSync?.configured) return;
+    const target = workspace,
+      scopeCurrent = () =>
+        attachmentContextRef.current.workspaceId === target.id;
+    let startedHost = false;
+    setInviteBusy(true);
     try {
-      const result = await window.waypoint.createSyncInvitation(workspace.id);
-      await navigator.clipboard.writeText(result.token);
-      setNotice(
-        `One-use invitation copied. It expires ${new Date(result.expiresAt).toLocaleTimeString()}.`,
-      );
+      let current = await window.waypoint.desktopSyncStatus(target.id);
+      if (!scopeCurrent()) return;
+      if (
+        current.transportMode === "desktop-host" &&
+        !current.peerHost?.running
+      ) {
+        const confirmed = await confirmModal({
+          title: "Start this device and create an invitation?",
+          message:
+            "Direct enrollment needs this Waypoint app awake and hosting on the local network. Waypoint will start the desktop host, then create a one-use invitation valid for 15 minutes.",
+          okLabel: "Start host & invite",
+        });
+        if (!confirmed) return;
+        if (!scopeCurrent()) return;
+        const started = await window.waypoint.startDesktopSyncHost(target.id);
+        startedHost = started.running === true;
+        if (!scopeCurrent()) return;
+        current = await window.waypoint.desktopSyncStatus(target.id);
+        if (!scopeCurrent()) return;
+        if (!current.peerHost?.running)
+          throw new Error("The desktop sync host did not start. Try again.");
+      }
+      if (!scopeCurrent()) return;
+      const result = await window.waypoint.createSyncInvitation(target.id);
+      if (!scopeCurrent()) return;
+      setSyncInvitation(result);
+      try {
+        await navigator.clipboard.writeText(result.token);
+        setNotice("One-use invitation created and copied.");
+      } catch {
+        setNotice(
+          "One-use invitation created. Copy it from the visible invitation card.",
+        );
+      }
     } catch (reason) {
       showError(reason);
+    } finally {
+      if (!scopeCurrent() && startedHost)
+        await window.waypoint.stopDesktopSyncHost(target.id).catch(showError);
+      setInviteBusy(false);
+      if (scopeCurrent()) {
+        await refresh(target).catch(showError);
+      }
     }
   }
   async function joinSync() {
@@ -4455,6 +4671,19 @@ export function App() {
       ],
       chatModels.grok,
     ),
+    selectedComposerThinking =
+      chatCli === "openrouter"
+        ? openRouterModelThinking(selectedComposerModel)
+        : cliModels
+            .find((item) => item.provider === chatCli)
+            ?.models.find((item) => item.id === selectedComposerModel)
+            ?.thinking,
+    selectedComposerThinkingLane: ThinkingLane =
+      chatCli === "openrouter"
+        ? queuedHasImage
+          ? "openrouterAttachment"
+          : "openrouterEveryday"
+        : chatCli,
     grokCatalog = cliModels.find((item) => item.provider === "grok"),
     openRouterPresentation = openRouter
       ? providerCapabilityPresentation(
@@ -4462,6 +4691,7 @@ export function App() {
           openRouter.capability.health,
         )
       : undefined,
+    hostedSettings = openRouterSettingsDraft ?? openRouter?.settings,
     officeProviderOptions: OfficeProviderOption[] = [
       ...(["codex", "claude", "grok"] as const).map((provider) => {
         const capability = capabilities.find((item) => item.name === provider),
@@ -5520,6 +5750,21 @@ export function App() {
                             </option>
                           ))}
                         </select>
+                        <ThinkingSelect
+                          compact
+                          label={`${chatCli} thinking level`}
+                          value={chatThinking[selectedComposerThinkingLane]}
+                          supported={selectedComposerThinking?.supported ?? []}
+                          defaultEffort={
+                            selectedComposerThinking?.defaultEffort
+                          }
+                          onChange={(value) =>
+                            void changeThinking(
+                              selectedComposerThinkingLane,
+                              value,
+                            ).catch(showError)
+                          }
+                        />
                       </div>
                       <div className="composer-status-actions">
                         {voiceState !== "off" && (
@@ -8135,7 +8380,7 @@ export function App() {
                       </span>
                     )}
                   </header>
-                  {openRouter && (
+                  {openRouter && hostedSettings && (
                     <div className="model-console">
                       <section
                         className="model-settings-block subscription-lanes"
@@ -8151,7 +8396,7 @@ export function App() {
                           <small>Device-local</small>
                         </div>
                         <div className="model-lane-grid">
-                          <label className="model-lane-card">
+                          <div className="model-lane-card" role="group" aria-label="Codex model and thinking">
                             <span className="model-lane-label">
                               <i aria-hidden="true">C</i>
                               <span>
@@ -8159,19 +8404,16 @@ export function App() {
                                 <small>Signed-in CLI</small>
                               </span>
                             </span>
+                            <label className="model-choice-field">
+                            <span className="sr-only">Codex model preference</span>
                             <select
                               aria-label="Codex model preference"
                               value={chatModels.codex}
                               onChange={(event) =>
-                                workspace &&
-                                void window.waypoint
-                                  .setChatModelPreference(
-                                    workspace.id,
-                                    "codex",
-                                    event.target.value,
-                                  )
-                                  .then(setChatModels)
-                                  .catch(showError)
+                                void changeSubscriptionModel(
+                                  "codex",
+                                  event.target.value,
+                                ).catch(showError)
                               }
                             >
                               {codexModelChoices.map((item) => (
@@ -8180,8 +8422,16 @@ export function App() {
                                 </option>
                               ))}
                             </select>
-                          </label>
-                          <label className="model-lane-card">
+                            </label>
+                            <ThinkingSelect
+                              label="Codex thinking"
+                              value={chatThinking.codex}
+                              supported={codexModelChoices.find((item) => item.id === chatModels.codex)?.thinking?.supported ?? []}
+                              defaultEffort={codexModelChoices.find((item) => item.id === chatModels.codex)?.thinking?.defaultEffort}
+                              onChange={(value) => void changeThinking("codex", value).catch(showError)}
+                            />
+                          </div>
+                          <div className="model-lane-card" role="group" aria-label="Claude model and thinking">
                             <span className="model-lane-label">
                               <i aria-hidden="true">A</i>
                               <span>
@@ -8189,19 +8439,16 @@ export function App() {
                                 <small>Signed-in CLI</small>
                               </span>
                             </span>
+                            <label className="model-choice-field">
+                            <span className="sr-only">Claude model preference</span>
                             <select
                               aria-label="Claude model preference"
                               value={chatModels.claude}
                               onChange={(event) =>
-                                workspace &&
-                                void window.waypoint
-                                  .setChatModelPreference(
-                                    workspace.id,
-                                    "claude",
-                                    event.target.value,
-                                  )
-                                  .then(setChatModels)
-                                  .catch(showError)
+                                void changeSubscriptionModel(
+                                  "claude",
+                                  event.target.value,
+                                ).catch(showError)
                               }
                             >
                               {claudeModelChoices.map((item) => (
@@ -8210,8 +8457,16 @@ export function App() {
                                 </option>
                               ))}
                             </select>
-                          </label>
-                          <label className="model-lane-card">
+                            </label>
+                            <ThinkingSelect
+                              label="Claude thinking"
+                              value={chatThinking.claude}
+                              supported={claudeModelChoices.find((item) => item.id === chatModels.claude)?.thinking?.supported ?? []}
+                              defaultEffort={claudeModelChoices.find((item) => item.id === chatModels.claude)?.thinking?.defaultEffort}
+                              onChange={(value) => void changeThinking("claude", value).catch(showError)}
+                            />
+                          </div>
+                          <div className="model-lane-card" role="group" aria-label="Grok Build model and thinking">
                             <span className="model-lane-label">
                               <i aria-hidden="true">G</i>
                               <span>
@@ -8219,19 +8474,16 @@ export function App() {
                                 <small>Signed-in CLI</small>
                               </span>
                             </span>
+                            <label className="model-choice-field">
+                            <span className="sr-only">Grok Build model preference</span>
                             <select
                               aria-label="Grok Build model preference"
                               value={chatModels.grok}
                               onChange={(event) =>
-                                workspace &&
-                                void window.waypoint
-                                  .setChatModelPreference(
-                                    workspace.id,
-                                    "grok",
-                                    event.target.value,
-                                  )
-                                  .then(setChatModels)
-                                  .catch(showError)
+                                void changeSubscriptionModel(
+                                  "grok",
+                                  event.target.value,
+                                ).catch(showError)
                               }
                             >
                               {grokModelChoices.map((item) => (
@@ -8240,7 +8492,15 @@ export function App() {
                                 </option>
                               ))}
                             </select>
-                          </label>
+                            </label>
+                            <ThinkingSelect
+                              label="Grok Build thinking"
+                              value={chatThinking.grok}
+                              supported={grokModelChoices.find((item) => item.id === chatModels.grok)?.thinking?.supported ?? []}
+                              defaultEffort={grokModelChoices.find((item) => item.id === chatModels.grok)?.thinking?.defaultEffort}
+                              onChange={(value) => void changeThinking("grok", value).catch(showError)}
+                            />
+                          </div>
                         </div>
                         <p className="model-local-note">
                           These workspace choices also drive the composer. They
@@ -8351,20 +8611,28 @@ export function App() {
                             <span>Strategic</span>
                             <select
                               aria-label="OpenRouter strategic model"
-                              value={openRouter.settings.strategicModel}
-                              onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    strategicModel: event.target.value,
-                                  },
-                                })
-                              }
+                              value={hostedSettings.strategicModel}
+                              onChange={(event) => {
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  strategicModel: event.target.value,
+                                });
+                                editOpenRouterThinkingDraft((current) => ({
+                                  ...current,
+                                  openrouterStrategic:
+                                    openRouterModelThinking(
+                                      event.target.value,
+                                    )?.supported.includes(
+                                      current.openrouterStrategic as ThinkingEffort,
+                                    )
+                                      ? current.openrouterStrategic
+                                      : "",
+                                }));
+                              }}
                             >
                               <option value="">Choose a model…</option>
                               {openRouterModelChoices(
-                                openRouter.settings.strategicModel,
+                                hostedSettings.strategicModel,
                               ).map((model) => (
                                 <option value={model.id} key={model.id}>
                                   {model.name} — {model.id}
@@ -8381,20 +8649,28 @@ export function App() {
                             <span>Everyday</span>
                             <select
                               aria-label="OpenRouter everyday model"
-                              value={openRouter.settings.everydayModel}
-                              onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    everydayModel: event.target.value,
-                                  },
-                                })
-                              }
+                              value={hostedSettings.everydayModel}
+                              onChange={(event) => {
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  everydayModel: event.target.value,
+                                });
+                                editOpenRouterThinkingDraft((current) => ({
+                                  ...current,
+                                  openrouterEveryday:
+                                    openRouterModelThinking(
+                                      event.target.value,
+                                    )?.supported.includes(
+                                      current.openrouterEveryday as ThinkingEffort,
+                                    )
+                                      ? current.openrouterEveryday
+                                      : "",
+                                }));
+                              }}
                             >
                               <option value="">Choose a model…</option>
                               {openRouterModelChoices(
-                                openRouter.settings.everydayModel,
+                                hostedSettings.everydayModel,
                               ).map((model) => (
                                 <option value={model.id} key={model.id}>
                                   {model.name} — {model.id}
@@ -8411,20 +8687,28 @@ export function App() {
                             <span>Images</span>
                             <select
                               aria-label="OpenRouter image model"
-                              value={openRouter.settings.attachmentModel}
-                              onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    attachmentModel: event.target.value,
-                                  },
-                                })
-                              }
+                              value={hostedSettings.attachmentModel}
+                              onChange={(event) => {
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  attachmentModel: event.target.value,
+                                });
+                                editOpenRouterThinkingDraft((current) => ({
+                                  ...current,
+                                  openrouterAttachment:
+                                    openRouterModelThinking(
+                                      event.target.value,
+                                    )?.supported.includes(
+                                      current.openrouterAttachment as ThinkingEffort,
+                                    )
+                                      ? current.openrouterAttachment
+                                      : "",
+                                }));
+                              }}
                             >
                               <option value="">Choose an image model…</option>
                               {openRouterImageModelChoices(
-                                openRouter.settings.attachmentModel,
+                                hostedSettings.attachmentModel,
                               ).map((model) => (
                                 <option
                                   value={model.id}
@@ -8445,6 +8729,71 @@ export function App() {
                             </small>
                           </label>
                         </div>
+                        <div
+                          className="model-thinking-grid"
+                          aria-label="OpenRouter thinking levels"
+                        >
+                          <ThinkingSelect
+                            label="Strategic thinking"
+                            value={openRouterThinkingDraft.openrouterStrategic}
+                            supported={
+                              openRouterModelThinking(
+                                hostedSettings.strategicModel,
+                              )?.supported ?? []
+                            }
+                            defaultEffort={
+                              openRouterModelThinking(
+                                hostedSettings.strategicModel,
+                              )?.defaultEffort
+                            }
+                            onChange={(value) =>
+                              editOpenRouterThinkingDraft((current) => ({
+                                ...current,
+                                openrouterStrategic: value,
+                              }))
+                            }
+                          />
+                          <ThinkingSelect
+                            label="Everyday thinking"
+                            value={openRouterThinkingDraft.openrouterEveryday}
+                            supported={
+                              openRouterModelThinking(
+                                hostedSettings.everydayModel,
+                              )?.supported ?? []
+                            }
+                            defaultEffort={
+                              openRouterModelThinking(
+                                hostedSettings.everydayModel,
+                              )?.defaultEffort
+                            }
+                            onChange={(value) =>
+                              editOpenRouterThinkingDraft((current) => ({
+                                ...current,
+                                openrouterEveryday: value,
+                              }))
+                            }
+                          />
+                          <ThinkingSelect
+                            label="Image thinking"
+                            value={openRouterThinkingDraft.openrouterAttachment}
+                            supported={
+                              openRouterModelThinking(
+                                hostedSettings.attachmentModel,
+                              )?.supported ?? []
+                            }
+                            defaultEffort={
+                              openRouterModelThinking(
+                                hostedSettings.attachmentModel,
+                              )?.defaultEffort
+                            }
+                            onChange={(value) =>
+                              editOpenRouterThinkingDraft((current) => ({
+                                ...current,
+                                openrouterAttachment: value,
+                              }))
+                            }
+                          />
+                        </div>
 
                         <div className="model-subheading budget-heading">
                           <strong>Spend guardrails</strong>
@@ -8463,7 +8812,7 @@ export function App() {
                             <span>
                               of{" "}
                               {formatProviderMicros(
-                                openRouter.settings.monthlyCapMicros,
+                                hostedSettings.monthlyCapMicros,
                               )}{" "}
                               · projected{" "}
                               {formatProviderMicros(
@@ -8474,13 +8823,13 @@ export function App() {
                               aria-label="Monthly OpenRouter budget used"
                               max={Math.max(
                                 1,
-                                openRouter.settings.monthlyCapMicros,
+                                hostedSettings.monthlyCapMicros,
                               )}
                               value={Math.min(
                                 openRouter.usage.summary.monthMicros,
                                 Math.max(
                                   1,
-                                  openRouter.settings.monthlyCapMicros,
+                                  hostedSettings.monthlyCapMicros,
                                 ),
                               )}
                             />
@@ -8497,7 +8846,7 @@ export function App() {
                             <span>
                               of{" "}
                               {formatProviderMicros(
-                                openRouter.settings.ytdCapMicros,
+                                hostedSettings.ytdCapMicros,
                               )}{" "}
                               ·{" "}
                               {openRouter.usage.summary.capReached
@@ -8510,11 +8859,11 @@ export function App() {
                               aria-label="Year-to-date OpenRouter budget used"
                               max={Math.max(
                                 1,
-                                openRouter.settings.ytdCapMicros,
+                                hostedSettings.ytdCapMicros,
                               )}
                               value={Math.min(
                                 openRouter.usage.summary.ytdMicros,
-                                Math.max(1, openRouter.settings.ytdCapMicros),
+                                Math.max(1, hostedSettings.ytdCapMicros),
                               )}
                             />
                           </article>
@@ -8527,17 +8876,14 @@ export function App() {
                               min="0"
                               step="1"
                               value={
-                                openRouter.settings.monthlyCapMicros / 1_000_000
+                                hostedSettings.monthlyCapMicros / 1_000_000
                               }
                               onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    monthlyCapMicros: Math.round(
-                                      Number(event.target.value) * 1_000_000,
-                                    ),
-                                  },
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  monthlyCapMicros: Math.round(
+                                    Number(event.target.value) * 1_000_000,
+                                  ),
                                 })
                               }
                             />
@@ -8549,17 +8895,14 @@ export function App() {
                               min="0"
                               step="1"
                               value={
-                                openRouter.settings.ytdCapMicros / 1_000_000
+                                hostedSettings.ytdCapMicros / 1_000_000
                               }
                               onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    ytdCapMicros: Math.round(
-                                      Number(event.target.value) * 1_000_000,
-                                    ),
-                                  },
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  ytdCapMicros: Math.round(
+                                    Number(event.target.value) * 1_000_000,
+                                  ),
                                 })
                               }
                             />
@@ -8570,14 +8913,11 @@ export function App() {
                               type="number"
                               min="1"
                               max="100"
-                              value={openRouter.settings.warningPercent}
+                              value={hostedSettings.warningPercent}
                               onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    warningPercent: Number(event.target.value),
-                                  },
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  warningPercent: Number(event.target.value),
                                 })
                               }
                             />
@@ -8586,16 +8926,13 @@ export function App() {
                             Cap fallback
                             <select
                               value={
-                                openRouter.settings.fallbackProvider ?? "codex"
+                                hostedSettings.fallbackProvider ?? "codex"
                               }
                               onChange={(event) =>
-                                setOpenRouter({
-                                  ...openRouter,
-                                  settings: {
-                                    ...openRouter.settings,
-                                    fallbackProvider: event.target.value as
-                                      "codex" | "claude" | "grok",
-                                  },
+                                editOpenRouterSettingsDraft({
+                                  ...hostedSettings,
+                                  fallbackProvider: event.target.value as
+                                    "codex" | "claude" | "grok",
                                 })
                               }
                             >
@@ -8767,8 +9104,11 @@ export function App() {
                             Host on this device
                           </button>
                         )}
-                        <button onClick={() => void invitePeer()}>
-                          Invite device
+                        <button
+                          disabled={inviteBusy}
+                          onClick={() => void invitePeer()}
+                        >
+                          {inviteBusy ? "Creating invite…" : "Invite device"}
                         </button>
                         {desktopSync.rotationTargetEpoch && (
                           <button
@@ -8785,6 +9125,48 @@ export function App() {
                           </button>
                         )}
                       </div>
+                      {syncInvitation && (
+                        <section
+                          className="sync-invitation"
+                          aria-label="One-use device invitation"
+                        >
+                          <div>
+                            <strong>Device invitation ready</strong>
+                            <span>
+                              Expires {new Date(
+                                syncInvitation.expiresAt,
+                              ).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <textarea
+                            readOnly
+                            value={syncInvitation.token}
+                            aria-label="One-use enrollment token"
+                          />
+                          <div className="drawer-actions">
+                            <button
+                              onClick={() =>
+                                void navigator.clipboard
+                                  .writeText(syncInvitation.token)
+                                  .then(() => setNotice("Invitation copied."))
+                                  .catch(() =>
+                                    setError(
+                                      "Clipboard access was denied. Select and copy the visible token manually.",
+                                    ),
+                                  )
+                              }
+                            >
+                              Copy invitation
+                            </button>
+                            <button
+                              className="secondary"
+                              onClick={() => setSyncInvitation(undefined)}
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </section>
+                      )}
                       <p className="settings-help">
                         {desktopSync.peerHost?.reason ??
                           "Desktop hosting is stopped. The hosted relay remains optional for public webhooks, all-peers-offline delivery, and remote reachability."}

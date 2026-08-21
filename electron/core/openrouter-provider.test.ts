@@ -165,6 +165,7 @@ describe("OpenRouter provider policy", () => {
           stream: true,
           stream_options: { include_usage: true },
           provider: { data_collection: "deny", zdr: true },
+          reasoning: { effort: "high" },
         });
         expect(body).not.toHaveProperty("max_completion_tokens");
         expect(body.provider).not.toHaveProperty("max_price");
@@ -201,6 +202,7 @@ describe("OpenRouter provider policy", () => {
         images: [],
         signal: new AbortController().signal,
         requestCapMicros: 100_000,
+        reasoningEffort: "high",
       });
     expect(result).toMatchObject({ costMicros: 123, text: "answer" });
     expect(fetcher).toHaveBeenCalledOnce();

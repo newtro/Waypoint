@@ -321,6 +321,13 @@ describe("ordered schema migration", () => {
             "CREATE TABLE model_directed_configuration_tools(id TEXT PRIMARY KEY)",
           ),
       },
+      {
+        version: 47,
+        apply: (database) =>
+          database.exec(
+            "CREATE TABLE thinking_preferences(id TEXT PRIMARY KEY)",
+          ),
+      },
     ]);
     expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
     expect(
@@ -459,6 +466,12 @@ describe("ordered schema migration", () => {
           throw new Error("must not rerun");
         },
       },
+      ...[45, 46, 47].map((version) => ({
+        version,
+        apply: () => {
+          throw new Error("must not rerun");
+        },
+      })),
     ]);
     db.close();
   });

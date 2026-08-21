@@ -601,6 +601,9 @@ describe("Grok Build ACP adapter", () => {
       expect.arrayContaining(["--permission-mode", "default", "workspace"]),
     );
     expect(
+      grokAgentArgs(request({ reasoningEffort: "xhigh" })),
+    ).toEqual(expect.arrayContaining(["--reasoning-effort", "xhigh"]));
+    expect(
       grokAgentArgs(
         request({
           profile: profile({ network: "enabled", tools: ["subagents"] }),

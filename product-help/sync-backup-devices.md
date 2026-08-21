@@ -6,6 +6,8 @@ Waypoint can operate as a single desktop app. The Ubuntu relay is optional, not 
 
 One Waypoint desktop can act as an explicit local host for another enrolled device. Enrollment is authenticated and one-use, device identity is pinned, and the UI shows host endpoint, fingerprint, readiness, revocation, rotation, and offline state. If the host sleeps or is unreachable, direct-host work pauses truthfully; Waypoint does not claim an invisible fallback.
 
+Use **Settings → Device sync → Invite device**. In desktop-host mode, Waypoint offers to start the host first when it is stopped, then creates a bounded one-use invitation. The token remains visibly available until dismissed and is also copied when clipboard access succeeds; clipboard denial does not discard the invitation. Invitation registration times out with an actionable error instead of leaving the button spinning indefinitely.
+
 The existing hosted relay remains an optional transport for public/stable reachability, offline delivery, and signed inbound webhooks. Selecting a topology is explicit. Waypoint does not create cloud resources or change the relay automatically.
 
 ## Sync and deletion

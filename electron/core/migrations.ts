@@ -8,7 +8,7 @@ import {
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 46;
+export const CURRENT_SCHEMA_VERSION = 47;
 export type Migration = {
   version: number;
   apply(database: DatabaseSync): void;

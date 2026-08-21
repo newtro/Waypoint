@@ -793,6 +793,8 @@ export function grokAgentArgs(request: GrokRunRequest): string[] {
     args.push("--no-subagents");
   if (request.isolatedNoTools) args.push("--no-memory");
   if (request.model) args.push("--model", request.model);
+  if (request.reasoningEffort)
+    args.push("--reasoning-effort", request.reasoningEffort);
   args.push("agent", "--no-leader", "stdio");
   return args;
 }

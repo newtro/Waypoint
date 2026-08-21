@@ -782,6 +782,7 @@ contextBridge.exposeInMainWorld("waypoint", {
     parentExecutionId?: string,
     attachmentIds: string[] = [],
     taskType?: "analyze" | "summarize" | "critique",
+    reasoningEffort?: string,
   ) =>
     ipcRenderer.invoke("waypoint:run-chat", {
       workspaceId,
@@ -794,6 +795,7 @@ contextBridge.exposeInMainWorld("waypoint", {
       parentExecutionId,
       attachmentIds,
       taskType,
+      reasoningEffort,
     }),
   cancelExecution: (runId: string) => {
     if (!currentWorkspaceId) throw new Error("No active workspace");
@@ -1078,12 +1080,40 @@ contextBridge.exposeInMainWorld("waypoint", {
       provider,
       model,
     }),
+  chatThinkingPreferences: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:chat-thinking-preferences", { workspaceId }),
+  setChatThinkingPreference: (
+    workspaceId: string,
+    lane:
+      | "codex"
+      | "claude"
+      | "grok"
+      | "openrouterStrategic"
+      | "openrouterEveryday"
+      | "openrouterAttachment",
+    effort: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:chat-thinking-preference", {
+      workspaceId,
+      lane,
+      effort,
+    }),
   setOpenRouterKey: (apiKey: string) =>
     ipcRenderer.invoke("waypoint:openrouter-set-key", { apiKey }),
   removeOpenRouterKey: () =>
     ipcRenderer.invoke("waypoint:openrouter-remove-key"),
   updateOpenRouterSettings: (value: unknown) =>
     ipcRenderer.invoke("waypoint:openrouter-update-settings", value),
+  updateOpenRouterRouting: (
+    workspaceId: string,
+    settings: unknown,
+    thinking: unknown,
+  ) =>
+    ipcRenderer.invoke("waypoint:openrouter-update-routing", {
+      workspaceId,
+      settings,
+      thinking,
+    }),
   runOpenRouterChat: (value: unknown) =>
     ipcRenderer.invoke("waypoint:run-openrouter-chat", value),
   cancelOpenRouterRun: (workspaceId: string, runId: string) =>

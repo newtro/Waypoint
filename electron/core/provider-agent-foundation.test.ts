@@ -103,7 +103,7 @@ describe("provider agent foundation", () => {
     }
     store.close();
     const raw = new DatabaseSync(database);
-    raw.prepare("DELETE FROM schema_versions WHERE version=46").run();
+    raw.prepare("DELETE FROM schema_versions WHERE version>=46").run();
     raw.close();
     const reopened = new WorkspaceStore(database);
     for (const chat of reopened.listChats(workspace.id)) {

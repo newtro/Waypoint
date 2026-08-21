@@ -515,6 +515,13 @@ export class ClaudeAgentWorkbench {
     onEvent: (event: ExecutionEvent) => void,
   ): Promise<RunningExecution> {
     validateRequest(request);
+    if (
+      request.reasoningEffort &&
+      !["low", "medium", "high", "xhigh", "max"].includes(
+        request.reasoningEffort,
+      )
+    )
+      throw new Error("Claude thinking level is unsupported");
     if (this.active.size >= request.profile.maxConcurrency)
       throw new Error("Execution concurrency limit reached");
     request.beforeSpawn?.();
@@ -905,6 +912,7 @@ export class ClaudeAgentWorkbench {
         abortController: controller,
         cwd: root,
         model: request.model,
+        effort: request.reasoningEffort as Options["effort"],
         resume: request.providerSessionId,
         tools:
           request.profile.filesystem === "read-only"

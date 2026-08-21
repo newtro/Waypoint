@@ -128,7 +128,10 @@ export class DesktopSyncService {
     await this.peerHost.stop();
     return this.peerHost.status();
   }
-  async createInvitation(workspaceId: string) {
+  async createInvitation(
+    workspaceId: string,
+    signal: AbortSignal = AbortSignal.timeout(12_000),
+  ) {
     const active = this.required(workspaceId),
       client = await DesktopRelayClient.create(active),
       value = this.crypto.createEnrollmentInvitation(
@@ -137,7 +140,16 @@ export class DesktopSyncService {
         active.keyEpoch,
         new Date(Date.now() + 15 * 60_000),
       );
-    await client.registerInvitation(value.invitation);
+    try {
+      await client.registerInvitation(value.invitation, signal);
+    } catch (error) {
+      if (signal.aborted)
+        throw new Error(
+          "The sync host did not respond in time. Confirm it is running and reachable, then retry the invitation.",
+          { cause: error },
+        );
+      throw error;
+    }
     return {
       token: encode({ ...value, transport: active.transport }),
       expiresAt: value.invitation.expiresAt,

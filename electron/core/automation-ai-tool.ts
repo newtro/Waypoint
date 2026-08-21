@@ -3,16 +3,26 @@ import {
   type AutomationProposalDefinition,
 } from "./webhook-automations.js";
 import type { CodexApprovalRequest } from "./codex-app-server.js";
+import type { ThinkingEffort } from "../../src/model-thinking.js";
 
 const OPEN = "```waypoint-automation-proposal";
 
 export function codexTurnCanBeSteered(
-  active: { profileId: string; model?: string },
-  requested: { profileId: string; model?: string },
+  active: {
+    profileId: string;
+    model?: string;
+    reasoningEffort?: ThinkingEffort;
+  },
+  requested: {
+    profileId: string;
+    model?: string;
+    reasoningEffort?: ThinkingEffort;
+  },
 ): boolean {
   return (
     active.profileId === requested.profileId &&
-    active.model === requested.model
+    active.model === requested.model &&
+    active.reasoningEffort === requested.reasoningEffort
   );
 }
 

@@ -1,9 +1,10 @@
-export type CuratedOpenRouterModel={name:string;id:string;pricing?:string;inputModalities:readonly ('text'|'image')[]}
+import type {ThinkingEffort} from '../../src/model-thinking.js'
+export type CuratedOpenRouterModel={name:string;id:string;pricing?:string;inputModalities:readonly ('text'|'image')[];thinking:{supported:readonly ThinkingEffort[];defaultEffort:ThinkingEffort;mandatory:boolean}}
 export const CURATED_OPENROUTER_MODELS:readonly CuratedOpenRouterModel[]=[
-  {name:'Kimi K3',id:'moonshotai/kimi-k3',inputModalities:['text','image']},
-  {name:'Z.ai GLM 5.2',id:'z-ai/glm-5.2',inputModalities:['text']},
-  {name:'Qwen 3.8 Max',id:'qwen/qwen3.8-max',pricing:'$2/M input · $6/M output',inputModalities:['text','image']},
-  {name:'DeepSeek V4 Flash',id:'deepseek/deepseek-v4-flash',inputModalities:['text']},
+  {name:'Kimi K3',id:'moonshotai/kimi-k3',inputModalities:['text','image'],thinking:{supported:['none','low','high','max'],defaultEffort:'max',mandatory:false}},
+  {name:'Z.ai GLM 5.2',id:'z-ai/glm-5.2',inputModalities:['text'],thinking:{supported:['none','high','xhigh'],defaultEffort:'high',mandatory:false}},
+  {name:'Qwen 3.8 Max',id:'qwen/qwen3.8-max',pricing:'$2/M input · $6/M output',inputModalities:['text','image'],thinking:{supported:['minimal','low','medium','high','xhigh'],defaultEffort:'xhigh',mandatory:true}},
+  {name:'DeepSeek V4 Flash',id:'deepseek/deepseek-v4-flash',inputModalities:['text'],thinking:{supported:['none','high','xhigh'],defaultEffort:'high',mandatory:false}},
 ]
 
 export type OpenRouterModelChoice={name:string;id:string;legacy:boolean;pricing?:string;inputModalities:readonly ('text'|'image')[]}
@@ -22,4 +23,8 @@ export function openRouterImageModelChoices(saved:string):OpenRouterModelChoice[
 
 export function openRouterModelAcceptsImages(modelId:string):boolean{
   return CURATED_OPENROUTER_MODELS.some((model)=>model.id===modelId&&model.inputModalities.includes('image'))
+}
+
+export function openRouterModelThinking(modelId:string){
+  return CURATED_OPENROUTER_MODELS.find((model)=>model.id===modelId)?.thinking
 }

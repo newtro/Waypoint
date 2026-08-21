@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "helpVersion": "2026.08.20.3",
+  "helpVersion": "2026.08.21.1",
   "title": "Waypoint Help",
   "documents": [
     {
@@ -14,7 +14,7 @@
       "id": "chat-models-attachments",
       "title": "Chat, models, and attachments",
       "summary": "Codex, Claude, OpenRouter, model routing, streaming, costs, attachments, and provider limitations.",
-      "keywords": ["chat", "codex", "claude", "openrouter", "model", "provider", "routing", "cost", "attachment", "image", "pdf", "docx", "repository", "working folder", "security profile", "approval", "session"],
+      "keywords": ["chat", "codex", "claude", "grok", "openrouter", "model", "thinking", "reasoning effort", "provider", "routing", "cost", "attachment", "image", "pdf", "docx", "repository", "working folder", "security profile", "approval", "session"],
       "file": "chat-models-attachments.md"
     },
     {
