@@ -208,7 +208,7 @@ export function captureReadiness(
       state: permission === 'granted'
         ? 'ready'
         : denied && versionSpecific
-          ? 'build_identity_changed'
+          ? 'permission_request_required'
           : restricted
             ? 'permission_restricted'
             : denied
@@ -217,7 +217,7 @@ export function captureReadiness(
       reason: permission === 'granted'
         ? `Ready. Waypoint captures only after you choose Capture.${versionSpecific ? ' This development build has a version-specific signature, so a later unsigned update can require permission again.' : ''}`
         : denied && versionSpecific
-          ? 'This development build has a different macOS code identity than the Waypoint entry already enabled in System Settings. Open Screen Recording Settings, remove the stale Waypoint entry if necessary, add this installed Waypoint, then relaunch it. Consistently signed Apple builds preserve this permission after the one-time grant.'
+          ? 'This development build needs a fresh macOS Screen Recording grant. Start a capture to trigger the macOS request, approve Waypoint, then quit and reopen it once. Future ad-hoc updates can require another grant; consistently signed Apple builds preserve it.'
           : restricted
             ? 'Screen Recording is restricted by macOS policy. Review Screen Recording in Privacy & Security or ask the device administrator, then relaunch Waypoint.'
             : denied
@@ -240,6 +240,32 @@ export function captureReadiness(
     permission: 'unsupported',
     state: 'platform_contingent',
     reason: 'Manual capture is currently packaged for macOS and Windows.',
+  }
+}
+
+export function macCaptureAccessAction(
+  permission: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown',
+): 'ready' | 'request' | 'blocked' {
+  if (permission === 'granted') return 'ready'
+  if (permission === 'restricted') return 'blocked'
+  return 'request'
+}
+
+export async function resolveMacCaptureAccess(
+  initialPermission: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown',
+  request: () => Promise<void>,
+  readPermission: () => 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown',
+): Promise<{
+  permission: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown'
+  requestFailed: boolean
+}> {
+  const action = macCaptureAccessAction(initialPermission)
+  if (action !== 'request') return { permission: initialPermission, requestFailed: false }
+  try {
+    await request()
+    return { permission: readPermission(), requestFailed: false }
+  } catch {
+    return { permission: readPermission(), requestFailed: true }
   }
 }
 

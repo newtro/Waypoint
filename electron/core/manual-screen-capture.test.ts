@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   captureDigest,
   captureReadiness,
+  macCaptureAccessAction,
+  resolveMacCaptureAccess,
   macCaptureCodeIdentity,
   assertVisibleCapturePixels,
   captureVisibilityStrategy,
@@ -89,8 +91,38 @@ describe('manual screen capture boundary', () => {
     expect(macCaptureCodeIdentity('# designated => identifier "com.waypoint.desktop" and anchor rootCert')).toBe('stable')
     expect(macCaptureCodeIdentity('unsigned')).toBe('unknown')
     expect(captureReadiness('darwin', 'denied', 'version-specific')).toMatchObject({
-      state: 'build_identity_changed',
+      state: 'permission_request_required',
       codeIdentity: 'version-specific',
+      reason: expect.stringMatching(/Start a capture to trigger.*approve Waypoint.*reopen/i),
+    })
+  })
+
+  it('allows an explicit capture attempt to trigger macOS consent', () => {
+    expect(macCaptureAccessAction('granted')).toBe('ready')
+    expect(macCaptureAccessAction('not-determined')).toBe('request')
+    expect(macCaptureAccessAction('denied')).toBe('request')
+    expect(macCaptureAccessAction('unknown')).toBe('request')
+    expect(macCaptureAccessAction('restricted')).toBe('blocked')
+  })
+
+  it('orchestrates macOS consent without hiding request failures', async () => {
+    let requests = 0
+    const request = async () => { requests += 1 }
+    await expect(resolveMacCaptureAccess('granted', request, () => 'granted')).resolves.toEqual({
+      permission: 'granted', requestFailed: false,
+    })
+    await expect(resolveMacCaptureAccess('restricted', request, () => 'granted')).resolves.toEqual({
+      permission: 'restricted', requestFailed: false,
+    })
+    expect(requests).toBe(0)
+    await expect(resolveMacCaptureAccess('denied', request, () => 'granted')).resolves.toEqual({
+      permission: 'granted', requestFailed: false,
+    })
+    await expect(resolveMacCaptureAccess('denied', async () => { throw new Error('native failure') }, () => 'denied')).resolves.toEqual({
+      permission: 'denied', requestFailed: true,
+    })
+    await expect(resolveMacCaptureAccess('not-determined', request, () => 'denied')).resolves.toEqual({
+      permission: 'denied', requestFailed: false,
     })
   })
 

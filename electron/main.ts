@@ -240,6 +240,8 @@ import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
 import {
   assertVisibleCapturePixels,
   captureReadiness,
+  macCaptureAccessAction,
+  resolveMacCaptureAccess,
   macCaptureCodeIdentity,
   captureVisibilityStrategy,
   quickCaptureCropBounds,
@@ -552,14 +554,53 @@ function macScreenCapturePermission() {
     : "unknown";
 }
 
-function assertMacScreenCaptureMayStart(): void {
+async function ensureMacScreenCaptureMayStart(): Promise<void> {
   if (process.platform !== "darwin") return;
-  const readiness = captureReadiness(
-    process.platform,
-    macScreenCapturePermission(),
-    installedMacCaptureCodeIdentity(),
+  const initialPermission = macScreenCapturePermission();
+  const action = macCaptureAccessAction(initialPermission);
+  if (action === "ready") return;
+  if (action === "blocked") {
+    throw new Error(
+      captureReadiness(
+        process.platform,
+        initialPermission,
+        installedMacCaptureCodeIdentity(),
+      ).reason,
+    );
+  }
+
+  // A user-initiated desktop capture call is the supported macOS path that
+  // causes Screen Recording consent to appear. Do not pre-emptively reject a
+  // denied status: after tccutil reset, Electron can report `denied` until this
+  // first real request has been made.
+  const access = await resolveMacCaptureAccess(
+    initialPermission,
+    async () => {
+      await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: { width: 1, height: 1 },
+        fetchWindowIcons: false,
+      });
+    },
+    macScreenCapturePermission,
   );
-  if (!readiness.available) throw new Error(readiness.reason);
+  const refreshedPermission = access.permission;
+  if (access.requestFailed && refreshedPermission === "granted") {
+    throw new Error(
+      "Screen Recording request failed after macOS granted access. Retry once; if it repeats, quit and reopen Waypoint.",
+    );
+  }
+  if (refreshedPermission !== "granted") {
+    throw new Error(
+      refreshedPermission === "restricted"
+        ? captureReadiness(
+            process.platform,
+            refreshedPermission,
+            installedMacCaptureCodeIdentity(),
+          ).reason
+        : "macOS has not granted Screen Recording to this Waypoint yet. Approve the current Waypoint request in Privacy & Security, then quit and reopen Waypoint once before retrying.",
+    );
+  }
 }
 
 function quickCaptureNotice(
@@ -711,7 +752,7 @@ async function startQuickCapture(
   if (quickCaptureActive) return;
   quickCaptureActive = true;
   try {
-    assertMacScreenCaptureMayStart();
+    await ensureMacScreenCaptureMayStart();
     if (settings.mode === "window") {
       const capture = await activeWindowCapture();
       saveQuickCapture(
@@ -2292,7 +2333,7 @@ function registerIpc(): void {
     store.screenCaptureSettings(workspaceId);
     if (!["region", "window", "display"].includes(mode))
       throw new Error("Invalid capture mode");
-    assertMacScreenCaptureMayStart();
+    await ensureMacScreenCaptureMayStart();
     for (const [token, item] of pendingManualCaptures)
       if (item.expiresAt < Date.now()) pendingManualCaptures.delete(token);
     const sources = await desktopCapturer.getSources({

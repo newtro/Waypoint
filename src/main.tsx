@@ -7469,7 +7469,7 @@ export function App() {
                       {manualCaptureReadiness?.available
                         ? "Native capture ready"
                         : manualCaptureReadiness?.state ===
-                            "build_identity_changed"
+                            "permission_request_required"
                           ? "Installed build needs a fresh permission grant"
                           : manualCaptureReadiness?.state ===
                               "permission_restricted"
