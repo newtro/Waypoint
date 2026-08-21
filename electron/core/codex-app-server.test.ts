@@ -373,7 +373,7 @@ describe("Codex app-server workbench", () => {
     expect(onSession).toHaveBeenCalledWith("thread-new");
     expect(events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: "text", text: "Hello" }),
+        expect.objectContaining({ type: "text", text: "Hello", metadata: { itemId: "answer" } }),
         expect.objectContaining({ type: "tool", name: "Command started" }),
       ]),
     );

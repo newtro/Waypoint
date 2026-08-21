@@ -41,7 +41,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { Readable } from "node:stream";
 import { WorkspaceStore } from "./core/store.js";
@@ -240,6 +240,7 @@ import { snapshotBrowserProfile } from "./core/browser-profile-snapshot.js";
 import {
   assertVisibleCapturePixels,
   captureReadiness,
+  macCaptureCodeIdentity,
   captureVisibilityStrategy,
   quickCaptureCropBounds,
   validateCaptureSettings,
@@ -489,6 +490,10 @@ let captureShortcutState = {
 };
 let captureShortcutSuspended = false;
 let quickCaptureActive = false;
+let cachedMacCaptureCodeIdentity:
+  | "stable"
+  | "version-specific"
+  | "unknown";
 const pendingQuickCaptures = new Map<
   string,
   {
@@ -509,6 +514,52 @@ function captureWindow(): BrowserWindow | undefined {
         (pending) => pending.window === item,
       ),
   );
+}
+
+function installedMacCaptureCodeIdentity():
+  | "stable"
+  | "version-specific"
+  | "unknown" {
+  if (process.platform !== "darwin") return "unknown";
+  if (cachedMacCaptureCodeIdentity) return cachedMacCaptureCodeIdentity;
+  try {
+    const result = spawnSync(
+      "/usr/bin/codesign",
+      ["-d", "-r-", "--", process.execPath],
+      {
+        encoding: "utf8",
+        timeout: 2_000,
+        windowsHide: true,
+      },
+    );
+    cachedMacCaptureCodeIdentity = macCaptureCodeIdentity(
+      `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+    );
+  } catch {
+    cachedMacCaptureCodeIdentity = "unknown";
+  }
+  return cachedMacCaptureCodeIdentity;
+}
+
+function macScreenCapturePermission() {
+  return process.platform === "darwin"
+    ? (systemPreferences.getMediaAccessStatus("screen") as
+        | "granted"
+        | "denied"
+        | "restricted"
+        | "not-determined"
+        | "unknown")
+    : "unknown";
+}
+
+function assertMacScreenCaptureMayStart(): void {
+  if (process.platform !== "darwin") return;
+  const readiness = captureReadiness(
+    process.platform,
+    macScreenCapturePermission(),
+    installedMacCaptureCodeIdentity(),
+  );
+  if (!readiness.available) throw new Error(readiness.reason);
 }
 
 function quickCaptureNotice(
@@ -660,6 +711,7 @@ async function startQuickCapture(
   if (quickCaptureActive) return;
   quickCaptureActive = true;
   try {
+    assertMacScreenCaptureMayStart();
     if (settings.mode === "window") {
       const capture = await activeWindowCapture();
       saveQuickCapture(
@@ -2165,15 +2217,22 @@ function openRouterSettingsInput(input: unknown): OpenRouterSettings {
 
 function registerIpc(): void {
   handle("waypoint:screen-capture-readiness", () => {
-    const permission =
-      process.platform === "darwin"
-        ? (systemPreferences.getMediaAccessStatus("screen") as
-            "granted" | "denied" | "restricted" | "not-determined" | "unknown")
-        : "unknown";
     return {
-      ...captureReadiness(process.platform, permission),
+      ...captureReadiness(
+        process.platform,
+        macScreenCapturePermission(),
+        installedMacCaptureCodeIdentity(),
+      ),
       shortcut: captureShortcutState,
     };
+  });
+  handle("waypoint:open-screen-recording-settings", async () => {
+    if (process.platform !== "darwin")
+      throw new Error("Screen Recording Settings is available on macOS.");
+    await shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    );
+    return { opened: true };
   });
   handle("waypoint:screen-capture-settings", (_event, input: unknown) => {
     const workspaceId = text(
@@ -2233,6 +2292,7 @@ function registerIpc(): void {
     store.screenCaptureSettings(workspaceId);
     if (!["region", "window", "display"].includes(mode))
       throw new Error("Invalid capture mode");
+    assertMacScreenCaptureMayStart();
     for (const [token, item] of pendingManualCaptures)
       if (item.expiresAt < Date.now()) pendingManualCaptures.delete(token);
     const sources = await desktopCapturer.getSources({
@@ -7437,14 +7497,8 @@ else {
                 })),
               readiness: captureReadiness(
                 process.platform,
-                process.platform === "darwin"
-                  ? (systemPreferences.getMediaAccessStatus("screen") as
-                      | "granted"
-                      | "denied"
-                      | "restricted"
-                      | "not-determined"
-                      | "unknown")
-                  : "unknown",
+                macScreenCapturePermission(),
+                installedMacCaptureCodeIdentity(),
               ),
             },
             summary: "Read manual local screenshot status",

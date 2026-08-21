@@ -97,8 +97,10 @@ declare global {
         permission: string;
         state: string;
         reason: string;
+        codeIdentity?: "stable" | "version-specific" | "unknown";
         shortcut: { registered: boolean; shortcut: string; reason: string };
       }>;
+      openScreenRecordingSettings(): Promise<{ opened: true }>;
       screenCaptureSettings(workspaceId: string): Promise<{
         workflow: "guided" | "quick";
         mode: "region" | "window" | "display";

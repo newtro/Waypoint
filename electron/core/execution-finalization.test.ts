@@ -30,6 +30,22 @@ describe('durable execution finalization', () => {
     expect(finishExecution).toHaveBeenCalledWith('run', 'workspace', expect.any(Object), 'recovered answer')
   })
 
+  it('persists durable provider sections in their authored order', async () => {
+    const finishExecution = vi.fn()
+    await finalizeExecution(fixture({ finishExecution }), {
+      runId: 'run', workspaceId: 'workspace', chatId: 'chat', cli: 'codex',
+      result: { status: 'completed', exitCode: 0 },
+      fallbackEvents: [
+        { type: 'text', text: 'First section.', metadata: { itemId: 'one' } },
+        { type: 'tool', name: 'Command completed' },
+        { type: 'text', text: 'Final section.', metadata: { itemId: 'two' } },
+      ],
+    })
+    expect(finishExecution).toHaveBeenCalledWith(
+      'run', 'workspace', expect.any(Object), 'First section.\n\nFinal section.',
+    )
+  })
+
   it('stops retrying when cascade deletion removes persistence authority', async () => {
     const executionExists = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
     const store = fixture({ executionExists, finishExecution: () => { throw new Error('deleted') } })

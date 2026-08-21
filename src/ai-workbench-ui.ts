@@ -1,15 +1,15 @@
+import { providerExecutionText } from './execution-text.js'
+
 export type ExecutionRunView = Record<string, unknown> & {
   events?: Array<Record<string, unknown>>
 }
 
 export function executionAnswerText(run: ExecutionRunView): string {
   const events = Array.isArray(run.events) ? run.events : []
-  const textEvents = events.filter((event) => event.type === 'text' && typeof event.text === 'string')
-  if (String(run.cli) === 'claude') {
-    const final = textEvents.filter((event) => !String(event.rawType ?? '').includes('text_delta')).at(-1)
-    return String(final?.text ?? textEvents.map((event) => event.text).join('')).trim()
-  }
-  return textEvents.map((event) => String(event.text)).join('').trim()
+  const provider = ['codex', 'claude', 'grok'].includes(String(run.cli))
+    ? String(run.cli) as 'codex' | 'claude' | 'grok'
+    : 'codex'
+  return providerExecutionText(provider, events)
 }
 
 export function failureAdvice(run: ExecutionRunView): string | undefined {

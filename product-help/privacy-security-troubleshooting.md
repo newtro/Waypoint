@@ -27,7 +27,7 @@ Confirm the file type and size are supported and the active workspace/chat did n
 
 ### Voice, meetings, or capture is not ready
 
-Open the relevant Settings section and review OS permission, device, shortcut conflict, packaged runtime/model integrity, and bounded media limits. Waypoint never bypasses macOS/Windows consent. A locally rebuilt or ad-hoc-signed macOS app can receive a new code identity, which may require resetting and granting Screen Recording again even when an older Waypoint entry was enabled. Production Developer ID signing is required for stable permission identity across releases. A black/invalid screenshot or undecodable audio should produce an actionable failure rather than a false success.
+Open the relevant Settings section and review OS permission, device, shortcut conflict, packaged runtime/model integrity, and bounded media limits. Waypoint never bypasses macOS/Windows consent. Settings reports when an ad-hoc macOS build has a version-specific code identity and can open Screen Recording Settings directly; an older enabled Waypoint entry does not authorize a newly identified build. Stable permission continuity requires an authorized Apple signing identity and controlled key custody. Waypoint does not install a broad local signing certificate; production distribution still requires authorized Developer ID signing and notarization. A black/invalid screenshot or undecodable audio should produce an actionable failure rather than a false success.
 
 ### Sync or cross-device work is offline
 

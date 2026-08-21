@@ -16,6 +16,7 @@ describe("packaged runtime import closure", () => {
     expect(config).toContain("perMachine: true");
     expect(config).toContain("include: build/installer.nsh");
     expect(config).toContain("!dist-electron/electron/**/*.test.js");
+    expect(config).toContain("dist-electron/src/execution-text.js");
     expect(include).toContain("!macro preInit");
     expect(include).toContain(
       'ReadRegStr $0 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation',

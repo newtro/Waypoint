@@ -6,7 +6,7 @@ Screen Capture + Markup is a manual, user-triggered screenshot workflow. It is n
 
 Open **Capture** from the app or use the configured global shortcut. The default is **Command–Shift–8** on macOS and **Print Screen** on Windows, subject to OS/other-app shortcut conflicts. Region, window, and display choices use the platform’s available capture source/permission path.
 
-macOS Screen Recording permission may be required. Waypoint should show not-ready, denied, conflict, or retry guidance rather than accepting an invalid black frame as success.
+macOS Screen Recording permission may be required. Waypoint shows not-ready, denied, build-identity, conflict, or retry guidance rather than accepting an invalid black frame as success. An ad-hoc development build has a version-specific macOS privacy identity even when an older Waypoint entry remains visibly enabled. Settings can open the exact Screen Recording pane. Stable permission continuity requires an authorized Apple signing identity; Waypoint does not install a broad local signing certificate to bypass that boundary.
 
 ## Screenshot Ready actions
 

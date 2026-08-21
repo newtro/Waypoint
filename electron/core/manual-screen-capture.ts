@@ -194,16 +194,35 @@ export function assertVisibleCapturePixels(bitmap: Uint8Array, width: number, he
 export function captureReadiness(
   platform: NodeJS.Platform,
   permission: 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown',
+  codeIdentity: 'stable' | 'version-specific' | 'unknown' = 'unknown',
 ) {
   if (platform === 'darwin') {
+    const versionSpecific = codeIdentity === 'version-specific'
+    const denied = permission === 'denied'
+    const restricted = permission === 'restricted'
     return {
       platform: 'macOS',
-      available: permission !== 'denied' && permission !== 'restricted',
+      available: !denied && !restricted,
       permission,
-      state: permission === 'granted' ? 'ready' : 'permission_required',
+      codeIdentity,
+      state: permission === 'granted'
+        ? 'ready'
+        : denied && versionSpecific
+          ? 'build_identity_changed'
+          : restricted
+            ? 'permission_restricted'
+            : denied
+              ? 'permission_denied'
+              : 'permission_required',
       reason: permission === 'granted'
-        ? 'Ready. Waypoint captures only after you choose Capture.'
-        : 'macOS will request Screen Recording access only when you start a capture.',
+        ? `Ready. Waypoint captures only after you choose Capture.${versionSpecific ? ' This development build has a version-specific signature, so a later unsigned update can require permission again.' : ''}`
+        : denied && versionSpecific
+          ? 'This development build has a different macOS code identity than the Waypoint entry already enabled in System Settings. Open Screen Recording Settings, remove the stale Waypoint entry if necessary, add this installed Waypoint, then relaunch it. Consistently signed Apple builds preserve this permission after the one-time grant.'
+          : restricted
+            ? 'Screen Recording is restricted by macOS policy. Review Screen Recording in Privacy & Security or ask the device administrator, then relaunch Waypoint.'
+            : denied
+              ? 'Screen Recording is off for this installed Waypoint. Enable it in Privacy & Security, then quit and reopen Waypoint before retrying.'
+              : 'macOS will request Screen Recording access only when you start a capture.',
     }
   }
   if (platform === 'win32') {
@@ -222,4 +241,13 @@ export function captureReadiness(
     state: 'platform_contingent',
     reason: 'Manual capture is currently packaged for macOS and Windows.',
   }
+}
+
+export function macCaptureCodeIdentity(
+  designatedRequirement: string,
+): 'stable' | 'version-specific' | 'unknown' {
+  const requirement = designatedRequirement.trim()
+  if (!requirement.includes('designated =>')) return 'unknown'
+  if (/\bcdhash\b/i.test(requirement)) return 'version-specific'
+  return /\bidentifier\b/i.test(requirement) ? 'stable' : 'unknown'
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   captureDigest,
   captureReadiness,
+  macCaptureCodeIdentity,
   assertVisibleCapturePixels,
   captureVisibilityStrategy,
   defaultCaptureWorkflow,
@@ -67,10 +68,30 @@ describe('manual screen capture boundary', () => {
     expect(captureReadiness('darwin', 'not-determined')).toMatchObject({ available: true, state: 'permission_required' })
     expect(captureReadiness('win32', 'unknown')).toMatchObject({ available: true, permission: 'picker' })
     expect(captureReadiness('linux', 'unknown').available).toBe(false)
+    expect(captureReadiness('darwin', 'denied', 'stable')).toMatchObject({
+      available: false,
+      state: 'permission_denied',
+      reason: expect.stringMatching(/Enable it.*quit and reopen/),
+    })
+    expect(captureReadiness('darwin', 'restricted', 'stable')).toMatchObject({
+      available: false,
+      state: 'permission_restricted',
+      reason: expect.stringMatching(/restricted.*administrator/),
+    })
     expect(defaultCaptureShortcut('win32')).toBe('PrintScreen')
     expect(defaultCaptureShortcut('darwin')).toBe('CommandOrControl+Shift+8')
     expect(defaultCaptureWorkflow('win32')).toBe('quick')
     expect(defaultCaptureWorkflow('darwin')).toBe('guided')
+  })
+
+  it('distinguishes stable signed builds from version-specific ad-hoc privacy identities', () => {
+    expect(macCaptureCodeIdentity('# designated => cdhash H"abc"')).toBe('version-specific')
+    expect(macCaptureCodeIdentity('# designated => identifier "com.waypoint.desktop" and anchor rootCert')).toBe('stable')
+    expect(macCaptureCodeIdentity('unsigned')).toBe('unknown')
+    expect(captureReadiness('darwin', 'denied', 'version-specific')).toMatchObject({
+      state: 'build_identity_changed',
+      codeIdentity: 'version-specific',
+    })
   })
 
   it('maps a dragged region from display coordinates to native image pixels', () => {

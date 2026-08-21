@@ -1022,6 +1022,7 @@ export function App() {
       useState<
         Awaited<ReturnType<Window["waypoint"]["screenCaptureReadiness"]>>
       >(),
+    [capturePermissionError, setCapturePermissionError] = useState(""),
     [activitySnapshots, setActivitySnapshots] = useState<ActivitySnapshot[]>(
       [],
     ),
@@ -2232,13 +2233,27 @@ export function App() {
   );
   useEffect(() => {
     if (!workspace) return;
+    let current = true;
     void Promise.all([
       window.waypoint.screenCaptureSettings(workspace.id),
       window.waypoint.screenCaptureReadiness(),
-    ]).then(([settings, readiness]) => {
-      setManualCaptureSettings(settings);
-      setManualCaptureReadiness(readiness);
-    });
+    ])
+      .then(([settings, readiness]) => {
+        if (!current) return;
+        setCapturePermissionError("");
+        setManualCaptureSettings(settings);
+        setManualCaptureReadiness(readiness);
+      })
+      .catch((reason) => {
+        if (!current) return;
+        const message =
+          reason instanceof Error ? reason.message : "Capture readiness failed";
+        setCapturePermissionError(message);
+        showError(reason);
+      });
+    return () => {
+      current = false;
+    };
   }, [workspace]);
   useEffect(() => {
     if (drawer !== "browser" || !workspace) return;
@@ -7453,7 +7468,16 @@ export function App() {
                     <strong>
                       {manualCaptureReadiness?.available
                         ? "Native capture ready"
-                        : "Permission required"}
+                        : manualCaptureReadiness?.state ===
+                            "build_identity_changed"
+                          ? "Installed build needs a fresh permission grant"
+                          : manualCaptureReadiness?.state ===
+                              "permission_restricted"
+                            ? "Screen Recording is restricted"
+                            : manualCaptureReadiness?.state ===
+                                "permission_denied"
+                              ? "Screen Recording is disabled"
+                          : "Permission required"}
                     </strong>
                     <span>
                       {manualCaptureReadiness?.reason ||
@@ -7461,6 +7485,55 @@ export function App() {
                       {manualCaptureReadiness?.shortcut.reason}
                     </span>
                   </div>
+                  {capturePermissionError && (
+                    <p className="field-error" role="alert">
+                      {capturePermissionError}
+                    </p>
+                  )}
+                  {platform === "darwin" &&
+                    manualCaptureReadiness &&
+                    !manualCaptureReadiness.available && (
+                      <div className="drawer-actions">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCapturePermissionError("");
+                            void window.waypoint
+                              .openScreenRecordingSettings()
+                              .catch((reason) => {
+                                const message =
+                                  reason instanceof Error
+                                    ? reason.message
+                                    : "Could not open Screen Recording Settings";
+                                setCapturePermissionError(message);
+                                showError(reason);
+                              });
+                          }}
+                        >
+                          Open Screen Recording Settings
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => {
+                            setCapturePermissionError("");
+                            void window.waypoint
+                              .screenCaptureReadiness()
+                              .then(setManualCaptureReadiness)
+                              .catch((reason) => {
+                                const message =
+                                  reason instanceof Error
+                                    ? reason.message
+                                    : "Could not check Screen Recording permission";
+                                setCapturePermissionError(message);
+                                showError(reason);
+                              });
+                          }}
+                        >
+                          Check permission again
+                        </button>
+                      </div>
+                    )}
                   {manualCaptureSettings && (
                     <>
                       <div
@@ -7641,6 +7714,14 @@ export function App() {
                               await window.waypoint.screenCaptureReadiness(),
                             );
                             setNotice(saved.shortcutReason);
+                          })
+                          .catch((reason) => {
+                            const message =
+                              reason instanceof Error
+                                ? reason.message
+                                : "Could not save capture settings";
+                            setCapturePermissionError(message);
+                            showError(reason);
                           })
                       }
                     >

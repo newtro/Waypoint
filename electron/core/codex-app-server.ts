@@ -906,6 +906,7 @@ export class CodexAppServerWorkbench {
           type: "text",
           text: redactToolText(params.delta, request.profile.secretNames),
           rawType: method,
+          metadata: { itemId: bounded(params.itemId, 512) },
         });
       else if (method === "item/started" || method === "item/completed") {
         const event = itemEvent(

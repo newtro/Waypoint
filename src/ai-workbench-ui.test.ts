@@ -13,6 +13,14 @@ describe('provider execution presentation', () => {
     ] })).toBe('done')
   })
 
+  it('renders provider sections during a live run instead of one text blob', () => {
+    expect(executionAnswerText({ cli: 'codex', events: [
+      { type: 'text', text: 'Inspecting.', metadata: { itemId: 'one' } },
+      { type: 'tool', name: 'Command completed' },
+      { type: 'text', text: 'Fixed.', metadata: { itemId: 'two' } },
+    ] })).toBe('Inspecting.\n\nFixed.')
+  })
+
   it('describes legacy timeouts without suggesting a longer Waypoint profile', () => {
     expect(failureAdvice({ cli: 'claude', status: 'timed_out' })).toContain('legacy Waypoint deadline')
     expect(failureAdvice({ cli: 'claude', status: 'timed_out' })).not.toContain('longer approved profile')

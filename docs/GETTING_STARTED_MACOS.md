@@ -37,3 +37,5 @@ npm run package:dir
 ## Current platform status
 
 The macOS arm64 directory package and packaged launch are part of the local verification path. Public publishing, an update channel, signing, and notarization remain deferred release gates.
+
+Ad-hoc local packages have a version-specific macOS privacy identity. Replacing one can therefore require removing/re-granting only Waypoint in Screen Recording Settings and relaunching, even while the old toggle remains visible. A stable permission identity requires an authorized Apple Development or Developer ID certificate with controlled private-key custody; Waypoint does not install a broad self-signed signing root or weaken Keychain access to simulate that release boundary.

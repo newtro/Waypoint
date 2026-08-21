@@ -7,6 +7,7 @@ files:
   - dist/**/*
   - dist-electron/electron/**/*
   - '!dist-electron/electron/**/*.test.js'
+  - dist-electron/src/execution-text.js
   - dist-electron/src/model-thinking.js
   - dist-electron/node/relay/**/*.js
   - '!dist-electron/node/relay/**/*.test.js'

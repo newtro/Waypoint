@@ -328,6 +328,13 @@ describe("ordered schema migration", () => {
             "CREATE TABLE thinking_preferences(id TEXT PRIMARY KEY)",
           ),
       },
+      {
+        version: 48,
+        apply: (database) =>
+          database.exec(
+            "CREATE TABLE maintenance_tasks(id TEXT PRIMARY KEY,completed_at TEXT)",
+          ),
+      },
     ]);
     expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
     expect(
@@ -466,7 +473,7 @@ describe("ordered schema migration", () => {
           throw new Error("must not rerun");
         },
       },
-      ...[45, 46, 47].map((version) => ({
+      ...[45, 46, 47, 48].map((version) => ({
         version,
         apply: () => {
           throw new Error("must not rerun");

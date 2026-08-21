@@ -114,6 +114,8 @@ contextBridge.exposeInMainWorld("waypoint", {
   },
   screenCaptureReadiness: () =>
     ipcRenderer.invoke("waypoint:screen-capture-readiness"),
+  openScreenRecordingSettings: () =>
+    ipcRenderer.invoke("waypoint:open-screen-recording-settings"),
   screenCaptureSettings: (workspaceId: string) =>
     ipcRenderer.invoke("waypoint:screen-capture-settings", { workspaceId }),
   updateScreenCaptureSettings: (workspaceId: string, settings: unknown) =>

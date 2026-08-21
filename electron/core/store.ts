@@ -36,6 +36,7 @@ import {
   runMigrations,
   schemaVersion,
 } from "./migrations.js";
+import { repairLegacySectionlessAnswers } from "./execution-answer-repair.js";
 import {
   imageDimensions,
   prepareAttachmentForProvider as prepareProviderAttachment,
@@ -343,6 +344,34 @@ export class WorkspaceStore {
       .prepare("SELECT id FROM workspaces")
       .all() as Array<{ id: string }>)
       this.syncJournal.ensureWorkspace(workspace.id);
+    const sectionRepair = this.db
+      .prepare(
+        "SELECT completed_at completedAt FROM maintenance_tasks WHERE id='execution_sections_v1'",
+      )
+      .get() as { completedAt?: string } | undefined;
+    if (sectionRepair && !sectionRepair.completedAt)
+      this.transaction(() => {
+        repairLegacySectionlessAnswers(this.db, (answer) => {
+          this.syncJournal.enqueue(
+            answer.workspaceId,
+            answer.messageId,
+            "message",
+            "upsert",
+            {
+              id: answer.messageId,
+              chatId: answer.chatId,
+              role: "assistant",
+              body: answer.body,
+              createdAt: answer.createdAt,
+            },
+          );
+        });
+        this.db
+          .prepare(
+            "UPDATE maintenance_tasks SET completed_at=? WHERE id='execution_sections_v1' AND completed_at IS NULL",
+          )
+          .run(now());
+      });
     this.reconcileInterruptedAutomationProvisioning();
     this.reconcileInterruptedExecutions();
     this.reconcileInterruptedToolReceipts();
@@ -1058,6 +1087,15 @@ export class WorkspaceStore {
               PRIMARY KEY(workspace_id,lane)
             );
           `),
+      },
+    ]);
+    runMigrations(this.db, schemaVersion(this.db), [
+      {
+        version: 48,
+        apply: (database) =>
+          database.exec(
+            "CREATE TABLE IF NOT EXISTS maintenance_tasks(id TEXT PRIMARY KEY,completed_at TEXT);INSERT OR IGNORE INTO maintenance_tasks(id,completed_at) VALUES ('execution_sections_v1',NULL);CREATE INDEX IF NOT EXISTS idx_activities_action_created ON activities(action,created_at DESC,id)",
+          ),
       },
     ]);
     this.db
