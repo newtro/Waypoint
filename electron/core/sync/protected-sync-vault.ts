@@ -43,6 +43,11 @@ export interface ProtectedPendingEnrollment {
   request: EnrollmentRequest;
   endpoint: string;
   transport?: { mode: "hosted-relay" } | DesktopHostDescriptor;
+  submission?: {
+    invitationId: string;
+    invitationSecret: string;
+    status: "prepared" | "submitted";
+  };
 }
 export interface ProtectedPeerHostIdentity {
   version: 1;
@@ -68,6 +73,7 @@ export class ProtectedSyncVault {
       temporary = `${target}.${process.pid}.${Date.now()}.partial`,
       backup = `${target}.backup`;
     try {
+      this.restoreBackupIfNeeded(target);
       writeFileSync(
         temporary,
         Buffer.from(this.protector.encrypt(JSON.stringify(value))),
@@ -84,6 +90,7 @@ export class ProtectedSyncVault {
       }
       syncDirectory(this.root);
       rmSync(backup, { force: true });
+      syncDirectory(this.root);
     } catch (error) {
       rmSync(temporary, { force: true });
       throw error;
@@ -93,13 +100,15 @@ export class ProtectedSyncVault {
     if (!ID.test(workspaceId)) throw new Error("Invalid workspace identity");
     const target = this.path(workspaceId),
       backup = `${target}.backup`;
+    this.restoreBackupIfNeeded(target);
     let bytes: Buffer;
     try {
       bytes = readFileSync(target);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       if (!existsSync(backup)) return undefined;
-      bytes = readFileSync(backup);
+      this.restoreBackupIfNeeded(target);
+      bytes = readFileSync(target);
     }
     let value: unknown;
     try {
@@ -120,6 +129,7 @@ export class ProtectedSyncVault {
     rmSync(`${this.pendingPath(workspaceId)}.backup`, { force: true });
     rmSync(this.hostPath(workspaceId), { force: true });
     rmSync(`${this.hostPath(workspaceId)}.backup`, { force: true });
+    syncDirectory(this.root);
   }
   savePending(value: ProtectedPendingEnrollment): void {
     validatePending(value);
@@ -136,6 +146,8 @@ export class ProtectedSyncVault {
   removePending(workspaceId: string): void {
     if (!ID.test(workspaceId)) throw new Error("Invalid workspace identity");
     rmSync(this.pendingPath(workspaceId), { force: true });
+    rmSync(`${this.pendingPath(workspaceId)}.backup`, { force: true });
+    syncDirectory(this.root);
   }
   saveHostIdentity(value: ProtectedPeerHostIdentity): void {
     validateHostIdentity(value);
@@ -152,11 +164,14 @@ export class ProtectedSyncVault {
   removeHostIdentity(workspaceId: string): void {
     if (!ID.test(workspaceId)) throw new Error("Invalid workspace identity");
     rmSync(this.hostPath(workspaceId), { force: true });
+    rmSync(`${this.hostPath(workspaceId)}.backup`, { force: true });
+    syncDirectory(this.root);
   }
   private write(target: string, value: unknown): void {
     const temporary = `${target}.${process.pid}.${Date.now()}.partial`,
       backup = `${target}.backup`;
     try {
+      this.restoreBackupIfNeeded(target);
       writeFileSync(
         temporary,
         Buffer.from(this.protector.encrypt(JSON.stringify(value))),
@@ -173,6 +188,7 @@ export class ProtectedSyncVault {
       }
       syncDirectory(this.root);
       rmSync(backup, { force: true });
+      syncDirectory(this.root);
     } catch (error) {
       rmSync(temporary, { force: true });
       throw error;
@@ -180,19 +196,27 @@ export class ProtectedSyncVault {
   }
   private read(target: string): unknown | undefined {
     const backup = `${target}.backup`;
+    this.restoreBackupIfNeeded(target);
     let bytes: Buffer;
     try {
       bytes = readFileSync(target);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       if (!existsSync(backup)) return undefined;
-      bytes = readFileSync(backup);
+      this.restoreBackupIfNeeded(target);
+      bytes = readFileSync(target);
     }
     try {
       return JSON.parse(this.protector.decrypt(bytes));
     } catch {
       throw new Error("Protected sync identity cannot be opened");
     }
+  }
+  private restoreBackupIfNeeded(target: string): void {
+    const backup = `${target}.backup`;
+    if (existsSync(target) || !existsSync(backup)) return;
+    renameSync(backup, target);
+    syncDirectory(this.root);
   }
   private path(workspaceId: string) {
     return path.join(this.root, `${workspaceId}.protected`);
@@ -286,7 +310,11 @@ function validatePending(
     item.request.workspaceId !== item.workspaceId ||
     item.request.device.deviceId !== item.device.deviceId ||
     !validBase64(item.device.signingPrivateKey, 64) ||
-    !validBase64(item.device.encryptionPrivateKey, 32)
+    !validBase64(item.device.encryptionPrivateKey, 32) ||
+    (item.submission !== undefined &&
+      (!ID.test(item.submission.invitationId) ||
+        !validBase64(item.submission.invitationSecret, 32) ||
+        !["prepared", "submitted"].includes(item.submission.status)))
   )
     throw new Error("Invalid protected pending enrollment");
 }

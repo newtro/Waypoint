@@ -6,6 +6,7 @@ import {
   dialog,
   globalShortcut,
   ipcMain,
+  Menu,
   nativeImage,
   Notification,
   protocol,
@@ -13,16 +14,19 @@ import {
   screen,
   shell,
   systemPreferences,
+  Tray,
 } from "electron";
 import type {
   Display,
   IpcMainInvokeEvent,
+  MenuItemConstructorOptions,
   NativeImage,
   WebContents,
 } from "electron";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { hostname, totalmem } from "node:os";
 import {
   accessSync,
   constants,
@@ -35,6 +39,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   statfsSync,
@@ -45,6 +50,7 @@ import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { Readable } from "node:stream";
 import { WorkspaceStore } from "./core/store.js";
+import { syncDirectoryDurably } from "./core/durable-fs.js";
 import {
   autoTitleMayStart,
   minimalTitlePrompt,
@@ -148,8 +154,37 @@ import {
   type WindowBounds,
 } from "./core/window-state.js";
 import { ProtectedSyncVault } from "./core/sync/protected-sync-vault.js";
+import { SyncLeaveIntentStore } from "./core/sync/sync-leave-intent.js";
 import { DesktopSyncService } from "./core/sync/desktop-sync-service.js";
 import { PeerHostRuntime } from "./core/sync/peer-host-runtime.js";
+import { reconcileProtectedSyncDevices } from "./core/sync/sync-device-reconciliation.js";
+import { ProtectedDeviceVault } from "./core/device-fabric/protected-device-vault.js";
+import { DeviceFabricService } from "./core/device-fabric/device-fabric-service.js";
+import { DeviceNetworkRuntime } from "./core/device-fabric/device-network-runtime.js";
+import {
+  FleetCacheService,
+  fleetFetchFailureAction,
+} from "./core/device-fabric/fleet-cache-service.js";
+import {
+  createFleetRemoteWorkOrder,
+  FleetRemoteWorkService,
+} from "./core/device-fabric/fleet-remote-work-service.js";
+import {
+  applyFleetResultPatch,
+  discardFleetWorktree,
+  fleetWorktreeResult,
+  inspectGitRepository,
+  materializeFleetWorktree,
+  prepareFleetGitHandoff,
+} from "./core/device-fabric/fleet-git-handoff.js";
+import {
+  DeviceHostPreferenceStore,
+  type DeviceHostPreferences,
+} from "./core/device-fabric/device-host-preferences.js";
+import {
+  buildDeviceTrayCommands,
+  shouldHideWindowOnClose,
+} from "./core/device-fabric/device-host-lifecycle.js";
 import { recordSyncActivityBestEffort } from "./core/activity-recording.js";
 import { assertRoute, proposeRoute } from "./core/provider-routing.js";
 import {
@@ -275,6 +310,16 @@ protocol.registerSchemesAsPrivileged([
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 let store: WorkspaceStore;
 let syncService: DesktopSyncService;
+let deviceFabricService: DeviceFabricService;
+let deviceNetworkRuntime: DeviceNetworkRuntime;
+let fleetCacheService: FleetCacheService;
+let fleetRemoteWorkService: FleetRemoteWorkService;
+let fleetWorktreeRoot: string;
+let deviceHostPreferenceStore: DeviceHostPreferenceStore;
+let deviceHostPreferences: DeviceHostPreferences;
+let deviceTray: Tray | undefined;
+let explicitQuit = false;
+let backgroundLaunch = process.argv.includes("--background");
 let productHelpLibrary: ProductHelpLibrary | undefined;
 const meetingPlaybackGrants = new Map<
   string,
@@ -418,6 +463,7 @@ async function prepareAutomationProposal(
   return proposal;
 }
 let syncVault: ProtectedSyncVault;
+let syncLeaveIntentStore: SyncLeaveIntentStore;
 let peerHostRuntime: PeerHostRuntime;
 const activeSyncRuns = new Set<string>();
 const activeWebhookRuns = new Set<string>();
@@ -492,10 +538,7 @@ let captureShortcutState = {
 };
 let captureShortcutSuspended = false;
 let quickCaptureActive = false;
-let cachedMacCaptureCodeIdentity:
-  | "stable"
-  | "version-specific"
-  | "unknown";
+let cachedMacCaptureCodeIdentity: "stable" | "version-specific" | "unknown";
 const pendingQuickCaptures = new Map<
   string,
   {
@@ -519,9 +562,7 @@ function captureWindow(): BrowserWindow | undefined {
 }
 
 function installedMacCaptureCodeIdentity():
-  | "stable"
-  | "version-specific"
-  | "unknown" {
+  "stable" | "version-specific" | "unknown" {
   if (process.platform !== "darwin") return "unknown";
   if (cachedMacCaptureCodeIdentity) return cachedMacCaptureCodeIdentity;
   try {
@@ -546,11 +587,7 @@ function installedMacCaptureCodeIdentity():
 function macScreenCapturePermission() {
   return process.platform === "darwin"
     ? (systemPreferences.getMediaAccessStatus("screen") as
-        | "granted"
-        | "denied"
-        | "restricted"
-        | "not-determined"
-        | "unknown")
+        "granted" | "denied" | "restricted" | "not-determined" | "unknown")
     : "unknown";
 }
 
@@ -1327,6 +1364,361 @@ const activeRemoteExecutions = new Map<
   string,
   { workspaceId: string; runId: string; provider: "codex" | "claude" | "grok" }
 >();
+const activeFleetRemoteExecutions = new Map<
+  string,
+  {
+    runId: string;
+    provider: "codex" | "claude" | "grok";
+    controller: AbortController;
+  }
+>();
+const fleetProviderApprovalWaiters = new Map<
+  string,
+  {
+    jobId: string;
+    resolve(decision: CodexProviderDecision): void;
+    abort(): void;
+  }
+>();
+let processingFleetRemoteWork = false,
+  reconcilingFleetControllerWork = false;
+
+function cancelFleetProviderRun(
+  provider: "codex" | "claude" | "grok",
+  runId: string,
+): void {
+  if (provider === "codex") codexWorkbench.cancel(runId);
+  else if (provider === "claude") claudeWorkbench.cancel(runId);
+  else grokWorkbench.cancel(runId);
+}
+
+function cancelActiveFleetExecution(jobId: string): void {
+  for (const [requestId, waiter] of fleetProviderApprovalWaiters)
+    if (waiter.jobId === jobId) {
+      waiter.resolve({ status: "canceled", decision: {} });
+      waiter.abort();
+      fleetProviderApprovalWaiters.delete(requestId);
+    }
+  const active = activeFleetRemoteExecutions.get(jobId);
+  if (!active) return;
+  active.controller.abort();
+  cancelFleetProviderRun(active.provider, active.runId);
+}
+
+function awaitFleetOperation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("fleet_remote_canceled"));
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => reject(new Error("fleet_remote_canceled"));
+    signal.addEventListener("abort", aborted, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", aborted);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", aborted);
+        reject(error);
+      },
+    );
+  });
+}
+
+function awaitFleetProviderApproval(
+  jobId: string,
+  mode: "supervised" | "autonomous",
+  request: CodexApprovalRequest,
+  signal: AbortSignal,
+  secretNames: string[],
+): Promise<CodexProviderDecision> {
+  if (mode === "autonomous")
+    return Promise.resolve({ status: "accepted_session", decision: {} });
+  const requestId = randomUUID(),
+    detail = redactToolText(JSON.stringify(request.detail), secretNames).slice(
+      0,
+      4_000,
+    );
+  fleetRemoteWorkService.requestProviderApproval(jobId, {
+    requestId,
+    kind: request.kind,
+    title: redactToolText(request.title, secretNames).slice(0, 500),
+    detail,
+    createdAt: new Date().toISOString(),
+  });
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      fleetProviderApprovalWaiters.delete(requestId);
+      resolve({ status: "canceled", decision: {} });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    fleetProviderApprovalWaiters.set(requestId, {
+      jobId,
+      resolve: (decision) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(decision);
+      },
+      abort: () => signal.removeEventListener("abort", onAbort),
+    });
+  });
+}
+
+function fleetEligibleProfile(targetRoot: string, profileId: string) {
+  const normalized = path.resolve(targetRoot),
+    comparison = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return store
+    .listWorkspaces()
+    .flatMap((workspace) => store.listSecurityProfiles(workspace.id))
+    .find(
+      (profile) =>
+        profile.id === profileId &&
+        profile.peerEligible &&
+        profile.roots.some((root) => {
+          const candidate = path.resolve(root),
+            value = process.platform === "win32" ? candidate.toLowerCase() : candidate;
+          return value === comparison;
+        }),
+    );
+}
+
+function sameFleetPath(left: string, right: string): boolean {
+  const a = path.resolve(left),
+    b = path.resolve(right);
+  return process.platform === "win32"
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b;
+}
+
+async function processFleetRemoteWork() {
+  if (processingFleetRemoteWork || deviceHostPreferences?.pauseWork) return;
+  processingFleetRemoteWork = true;
+  try {
+    const claimed = fleetRemoteWorkService.claim();
+    if (!claimed) return;
+    const { order } = claimed,
+      profile = fleetEligibleProfile(order.targetRoot, order.targetProfileId);
+    let worktreePath: string | undefined,
+      deadlineTimer: NodeJS.Timeout | undefined,
+      timedOut = false;
+    try {
+      if (!profile) throw new Error("fleet_remote_root_not_authorized");
+      const runId = `fleet-${order.jobId}`,
+        controller = new AbortController(),
+        orderDeadline = Date.parse(order.createdAt) + order.timeoutMs,
+        profileDeadline =
+          profile.maxDurationMs > 0
+            ? Date.now() + profile.maxDurationMs
+            : orderDeadline,
+        deadline = Math.min(orderDeadline, profileDeadline),
+        remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new Error("fleet_remote_timeout");
+      activeFleetRemoteExecutions.set(order.jobId, {
+        runId,
+        provider: order.provider,
+        controller,
+      });
+      deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        cancelActiveFleetExecution(order.jobId);
+      }, remainingMs);
+      const worktree = (worktreePath = await materializeFleetWorktree({
+          orderId: order.jobId,
+          authorizedRoot: order.targetRoot,
+          managedRoot: fleetWorktreeRoot,
+          handoff: order.handoff,
+          signal: controller.signal,
+        })),
+        resultBaseCommit = (
+          await inspectGitRepository(worktree, controller.signal)
+        ).headCommit,
+        capability = await detectCli(order.provider, {
+          signal: controller.signal,
+        });
+      if (
+        !capability.available ||
+        capability.compatible === false ||
+        !capability.executable
+      )
+        throw new Error(
+          capability.compatibilityError ??
+            `fleet_remote_${order.provider}_unavailable`,
+        );
+      if (
+        order.providerVersion !== undefined &&
+        capability.version !== order.providerVersion
+      )
+        throw new Error(`fleet_remote_${order.provider}_version_changed`);
+      const executionLimitMs = Math.max(1, deadline - Date.now());
+      if (controller.signal.aborted || executionLimitMs <= 0)
+        throw new Error("fleet_remote_timeout");
+      let output = "",
+        outputTruncated = false;
+      const request = {
+          prompt: order.instruction,
+          workspaceRoot: worktree,
+          profile: {
+            ...profile,
+            roots: [worktree],
+            maxDurationMs: executionLimitMs,
+            maxConcurrency: 1,
+            secretNames: [],
+          },
+          executable: capability.executable,
+          version: capability.version,
+          beforeSpawn: () => {
+            if (controller.signal.aborted)
+              throw new Error(
+                timedOut ? "fleet_remote_timeout" : "fleet_remote_canceled",
+              );
+          },
+        },
+        sharedRequest = {
+          ...request,
+          onSession: () => undefined,
+          beforeTurn: () => {
+            if (
+              controller.signal.aborted ||
+              fleetRemoteWorkService.record(order.jobId).status !== "running" ||
+              !fleetEligibleProfile(order.targetRoot, order.targetProfileId)
+            )
+              throw new Error("fleet_remote_authority_changed");
+          },
+          onApproval: (providerRequest: CodexApprovalRequest, signal: AbortSignal) =>
+            awaitFleetProviderApproval(
+              order.jobId,
+              order.mode,
+              providerRequest,
+              signal,
+              profile.secretNames,
+            ),
+        },
+        onEvent = (event: ExecutionEvent) => {
+          if (event.type !== "text" || !event.text) return;
+          const safe = redactToolText(event.text, profile.secretNames),
+            available = 3_200 - output.length;
+          if (available <= 0) outputTruncated = true;
+          else {
+            output += safe.slice(0, available);
+            if (safe.length > available) outputTruncated = true;
+          }
+        },
+        startOperation =
+          order.provider === "codex"
+            ? codexWorkbench.start(
+                runId,
+                { ...sharedRequest, cli: "codex" },
+                onEvent,
+              )
+            : order.provider === "claude"
+              ? claudeWorkbench.start(
+                  runId,
+                  { ...sharedRequest, cli: "claude" },
+                  onEvent,
+                )
+              : grokWorkbench.start(
+                  runId,
+                  { ...sharedRequest, cli: "grok" },
+                  onEvent,
+                );
+      void startOperation
+        .then(() => {
+          if (controller.signal.aborted)
+            cancelFleetProviderRun(order.provider, runId);
+        })
+        .catch(() => undefined);
+      const running = await awaitFleetOperation(
+          startOperation,
+          controller.signal,
+        ),
+        terminal = await awaitFleetOperation(
+          running.completion,
+          controller.signal,
+        );
+      if (terminal.status !== "completed")
+        throw new Error(
+          terminal.error === "fleet_remote_timeout"
+            ? terminal.error
+            : `fleet_remote_${order.provider}_${terminal.status}`,
+        );
+      const result = await fleetWorktreeResult(
+          worktree,
+          resultBaseCommit,
+          controller.signal,
+        ),
+        resultNote = result.dirty
+          ? ` Returned ${result.status.length} changed path${result.status.length === 1 ? "" : "s"}; patch ${result.patchSha256.slice(0, 12)}… is ready for review.`
+          : " The isolated worktree is clean.";
+      fleetRemoteWorkService.finish(
+        order.jobId,
+        "completed",
+        `${output.trim() || `${order.provider} completed without text`}${outputTruncated ? " [output truncated and redacted]" : ""}${resultNote}`,
+        {
+          worktreePath: worktree,
+          resultArtifact: {
+            patchBase64: result.patchBase64,
+            patchSha256: result.patchSha256,
+            baseCommit: order.handoff?.baseCommit ?? resultBaseCommit,
+            status: result.status,
+          },
+        },
+      );
+    } catch (error) {
+      try {
+        fleetRemoteWorkService.finish(
+          order.jobId,
+          "failed",
+          "Target device could not complete the remote work order",
+          {
+            errorCode:
+              timedOut
+                ? "fleet_remote_timeout"
+                : error instanceof Error
+                  ? error.message
+                  : "fleet_remote_failed",
+            ...(worktreePath ? { worktreePath } : {}),
+          },
+        );
+      } catch {
+        /* cancellation won */
+      }
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      activeFleetRemoteExecutions.delete(order.jobId);
+    }
+  } finally {
+    processingFleetRemoteWork = false;
+    if (fleetRemoteWorkService?.list().some((job) => job.status === "queued"))
+      setImmediate(() => void processFleetRemoteWork());
+  }
+}
+
+async function reconcileFleetControllerWork(): Promise<void> {
+  if (reconcilingFleetControllerWork) return;
+  reconcilingFleetControllerWork = true;
+  try {
+    fleetRemoteWorkService.expireControllerPending();
+    const staged = fleetRemoteWorkService
+      .controllerJobs()
+      .filter(
+        (job) =>
+          job.status === "queued" &&
+          job.events[0]?.message === "Submitting exact work order to target",
+      );
+    for (const job of staged)
+      try {
+        const record = await deviceNetworkRuntime.submitRemoteWork(
+          job.order.targetDeviceId,
+          job.order,
+        );
+        fleetRemoteWorkService.trackController(record);
+      } catch {
+        // The exact durable order remains queued for the next online retry.
+      }
+  } finally {
+    reconcilingFleetControllerWork = false;
+  }
+}
 let browserClosure: ReturnType<typeof verifyBrowserClosure> | undefined,
   browserClosureError = "Browser closure has not been verified.";
 let inAppBrowser: InAppBrowserController;
@@ -1339,6 +1731,7 @@ const killedReflectionWorkspaces = new Set<string>();
 const cancelledReflectionReservations = new Set<string>();
 
 async function processRemoteJobs(workspaceId: string) {
+  if (deviceHostPreferences?.pauseWork) return;
   const sync = syncService.status(workspaceId);
   if (!sync.configured || !sync.deviceId || activeRemoteJobs.has(workspaceId))
     return;
@@ -2254,6 +2647,51 @@ function openRouterSettingsInput(input: unknown): OpenRouterSettings {
     perRequestCapMicros: Number(value.perRequestCapMicros),
     warningPercent: Number(value.warningPercent),
   };
+}
+
+async function finishSyncLeave(workspaceId: string, requireIdle = false) {
+  return syncService.leave(
+    workspaceId,
+    () => {
+      if (
+        requireIdle &&
+        (activeSyncRuns.has(workspaceId) ||
+          activeWebhookRuns.has(workspaceId) ||
+          activeRemoteJobs.has(workspaceId) ||
+          [...activeRemoteExecutions.values()].some(
+            (run) => run.workspaceId === workspaceId,
+          ))
+      )
+        throw new Error(
+          "Wait for active sync or remote work to finish before leaving sync on this device",
+        );
+      syncLeaveIntentStore.begin(workspaceId);
+    },
+    () => {
+      const workspace = store
+        .listWorkspaces()
+        .find((item) => item.id === workspaceId);
+      if (workspace) {
+        const policy = store.deviceControlPolicy(workspaceId);
+        if (policy.enabled || policy.preferredDeviceId)
+          store.setDeviceControlPolicy(workspaceId, {
+            ...policy,
+            enabled: false,
+            preferredDeviceId: undefined,
+          });
+        store.resetSyncDevice(workspaceId);
+      }
+      const peerHostRoot = path.join(app.getPath("userData"), "peer-host");
+      if (existsSync(peerHostRoot)) {
+        rmSync(path.join(peerHostRoot, workspaceId), {
+          recursive: true,
+          force: true,
+        });
+        syncDirectoryDurably(peerHostRoot);
+      }
+      syncLeaveIntentStore.complete(workspaceId);
+    },
+  );
 }
 
 function registerIpc(): void {
@@ -3308,10 +3746,7 @@ function registerIpc(): void {
       ["openrouterAttachment", settings.attachmentModel],
     ] as const) {
       const effort = nextThinking[lane];
-      if (
-        effort &&
-        !openRouterModelThinking(model)?.supported.includes(effort)
-      )
+      if (effort && !openRouterModelThinking(model)?.supported.includes(effort))
         throw new Error(
           `The ${lane} thinking level is not supported by its selected model`,
         );
@@ -3499,8 +3934,7 @@ function registerIpc(): void {
     const approvedHostedOperations = new Set<string>();
     let nativeAutomationSummary: string | undefined,
       nativeAutomationResult:
-        | { proposalId: string; status: string; summary?: string }
-        | undefined,
+        { proposalId: string; status: string; summary?: string } | undefined,
       nativeAutomationInFlight:
         | Promise<{ proposalId: string; status: string; summary?: string }>
         | undefined;
@@ -4475,6 +4909,659 @@ function registerIpc(): void {
       text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
     ),
   );
+  handle("waypoint:device-fabric-status", () => deviceFabricService.status());
+  handle("waypoint:device-network-status", () => ({
+    ...deviceNetworkRuntime.status(),
+    preferences: { ...deviceHostPreferences },
+  }));
+  handle("waypoint:device-network-catalog", async () => {
+    const status = deviceNetworkRuntime.status(),
+      refreshable = status.peers.filter(
+        (peer) =>
+          peer.trusted &&
+          peer.online &&
+          peer.capabilities.includes("workspace-catalog"),
+      );
+    await Promise.allSettled(
+      refreshable.map((peer) => deviceNetworkRuntime.refreshCatalog(peer.deviceId)),
+    );
+    const live = deviceNetworkRuntime.catalog(),
+      allowed = new Set(
+        deviceFabricService
+          .trustedDevices()
+          .map((peer) => peer.device.deviceId),
+      ),
+      persisted = fleetCacheService.catalogs(allowed);
+    return [
+      ...live,
+      ...persisted.filter(
+        (catalog) =>
+          !live.some((candidate) => candidate.deviceId === catalog.deviceId),
+      ),
+    ];
+  });
+  handle("waypoint:device-network-search", async (_event, input: unknown) => {
+    const query = text(
+        (input as Record<string, unknown>).query,
+        "fleet search query",
+        500,
+      ).trim(),
+      limitValue = Number((input as Record<string, unknown>).limit ?? 20),
+      limit =
+        Number.isInteger(limitValue) && limitValue >= 1 && limitValue <= 50
+          ? limitValue
+          : 20,
+      localDeviceId = deviceFabricService.status().localDeviceId,
+      local = store
+        .listWorkspaces()
+        .flatMap((workspace) =>
+          store.searchText(workspace.id, query, limit).map((result) => ({
+            sourceDeviceId: localDeviceId,
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
+            ...result,
+          })),
+        ),
+      trustedPeers = deviceNetworkRuntime
+        .status()
+        .peers.filter((peer) => peer.trusted),
+      peers = trustedPeers.filter(
+          (peer) =>
+            peer.online &&
+            peer.capabilities.includes("fleet-search"),
+        ),
+      remote = await Promise.allSettled(
+        peers.map((peer) =>
+          deviceNetworkRuntime.searchDevice(peer.deviceId, query, limit),
+        ),
+      ),
+      cachedSourceIds = new Set([
+        ...trustedPeers
+          .filter(
+            (peer) =>
+              !peer.online || !peer.capabilities.includes("fleet-search"),
+          )
+          .map((peer) => peer.deviceId),
+        ...remote.flatMap((result, index) =>
+          result.status === "rejected" || result.value.partial
+            ? [peers[index].deviceId]
+            : [],
+        ),
+      ]),
+      unavailableDeviceIds = [
+        ...trustedPeers
+          .filter(
+            (peer) =>
+              !peer.online || !peer.capabilities.includes("fleet-search"),
+          )
+          .map((peer) => peer.deviceId),
+        ...remote.flatMap((result, index) =>
+          result.status === "rejected" || result.value.partial
+            ? [peers[index].deviceId]
+            : [],
+        ),
+      ].filter((deviceId, index, values) => values.indexOf(deviceId) === index),
+      candidates = [
+        ...local,
+        ...remote.flatMap((result) =>
+          result.status === "fulfilled" ? result.value.results : [],
+        ),
+        ...fleetCacheService.searchCached(query, cachedSourceIds, limit),
+      ],
+      results = candidates
+        .filter(
+          (result, index) =>
+            candidates.findIndex(
+              (candidate) =>
+                candidate.sourceDeviceId === result.sourceDeviceId &&
+                candidate.workspaceId === result.workspaceId &&
+                candidate.objectId === result.objectId,
+            ) === index,
+        )
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            left.workspaceId.localeCompare(right.workspaceId) ||
+            left.objectId.localeCompare(right.objectId),
+        )
+        .slice(0, limit);
+    return {
+      query,
+      partial: unavailableDeviceIds.length > 0,
+      unavailableDeviceIds,
+      results,
+    };
+  });
+  handle(
+    "waypoint:device-network-pair-request",
+    async (_event, input: unknown) => {
+      await deviceNetworkRuntime.requestPairing(
+        text((input as Record<string, unknown>).deviceId, "device ID", 128),
+      );
+      return {
+        ...deviceNetworkRuntime.status(),
+        preferences: { ...deviceHostPreferences },
+      };
+    },
+  );
+  handle(
+    "waypoint:device-network-pair-confirm",
+    async (_event, input: unknown) => {
+      await deviceNetworkRuntime.confirmPairing(
+        text(
+          (input as Record<string, unknown>).sessionId,
+          "pairing session",
+          128,
+        ),
+      );
+      return {
+        ...deviceNetworkRuntime.status(),
+        preferences: { ...deviceHostPreferences },
+      };
+    },
+  );
+  handle("waypoint:device-network-unlink", (_event, input: unknown) => {
+    const deviceId = text(
+      (input as Record<string, unknown>).deviceId,
+      "device ID",
+      128,
+    );
+    for (const workspace of store.listWorkspaces())
+      fleetCacheService.rotateAuthoritativeGrant(
+        workspace.id,
+        deviceFabricService.status().localDeviceId,
+      );
+    fleetCacheService.revokeSource(deviceId);
+    for (const jobId of fleetRemoteWorkService.cancelByController(deviceId)) {
+      cancelActiveFleetExecution(jobId);
+    }
+    return {
+      ...deviceNetworkRuntime.unlink(deviceId),
+      preferences: { ...deviceHostPreferences },
+    };
+  });
+  handle("waypoint:device-network-open-object", async (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      sourceDeviceId = text(value.sourceDeviceId, "source device ID", 128),
+      workspaceId = text(value.workspaceId, "workspace ID", 128),
+      objectId = text(value.objectId, "object ID", 128),
+      objectKind = text(value.objectKind, "object kind", 64),
+      requireFreshAuthorization = value.requireFreshAuthorization === true;
+    if (sourceDeviceId === deviceFabricService.status().localDeviceId)
+      throw new Error("This result is local; open it from its workspace");
+    if (
+      !deviceFabricService
+        .trustedDevices()
+        .some((peer) => peer.device.deviceId === sourceDeviceId)
+    )
+      throw new Error("Fleet source is no longer actively trusted");
+    let plaintext = fleetCacheService.openCachedObject(
+      sourceDeviceId,
+      workspaceId,
+      objectId,
+    );
+    const sourceOnline = deviceNetworkRuntime
+      .status()
+      .peers.some((peer) => peer.deviceId === sourceDeviceId && peer.online);
+    if (requireFreshAuthorization && !sourceOnline)
+      throw new Error(
+        "Fleet source must be online to confirm this work-order context",
+      );
+    if (sourceOnline || !plaintext) {
+      if (!fleetCacheService.grant(workspaceId, sourceDeviceId)) {
+        const envelope = await deviceNetworkRuntime.requestWorkspaceGrant(
+          sourceDeviceId,
+          workspaceId,
+        );
+        fleetCacheService.acceptGrant({
+          workspaceId,
+          sourceDeviceId,
+          keyEpoch: envelope.keyEpoch,
+          workspaceKey: deviceFabricService.unwrapWorkspaceKeyFromDevice(
+            envelope.wrappedWorkspaceKey,
+          ),
+          grantedAt: envelope.grantedAt,
+        });
+      }
+      try {
+        plaintext = fleetCacheService.cacheEncryptedObject(
+          await deviceNetworkRuntime.fetchEncryptedObject(sourceDeviceId, {
+            workspaceId,
+            objectId,
+            objectKind,
+          }),
+        );
+      } catch (error) {
+        const action = fleetFetchFailureAction(error, Boolean(plaintext));
+        if (action === "discard") {
+          fleetCacheService.removeCachedObject(
+            sourceDeviceId,
+            workspaceId,
+            objectId,
+          );
+          throw error;
+        }
+        if (action === "fallback" && plaintext && !requireFreshAuthorization) {
+          return {
+            ...(JSON.parse(plaintext) as Record<string, unknown>),
+            cache: { sourceOnline: false, encrypted: true },
+          };
+        }
+        throw error;
+      }
+    }
+    return {
+      ...(JSON.parse(plaintext) as Record<string, unknown>),
+      cache: { sourceOnline, encrypted: true },
+    };
+  });
+  handle("waypoint:device-network-pin-workspace", async (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      workspaceId = text(value.workspaceId, "workspace ID", 128),
+      sourceDeviceId = text(value.sourceDeviceId, "source device ID", 128);
+    if (sourceDeviceId === deviceFabricService.status().localDeviceId)
+      throw new Error("A local workspace does not need a fleet cache pin");
+    if (
+      !deviceFabricService
+        .trustedDevices()
+        .some((peer) => peer.device.deviceId === sourceDeviceId)
+    )
+      throw new Error("Fleet source is no longer actively trusted");
+    if (typeof value.pinned !== "boolean")
+      throw new Error("Fleet workspace pin state is invalid");
+    if (value.pinned) {
+      fleetCacheService.setPinned(sourceDeviceId, workspaceId, true, {
+        completeWithinBounds: false,
+      });
+      if (!fleetCacheService.grant(workspaceId, sourceDeviceId)) {
+        const envelope = await deviceNetworkRuntime.requestWorkspaceGrant(
+          sourceDeviceId,
+          workspaceId,
+        );
+        fleetCacheService.acceptGrant({
+          workspaceId,
+          sourceDeviceId,
+          keyEpoch: envelope.keyEpoch,
+          workspaceKey: deviceFabricService.unwrapWorkspaceKeyFromDevice(
+            envelope.wrappedWorkspaceKey,
+          ),
+          grantedAt: envelope.grantedAt,
+        });
+      }
+      const inventory = await deviceNetworkRuntime.fetchWorkspaceInventory(
+        sourceDeviceId,
+        workspaceId,
+      );
+      fleetCacheService.reconcileInventory(
+        sourceDeviceId,
+        workspaceId,
+        inventory.objects.map((object) => object.objectId),
+      );
+      for (let index = 0; index < inventory.objects.length; index += 8) {
+        const batch = inventory.objects.slice(index, index + 8),
+          encrypted = await Promise.all(
+            batch.map((object) =>
+              deviceNetworkRuntime.fetchEncryptedObject(sourceDeviceId, {
+                workspaceId,
+                ...object,
+              }),
+            ),
+          );
+        for (const object of encrypted)
+          fleetCacheService.cacheEncryptedObject(object);
+      }
+      const objectIds = inventory.objects.map((object) => object.objectId);
+      if (
+        !fleetCacheService.hasCompleteInventory(
+          sourceDeviceId,
+          workspaceId,
+          objectIds,
+        )
+      )
+        throw new Error("Fleet workspace pin did not cache the complete inventory");
+      fleetCacheService.setPinned(sourceDeviceId, workspaceId, true, {
+        completeWithinBounds: true,
+        attachmentLimitBytes: inventory.attachmentLimitBytes,
+        omittedAttachments: inventory.omittedAttachments,
+      });
+      return {
+        ...fleetCacheService.status(),
+        completeWithinBounds: true,
+        attachmentLimitBytes: inventory.attachmentLimitBytes,
+        omittedAttachments: inventory.omittedAttachments,
+      };
+    }
+    fleetCacheService.setPinned(sourceDeviceId, workspaceId, false);
+    return fleetCacheService.status();
+  });
+  handle("waypoint:device-network-cache-status", () =>
+    fleetCacheService.status(),
+  );
+  handle("waypoint:device-network-worker-inventory", (_event, input: unknown) =>
+    deviceNetworkRuntime.fetchWorkerInventory(
+      text(
+        (input as Record<string, unknown>).deviceId,
+        "target device ID",
+        128,
+      ),
+    ),
+  );
+  handle("waypoint:device-network-work-dispatch", async (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      targetDeviceId = text(value.targetDeviceId, "target device ID", 128),
+      provider = String(value.provider),
+      requestedMode = String(value.mode),
+      trust = deviceFabricService
+        .trustedDevices()
+        .find((peer) => peer.device.deviceId === targetDeviceId),
+      mode = ["supervised", "autonomous"].includes(requestedMode)
+        ? (requestedMode as "supervised" | "autonomous")
+        : trust?.defaultMode ?? "supervised";
+    if (!trust) throw new Error("Target device is not actively trusted");
+    if (!["codex", "claude", "grok"].includes(provider))
+      throw new Error("Remote work provider is invalid");
+    if (typeof value.model === "string" && value.model.trim())
+      throw new Error("Remote targets currently use their provider-default model");
+    const idempotencyKey = text(
+        value.idempotencyKey,
+        "idempotency key",
+        128,
+      ),
+      workspaceId = text(value.workspaceId, "workspace ID", 128),
+      sourceRoot =
+        typeof value.sourceRoot === "string" && value.sourceRoot.trim()
+          ? text(value.sourceRoot, "source repository root", 1_024)
+          : undefined,
+      sourceProfileId = text(
+        value.sourceProfileId,
+        "source authority profile ID",
+        128,
+      ),
+      sourceProfile = store
+        .listSecurityProfiles(workspaceId)
+        .find((profile) => profile.id === sourceProfileId);
+    if (
+      sourceRoot &&
+      (!sourceProfile ||
+        sourceProfile.filesystem !== "workspace-write" ||
+        !sourceProfile.roots.some((root) => sameFleetPath(root, sourceRoot)))
+    )
+      throw new Error(
+        "Source repository is outside the selected controller authority profile",
+      );
+    if (!sourceRoot)
+      throw new Error("Remote coding work requires a controller repository");
+    const instruction = text(value.instruction, "remote instruction", 8_000),
+      targetRoot = text(value.targetRoot, "target repository root", 1_024),
+      targetProfileId = text(
+        value.targetProfileId,
+        "target authority profile ID",
+        128,
+      ),
+      providerVersion =
+        typeof value.providerVersion === "string" && value.providerVersion.trim()
+          ? text(value.providerVersion, "target provider version", 200)
+          : undefined,
+      existing = fleetRemoteWorkService.controllerByIdempotencyKey(
+        idempotencyKey,
+      );
+    if (existing) {
+      const exactContract = existing.order;
+      if (
+        exactContract.targetDeviceId !== targetDeviceId ||
+        exactContract.workspaceId !== workspaceId ||
+        exactContract.provider !== provider ||
+        exactContract.mode !== mode ||
+        exactContract.instruction !== instruction ||
+        exactContract.controllerRoot !== sourceRoot ||
+        exactContract.controllerProfileId !== sourceProfileId ||
+        exactContract.targetRoot !== targetRoot ||
+        exactContract.targetProfileId !== targetProfileId ||
+        exactContract.providerVersion !== providerVersion
+      )
+        throw new Error("Remote work idempotency key belongs to another contract");
+      return fleetRemoteWorkService.trackController(
+        await deviceNetworkRuntime.submitRemoteWork(
+          targetDeviceId,
+          exactContract,
+        ),
+      );
+    }
+    const handoff = sourceRoot
+        ? await prepareFleetGitHandoff(
+            sourceRoot,
+            path.join(app.getPath("userData"), "fleet-handoff-scratch"),
+          )
+        : undefined;
+    const order = createFleetRemoteWorkOrder({
+      idempotencyKey,
+      controllerDeviceId: deviceFabricService.status().localDeviceId,
+      targetDeviceId,
+      workspaceId,
+      provider: provider as "codex" | "claude" | "grok",
+      ...(providerVersion ? { providerVersion } : {}),
+      mode,
+      instruction,
+      controllerRoot: sourceRoot,
+      controllerProfileId: sourceProfileId,
+      targetRoot,
+      targetProfileId,
+      timeoutMs: Math.min(
+        24 * 60 * 60_000,
+        Math.max(30_000, Number(value.timeoutMs ?? 30 * 60_000)),
+      ),
+      ...(handoff
+        ? { handoff }
+        : value.handoff
+          ? { handoff: value.handoff as never }
+          : {}),
+    });
+    fleetRemoteWorkService.stageController(order);
+    try {
+      return fleetRemoteWorkService.trackController(
+        await deviceNetworkRuntime.submitRemoteWork(targetDeviceId, order),
+      );
+    } catch (error) {
+    throw new Error(
+      `Remote submission response is unconfirmed. Job ${order.jobId} remains durably tracked and retry uses the same exact order. ${error instanceof Error ? error.message : "Target did not answer"}`,
+      { cause: error },
+    );
+    }
+  });
+  handle("waypoint:device-network-work-status", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      deviceId = text(value.deviceId, "target device ID", 128),
+      jobId = text(value.jobId, "remote job ID", 128),
+      expected = fleetRemoteWorkService
+        .controllerJobs()
+        .find(
+          (job) =>
+            job.order.jobId === jobId &&
+            job.order.targetDeviceId === deviceId,
+        );
+    if (!expected) throw new Error("Remote work controller record is unavailable");
+    return deviceNetworkRuntime
+      .remoteWorkStatus(
+        deviceId,
+        jobId,
+        expected.order,
+      )
+      .then((record) => fleetRemoteWorkService.trackController(record));
+  });
+  handle("waypoint:device-network-work-cancel", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      deviceId = text(value.deviceId, "target device ID", 128),
+      jobId = text(value.jobId, "remote job ID", 128),
+      expected = fleetRemoteWorkService
+        .controllerJobs()
+        .find(
+          (job) =>
+            job.order.jobId === jobId &&
+            job.order.targetDeviceId === deviceId,
+        );
+    if (!expected) throw new Error("Remote work controller record is unavailable");
+    return deviceNetworkRuntime
+      .cancelRemoteWork(
+        deviceId,
+        jobId,
+        expected.order,
+      )
+      .then((record) => fleetRemoteWorkService.trackController(record));
+  });
+  handle("waypoint:device-network-work-apply", async (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      deviceId = text(value.deviceId, "target device ID", 128),
+      jobId = text(value.jobId, "remote job ID", 128),
+      sourceRoot = text(value.sourceRoot, "source repository root", 1_024),
+      expected = fleetRemoteWorkService
+        .controllerJobs()
+        .find(
+          (job) =>
+            job.order.jobId === jobId &&
+            job.order.targetDeviceId === deviceId,
+        );
+    if (!expected) throw new Error("Remote work controller record is unavailable");
+    if (!sameFleetPath(sourceRoot, expected.order.controllerRoot))
+      throw new Error("Remote work result belongs to a different controller repository");
+    const controllerProfile = store
+      .listSecurityProfiles(expected.order.workspaceId)
+      .find((profile) => profile.id === expected.order.controllerProfileId);
+    if (
+      !controllerProfile ||
+      controllerProfile.filesystem !== "workspace-write" ||
+      !controllerProfile.roots.some(
+        (root) => sameFleetPath(root, sourceRoot),
+      )
+    )
+      throw new Error("Controller authority profile no longer permits this repository");
+    const record = await deviceNetworkRuntime.remoteWorkStatus(
+      deviceId,
+      jobId,
+      expected.order,
+    );
+    fleetRemoteWorkService.trackController(record);
+    if (record.status !== "completed" || !record.resultArtifact)
+      throw new Error("Remote work result patch is not available");
+    return applyFleetResultPatch({
+      repositoryRoot: sourceRoot,
+      scratchRoot: path.join(app.getPath("userData"), "fleet-result-scratch"),
+      patchBase64: record.resultArtifact.patchBase64,
+      patchSha256: record.resultArtifact.patchSha256,
+      expectedBaseCommit: record.resultArtifact.baseCommit,
+    });
+  });
+  handle("waypoint:device-network-work-discard", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      deviceId = text(value.deviceId, "target device ID", 128),
+      jobId = text(value.jobId, "remote job ID", 128),
+      expected = fleetRemoteWorkService
+        .controllerJobs()
+        .find(
+          (job) =>
+            job.order.jobId === jobId &&
+            job.order.targetDeviceId === deviceId,
+        );
+    if (!expected) throw new Error("Remote work controller record is unavailable");
+    return deviceNetworkRuntime
+      .discardRemoteWork(
+        deviceId,
+        jobId,
+        expected.order,
+      )
+      .then((record) => fleetRemoteWorkService.trackController(record));
+  });
+  handle("waypoint:fleet-controller-work", () =>
+    fleetRemoteWorkService.controllerJobs(),
+  );
+  handle("waypoint:fleet-local-work", () => fleetRemoteWorkService.list());
+  handle("waypoint:fleet-local-work-approve", (_event, input: unknown) => {
+    const approved = fleetRemoteWorkService.approve(
+      text((input as Record<string, unknown>).jobId, "remote job ID", 128),
+    );
+    setImmediate(() => void processFleetRemoteWork());
+    return approved;
+  });
+  handle("waypoint:fleet-local-work-reject", (_event, input: unknown) => {
+    const jobId = text(
+      (input as Record<string, unknown>).jobId,
+      "remote job ID",
+      128,
+    );
+    cancelActiveFleetExecution(jobId);
+    return fleetRemoteWorkService.cancel(
+      jobId,
+      new Date(),
+      "Rejected on target device",
+    );
+  });
+  handle(
+    "waypoint:fleet-provider-approval-resolve",
+    (_event, input: unknown) => {
+      const value = input as Record<string, unknown>,
+        jobId = text(value.jobId, "remote job ID", 128),
+        requestId = text(value.requestId, "provider request ID", 128),
+        accepted = value.accepted === true,
+        waiter = fleetProviderApprovalWaiters.get(requestId);
+      if (!waiter || waiter.jobId !== jobId)
+        throw new Error("Provider approval request is no longer active");
+      const record = fleetRemoteWorkService.resolveProviderApproval(
+        jobId,
+        requestId,
+        accepted,
+      );
+      fleetProviderApprovalWaiters.delete(requestId);
+      waiter.resolve({
+        status: accepted ? "accepted" : "declined",
+        decision: {},
+      });
+      waiter.abort();
+      return record;
+    },
+  );
+  handle("waypoint:device-network-mode", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      mode = String(value.mode);
+    if (!(["supervised", "autonomous"] as string[]).includes(mode))
+      throw new Error("Invalid device operating mode");
+    deviceFabricService.setDefaultMode(
+      text(value.deviceId, "device ID", 128),
+      mode as "supervised" | "autonomous",
+    );
+    return {
+      ...deviceNetworkRuntime.status(),
+      preferences: { ...deviceHostPreferences },
+    };
+  });
+  handle("waypoint:device-network-preferences", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>,
+      patch: Partial<Omit<DeviceHostPreferences, "version">> = {};
+    for (const key of [
+      "startAtLogin",
+      "closeToTray",
+      "pauseWork",
+      "pauseSync",
+    ] as const)
+      if (value[key] !== undefined) {
+        if (typeof value[key] !== "boolean")
+          throw new Error(`Invalid ${key} preference`);
+        patch[key] = value[key];
+      }
+    applyDeviceHostPreferences(patch);
+    return {
+      ...deviceNetworkRuntime.status(),
+      preferences: { ...deviceHostPreferences },
+    };
+  });
+  handle("waypoint:desktop-sync-leave", async (_event, input: unknown) => {
+    const workspaceId = text(
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
+    if (!store.listWorkspaces().some((item) => item.id === workspaceId))
+      throw new Error("Workspace not found");
+    return finishSyncLeave(workspaceId, true);
+  });
   handle("waypoint:desktop-sync-initialize", async (_event, input: unknown) => {
     const workspaceId = text(
       (input as Record<string, unknown>).workspaceId,
@@ -4501,14 +5588,51 @@ function registerIpc(): void {
   );
   handle(
     "waypoint:desktop-sync-submit-enrollment",
-    async (_event, input: unknown) =>
-      syncService.submitEnrollment(
-        text(
+    async (_event, input: unknown) => {
+      const token = text(
           (input as Record<string, unknown>).token,
           "enrollment token",
           8192,
         ),
-      ),
+        preview = syncService.previewEnrollmentToken(token),
+        existingWorkspace = store
+          .listWorkspaces()
+          .find((item) => item.id === preview.workspaceId),
+        matchingPending = syncService.matchesPendingEnrollment(token);
+      if (existingWorkspace && !matchingPending)
+        throw new Error(
+          "That invitation collides with an existing local workspace. Leave that workspace unchanged and request a new invitation with a different workspace identity.",
+        );
+      const localPath = path.join(
+          app.getPath("userData"),
+          "joined-workspaces",
+          preview.workspaceId,
+        ),
+        directoryExisted = existsSync(localPath);
+      mkdirSync(localPath, { recursive: true });
+      const workspace = store.ensureInvitedWorkspace(
+        preview.workspaceId,
+        localPath,
+      );
+      try {
+        const result = await syncService.submitEnrollment(token);
+        return { ...result, workspace };
+      } catch (error) {
+        if (
+          !existingWorkspace &&
+          !syncService.hasPendingEnrollment(preview.workspaceId)
+        ) {
+          store.deleteWorkspace(preview.workspaceId);
+          if (!directoryExisted)
+            try {
+              rmdirSync(localPath);
+            } catch {
+              // Preserve any files that appeared after this attempt began.
+            }
+        }
+        throw error;
+      }
+    },
   );
   handle(
     "waypoint:desktop-sync-complete-enrollment",
@@ -4567,16 +5691,23 @@ function registerIpc(): void {
   );
   handle("waypoint:desktop-sync-now", async (_event, input: unknown) => {
     const workspaceId = text(
-        (input as Record<string, unknown>).workspaceId,
-        "workspace ID",
-        64,
-      ),
-      result = await syncService.syncOnce(workspaceId, store);
-    await processRemoteJobs(workspaceId);
-    recordSyncActivityBestEffort(store, workspaceId, "sync.completed", {
-      status: "completed",
-    });
-    return result;
+      (input as Record<string, unknown>).workspaceId,
+      "workspace ID",
+      64,
+    );
+    if (activeSyncRuns.has(workspaceId))
+      throw new Error("Workspace sync is already running");
+    activeSyncRuns.add(workspaceId);
+    try {
+      const result = await syncService.syncOnce(workspaceId, store);
+      await processRemoteJobs(workspaceId);
+      recordSyncActivityBestEffort(store, workspaceId, "sync.completed", {
+        status: "completed",
+      });
+      return result;
+    } finally {
+      activeSyncRuns.delete(workspaceId);
+    }
   });
   handle("waypoint:device-control-status", async (_event, input: unknown) => {
     const workspaceId = text(
@@ -4706,6 +5837,8 @@ function registerIpc(): void {
         "webhook connector",
         40,
       );
+    if (deviceHostPreferences.pauseSync)
+      throw new Error("Sync is paused from the Device Host menu");
     if (!label) throw new Error("Channel label is required");
     if (connectorId === "stripe" || connectorId === "resend")
       throw new Error(
@@ -6076,6 +7209,14 @@ function registerIpc(): void {
       text((input as Record<string, unknown>).workspaceId, "workspace ID", 64),
     ),
   );
+  handle("waypoint:security-profile-peer-eligible", (_event, input: unknown) => {
+    const value = input as Record<string, unknown>;
+    return store.setSecurityProfilePeerEligible(
+      text(value.workspaceId, "workspace ID", 64),
+      text(value.profileId, "security profile ID", 64),
+      value.peerEligible === true,
+    );
+  });
   handle("waypoint:list-provider-sessions", (_event, input: unknown) => {
     const value = input as Record<string, unknown>;
     return store.listProviderSessions(
@@ -6393,8 +7534,7 @@ function registerIpc(): void {
     let nativeAutomationPrepared = false,
       nativeAutomationSummary: string | undefined,
       nativeAutomationResult:
-        | { proposalId: string; status: string; summary?: string }
-        | undefined,
+        { proposalId: string; status: string; summary?: string } | undefined,
       nativeAutomationInFlight:
         | Promise<{ proposalId: string; status: string; summary?: string }>
         | undefined;
@@ -6509,17 +7649,20 @@ function registerIpc(): void {
                 (existing.model ?? undefined) === model
                   ? String(existing.providerSessionId)
                   : undefined;
-            const conversationPrompt = existing && !providerSessionId
-              ? `[Waypoint conversation history bridged into a fresh tool-capable provider session]\n${store
-                  .chatMessages(workspaceId, chatId)
-                  .filter(
-                    (message) =>
-                      message.id !== sourceMessageId &&
-                      message.role !== "system",
-                  )
-                  .map((message) => `[${message.role}]\n${message.body}`)
-                  .join("\n\n")}\n\n[Current request]\n${sharedRequest.prompt}`
-              : sharedRequest.prompt;
+            const conversationPrompt =
+              existing && !providerSessionId
+                ? `[Waypoint conversation history bridged into a fresh tool-capable provider session]\n${store
+                    .chatMessages(workspaceId, chatId)
+                    .filter(
+                      (message) =>
+                        message.id !== sourceMessageId &&
+                        message.role !== "system",
+                    )
+                    .map((message) => `[${message.role}]\n${message.body}`)
+                    .join(
+                      "\n\n",
+                    )}\n\n[Current request]\n${sharedRequest.prompt}`
+                : sharedRequest.prompt;
             return codexWorkbench.start(
               runId,
               {
@@ -6589,17 +7732,20 @@ function registerIpc(): void {
                 (existing.model ?? undefined) === model
                   ? String(existing.providerSessionId)
                   : undefined;
-            const conversationPrompt = existing && !providerSessionId
-              ? `[Waypoint conversation history bridged into a fresh tool-capable provider session]\n${store
-                  .chatMessages(workspaceId, chatId)
-                  .filter(
-                    (message) =>
-                      message.id !== sourceMessageId &&
-                      message.role !== "system",
-                  )
-                  .map((message) => `[${message.role}]\n${message.body}`)
-                  .join("\n\n")}\n\n[Current request]\n${sharedRequest.prompt}`
-              : sharedRequest.prompt;
+            const conversationPrompt =
+              existing && !providerSessionId
+                ? `[Waypoint conversation history bridged into a fresh tool-capable provider session]\n${store
+                    .chatMessages(workspaceId, chatId)
+                    .filter(
+                      (message) =>
+                        message.id !== sourceMessageId &&
+                        message.role !== "system",
+                    )
+                    .map((message) => `[${message.role}]\n${message.body}`)
+                    .join(
+                      "\n\n",
+                    )}\n\n[Current request]\n${sharedRequest.prompt}`
+                : sharedRequest.prompt;
             return grokWorkbench.start(
               runId,
               {
@@ -7117,6 +8263,96 @@ function registerIpc(): void {
   });
 }
 
+function showWaypointWindow(openDeviceNetwork = false): void {
+  backgroundLaunch = false;
+  let window = BrowserWindow.getAllWindows()[0];
+  if (!window) {
+    createWindow();
+    window = BrowserWindow.getAllWindows()[0];
+  }
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  if (openDeviceNetwork) {
+    if (window.webContents.isLoading())
+      window.webContents.once("did-finish-load", () =>
+        window?.webContents.send("waypoint:open-device-network"),
+      );
+    else window.webContents.send("waypoint:open-device-network");
+  }
+}
+
+function applyDeviceHostPreferences(
+  patch: Partial<Omit<DeviceHostPreferences, "version">>,
+): DeviceHostPreferences {
+  const next = deviceHostPreferenceStore.save({
+    ...deviceHostPreferences,
+    ...patch,
+    version: 1,
+  });
+  deviceHostPreferences = next;
+  if (app.isPackaged)
+    app.setLoginItemSettings({
+      openAtLogin: next.startAtLogin,
+      args: ["--background"],
+    });
+  deviceNetworkRuntime?.setPauseState({
+    pauseWork: next.pauseWork,
+    pauseSync: next.pauseSync,
+  });
+  refreshDeviceTray();
+  for (const window of BrowserWindow.getAllWindows())
+    window.webContents.send("waypoint:device-network-changed");
+  return { ...next };
+}
+
+function refreshDeviceTray(): void {
+  if (!deviceTray || !deviceHostPreferences) return;
+  const network = deviceNetworkRuntime?.status(),
+    online = network?.peers.filter((peer) => peer.online).length ?? 0,
+    attention =
+      network?.peers.filter((peer) => peer.status === "needs-attention")
+        .length ?? 0;
+  deviceTray.setToolTip(
+    attention
+      ? `Waypoint · ${attention} device${attention === 1 ? "" : "s"} need attention`
+      : `Waypoint Device Host · ${online} online`,
+  );
+  deviceTray.setContextMenu(
+    Menu.buildFromTemplate(
+      buildDeviceTrayCommands(deviceHostPreferences, {
+        open: () => showWaypointWindow(),
+        openDeviceNetwork: () => showWaypointWindow(true),
+        update: (patch) => applyDeviceHostPreferences(patch),
+        quit: () => app.quit(),
+      }).map((command): MenuItemConstructorOptions =>
+        command.type === "separator"
+          ? { type: "separator" }
+          : {
+              label: command.label,
+              type: command.type,
+              checked: command.checked,
+              click: (item) => command.activate(item.checked),
+            },
+      ),
+    ),
+  );
+}
+
+function createDeviceTray(): void {
+  if (deviceTray) return;
+  const iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, "waypoint.png")
+      : path.join(currentDirectory, "../../build/icons/waypoint.png"),
+    icon = nativeImage
+      .createFromPath(iconPath)
+      .resize({ width: 18, height: 18 });
+  deviceTray = new Tray(icon);
+  deviceTray.on("click", () => showWaypointWindow());
+  refreshDeviceTray();
+}
+
 function createWindow(): void {
   const statePath = path.join(app.getPath("userData"), "window-state.json"),
     fallback = { x: 130, y: 70, width: 1180, height: 760 };
@@ -7138,6 +8374,7 @@ function createWindow(): void {
     minWidth: 840,
     minHeight: 620,
     backgroundColor: "#111b19",
+    show: !backgroundLaunch,
     webPreferences: {
       preload: path.join(currentDirectory, "preload.cjs"),
       contextIsolation: true,
@@ -7254,7 +8491,7 @@ function createWindow(): void {
     expanded = false;
     persist();
   });
-  window.on("close", () => {
+  window.on("close", (event) => {
     if (timer) clearTimeout(timer);
     const current = window.getBounds(),
       display = screen.getDisplayMatching(current),
@@ -7275,6 +8512,16 @@ function createWindow(): void {
     } catch (error) {
       rmSync(temporary, { force: true });
       console.error("Failed to persist window state", error);
+    }
+    if (
+      shouldHideWindowOnClose({
+        explicitQuit,
+        platform: process.platform,
+        closeToTray: deviceHostPreferences?.closeToTray ?? false,
+      })
+    ) {
+      event.preventDefault();
+      window.hide();
     }
   });
 }
@@ -7301,6 +8548,15 @@ else {
     store = new WorkspaceStore(
       path.join(app.getPath("userData"), "waypoint.sqlite"),
     );
+    deviceHostPreferenceStore = new DeviceHostPreferenceStore(
+      path.join(app.getPath("userData"), "device-host"),
+    );
+    deviceHostPreferences = deviceHostPreferenceStore.load();
+    if (app.isPackaged)
+      app.setLoginItemSettings({
+        openAtLogin: deviceHostPreferences.startAtLogin,
+        args: ["--background"],
+      });
     cleanupRunScopedAttachmentDirectories(
       managedWorkspaceExecutionRoots(store),
     );
@@ -7419,15 +8675,37 @@ else {
       decrypt: (value) => safeStorage.decryptString(value),
     });
     toolFailureFingerprintKey = loadToolFailureFingerprintKey();
-    const vault = new ProtectedSyncVault(
-      path.join(app.getPath("userData"), "sync-secrets"),
-      {
-        available: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (value) => safeStorage.encryptString(value),
-        decrypt: (value) => safeStorage.decryptString(Buffer.from(value)),
+    const secretProtector = {
+        available: () =>
+          safeStorage.isEncryptionAvailable() &&
+          (process.platform !== "linux" ||
+            safeStorage.getSelectedStorageBackend() !== "basic_text"),
+        encrypt: (value: string) => safeStorage.encryptString(value),
+        decrypt: (value: Uint8Array) =>
+          safeStorage.decryptString(Buffer.from(value)),
       },
+      vault = new ProtectedSyncVault(
+        path.join(app.getPath("userData"), "sync-secrets"),
+        secretProtector,
+      ),
+      deviceVault = new ProtectedDeviceVault(
+        path.join(app.getPath("userData"), "device-fabric"),
+        secretProtector,
+      );
+    fleetCacheService = new FleetCacheService(
+      path.join(app.getPath("userData"), "fleet-cache"),
+      secretProtector,
     );
+    fleetRemoteWorkService = new FleetRemoteWorkService(
+      path.join(app.getPath("userData"), "fleet-remote-work"),
+      secretProtector,
+    );
+    fleetWorktreeRoot = path.join(app.getPath("userData"), "fleet-worktrees");
     syncVault = vault;
+    syncLeaveIntentStore = new SyncLeaveIntentStore(
+      path.join(app.getPath("userData"), "sync-leave-intents"),
+      secretProtector,
+    );
     inAppBrowser = new InAppBrowserController((workspaceId, state) => {
       for (const window of BrowserWindow.getAllWindows())
         if (toolWindowWorkspaces.get(window.webContents.id) === workspaceId)
@@ -7749,9 +9027,605 @@ else {
       path.join(app.getPath("userData"), "peer-host"),
       vault,
     );
-    void DesktopSyncService.create(vault, peerHostRuntime)
-      .then((service) => {
+    const legacyWorkspaceDeviceIds = store
+      .listWorkspaces()
+      .flatMap((workspace) => {
+        try {
+          const active = vault.load(workspace.id);
+          return active ? [active.device.deviceId] : [];
+        } catch (error) {
+          throw new Error(
+            `Cannot migrate protected sync identity for workspace ${workspace.id}`,
+            { cause: error },
+          );
+        }
+      });
+    void Promise.all([
+      DesktopSyncService.create(vault, peerHostRuntime),
+      DeviceFabricService.create(
+        deviceVault,
+        {
+          displayName: hostname() || "Waypoint device",
+          platform: ["darwin", "win32", "linux"].includes(process.platform)
+            ? (process.platform as "darwin" | "win32" | "linux")
+            : "unknown",
+          architecture: process.arch,
+          appVersion: app.getVersion(),
+        },
+        legacyWorkspaceDeviceIds,
+      ),
+    ])
+      .then(async ([service, fabric]) => {
         syncService = service;
+        deviceFabricService = fabric;
+        const activeFleetSources = new Set(
+          fabric.trustedDevices().map((peer) => peer.device.deviceId),
+        );
+        for (const sourceDeviceId of fleetCacheService.sourceDeviceIds())
+          if (!activeFleetSources.has(sourceDeviceId))
+            fleetCacheService.revokeSource(sourceDeviceId);
+        deviceNetworkRuntime = new DeviceNetworkRuntime(
+          fabric,
+          () => {
+            const workspaces = store.listWorkspaces(),
+              remoteWorkConfigured = workspaces.some((workspace) => {
+                try {
+                  return (
+                    store
+                      .listSecurityProfiles(workspace.id)
+                      .some((profile) => profile.peerEligible) ||
+                    (syncService.status(workspace.id).configured &&
+                      store.deviceControlPolicy(workspace.id).enabled)
+                  );
+                } catch {
+                  return false;
+                }
+              }),
+              attentionItems = Math.min(
+                1_000,
+                fleetRemoteWorkService
+                  .list()
+                  .filter((job) => job.status === "failed").length +
+                  workspaces.reduce(
+                  (count, workspace) =>
+                    count +
+                    store
+                      .listRemoteJobs(workspace.id)
+                      .filter((job) =>
+                        ["failed", "timed_out"].includes(
+                          String((job as { status?: unknown }).status),
+                        ),
+                      ).length,
+                  0,
+                ),
+              );
+            return {
+              capabilities: [
+                "presence",
+                "pairing",
+                "workspace-catalog",
+                "fleet-search",
+                "workspace-grants",
+                "encrypted-cache",
+                "workspace-pin",
+                ...(remoteWorkConfigured ? ["remote-work"] : []),
+              ],
+              runningJobs:
+                activeRemoteJobs.size + activeFleetRemoteExecutions.size,
+              attentionItems,
+            };
+          },
+          () => {
+            refreshDeviceTray();
+            for (const window of BrowserWindow.getAllWindows())
+              window.webContents.send("waypoint:device-network-changed");
+          },
+          undefined,
+          {
+            catalog: () => {
+              const generatedAt = new Date().toISOString(),
+                deviceId = fabric.status().localDeviceId;
+              return {
+                version: 1 as const,
+                deviceId,
+                generatedAt,
+                workspaces: store.listWorkspaces().map((workspace) => {
+                  const grant = fleetCacheService.ensureAuthoritativeGrant(
+                    workspace.id,
+                    deviceId,
+                  );
+                  return {
+                    workspaceId: workspace.id,
+                    name: workspace.name,
+                    createdAt: workspace.createdAt,
+                    updatedAt: workspace.createdAt,
+                    authoritativeDeviceId: deviceId,
+                    keyEpoch: grant.keyEpoch,
+                    counts: {
+                      chats: store.listChats(workspace.id).length,
+                      documents: store.listDocuments(workspace.id).length,
+                      memories: store.listMemories(workspace.id).length,
+                      attachments: store.listAttachments(workspace.id).length,
+                    },
+                  };
+                }),
+              };
+            },
+            catalogReceived: async (catalog) => {
+              fleetCacheService.applyCatalog(catalog);
+              const pendingGrants = catalog.workspaces.filter(
+                (workspace) =>
+                  (fleetCacheService.grant(
+                    workspace.workspaceId,
+                    catalog.deviceId,
+                  )?.keyEpoch ?? 0) < workspace.keyEpoch,
+              );
+              for (let index = 0; index < pendingGrants.length; index += 4) {
+                const grants = await Promise.allSettled(
+                  pendingGrants.slice(index, index + 4).map((workspace) =>
+                    deviceNetworkRuntime.requestWorkspaceGrant(
+                      catalog.deviceId,
+                      workspace.workspaceId,
+                    ),
+                  ),
+                );
+                for (const result of grants)
+                  if (result.status === "fulfilled") {
+                    const envelope = result.value;
+                    fleetCacheService.acceptGrant({
+                      workspaceId: envelope.workspaceId,
+                      sourceDeviceId: envelope.sourceDeviceId,
+                      keyEpoch: envelope.keyEpoch,
+                      workspaceKey:
+                        deviceFabricService.unwrapWorkspaceKeyFromDevice(
+                          envelope.wrappedWorkspaceKey,
+                        ),
+                      grantedAt: envelope.grantedAt,
+                    });
+                  }
+              }
+
+              const pins = fleetCacheService
+                .status()
+                .pins.filter((pin) => pin.sourceDeviceId === catalog.deviceId);
+              for (const pin of pins) {
+                try {
+                  const inventory =
+                    await deviceNetworkRuntime.fetchWorkspaceInventory(
+                      catalog.deviceId,
+                      pin.workspaceId,
+                    );
+                  fleetCacheService.reconcileInventory(
+                    catalog.deviceId,
+                    pin.workspaceId,
+                    inventory.objects.map((object) => object.objectId),
+                  );
+                  if (pin.completeWithinBounds) {
+                    for (
+                      let index = 0;
+                      index < inventory.objects.length;
+                      index += 8
+                    ) {
+                      const encrypted = await Promise.all(
+                        inventory.objects
+                          .slice(index, index + 8)
+                          .map((object) =>
+                            deviceNetworkRuntime.fetchEncryptedObject(
+                              catalog.deviceId,
+                              { workspaceId: pin.workspaceId, ...object },
+                            ),
+                          ),
+                      );
+                      for (const object of encrypted)
+                        fleetCacheService.cacheEncryptedObject(object);
+                    }
+                  }
+                  const objectIds = inventory.objects.map(
+                    (object) => object.objectId,
+                  );
+                  fleetCacheService.setPinned(
+                    catalog.deviceId,
+                    pin.workspaceId,
+                    true,
+                    {
+                      completeWithinBounds:
+                        pin.completeWithinBounds &&
+                        fleetCacheService.hasCompleteInventory(
+                          catalog.deviceId,
+                          pin.workspaceId,
+                          objectIds,
+                        ),
+                      attachmentLimitBytes: inventory.attachmentLimitBytes,
+                      omittedAttachments: inventory.omittedAttachments,
+                    },
+                  );
+                } catch {
+                  fleetCacheService.setPinned(
+                    catalog.deviceId,
+                    pin.workspaceId,
+                    true,
+                    {
+                      completeWithinBounds: false,
+                      attachmentLimitBytes: pin.attachmentLimitBytes,
+                      omittedAttachments: pin.omittedAttachments,
+                    },
+                  );
+                }
+              }
+            },
+            revoked: (sourceDeviceId) => {
+              fleetCacheService.revokeSource(sourceDeviceId);
+              for (const jobId of
+                fleetRemoteWorkService.cancelByController(sourceDeviceId)) {
+                cancelActiveFleetExecution(jobId);
+              }
+            },
+            workerInventory: async () => {
+              const [codex, claude, grok] = await Promise.all([
+                detectCli("codex"),
+                detectCli("claude"),
+                detectCli("grok"),
+              ]);
+              return {
+                version: 1 as const,
+                deviceId: fabric.status().localDeviceId,
+                platform: fabric.status().metadata.platform,
+                architecture: fabric.status().metadata.architecture,
+                paused: deviceHostPreferences.pauseWork,
+                providers: [
+                  {
+                    id: "codex",
+                    available: Boolean(
+                      codex.available &&
+                        codex.compatible !== false &&
+                        codex.executable,
+                    ),
+                    version: codex.version,
+                    reason:
+                      codex.compatibilityError ??
+                      codex.error ??
+                      (!codex.executable ? "Codex executable is unavailable" : undefined),
+                    modelPolicy: "provider-default" as const,
+                  },
+                  {
+                    id: "claude",
+                    available: Boolean(
+                      claude.available &&
+                        claude.compatible !== false &&
+                        claude.executable,
+                    ),
+                    version: claude.version,
+                    reason:
+                      claude.compatibilityError ??
+                      claude.error ??
+                      (!claude.executable
+                        ? "Claude executable is unavailable"
+                        : undefined),
+                    modelPolicy: "provider-default" as const,
+                  },
+                  {
+                    id: "grok",
+                    available: Boolean(
+                      grok.available &&
+                        grok.compatible !== false &&
+                        grok.executable,
+                    ),
+                    version: grok.version,
+                    reason:
+                      grok.compatibilityError ??
+                      grok.error ??
+                      (!grok.executable ? "Grok executable is unavailable" : undefined),
+                    modelPolicy: "provider-default" as const,
+                  },
+                ],
+                totalMemoryMb: Math.floor(totalmem() / (1024 * 1024)),
+                roots: store
+                  .listWorkspaces()
+                  .flatMap((workspace) =>
+                    store
+                      .listSecurityProfiles(workspace.id)
+                      .filter((profile) => profile.peerEligible)
+                      .flatMap((profile) =>
+                        profile.roots.map((root) => ({
+                          root,
+                          profileId: profile.id,
+                          profileName: profile.name,
+                          filesystem: profile.filesystem,
+                          network: profile.network,
+                          tools: profile.tools.slice(0, 64),
+                          approval: profile.approval,
+                          maxDurationMs: profile.maxDurationMs,
+                        })),
+                      ),
+                  )
+                  .filter(
+                    (item, index, values) =>
+                      values.findIndex(
+                        (candidate) =>
+                          candidate.root === item.root &&
+                          candidate.profileId === item.profileId,
+                      ) ===
+                      index,
+                  )
+                  .slice(0, 128),
+              };
+            },
+            submitRemoteWork: (order, requesterDeviceId) => {
+              if (
+                requesterDeviceId !== order.controllerDeviceId ||
+                order.targetDeviceId !== fabric.status().localDeviceId
+              )
+                throw new Error("Remote work device contract mismatch");
+              if (deviceHostPreferences.pauseWork)
+                throw new Error("Remote work is paused on the target device");
+              if (
+                !fleetEligibleProfile(
+                  order.targetRoot,
+                  order.targetProfileId,
+                )
+              )
+                throw new Error("Remote work root is not target-authorized");
+              const accepted = fleetRemoteWorkService.accept(order);
+              if (accepted.status === "queued")
+                setImmediate(() => void processFleetRemoteWork());
+              return accepted;
+            },
+            remoteWorkStatus: (jobId, requesterDeviceId) => {
+              const record = fleetRemoteWorkService.record(jobId);
+              if (record.order.controllerDeviceId !== requesterDeviceId)
+                throw new Error("Remote work controller mismatch");
+              return record;
+            },
+            cancelRemoteWork: (jobId, requesterDeviceId) => {
+              const record = fleetRemoteWorkService.record(jobId);
+              if (record.order.controllerDeviceId !== requesterDeviceId)
+                throw new Error("Remote work controller mismatch");
+              cancelActiveFleetExecution(jobId);
+              return fleetRemoteWorkService.cancel(jobId);
+            },
+            discardRemoteWork: async (jobId, requesterDeviceId) => {
+              const record = fleetRemoteWorkService.record(jobId);
+              if (record.order.controllerDeviceId !== requesterDeviceId)
+                throw new Error("Remote work controller mismatch");
+              if (record.worktreePath)
+                await discardFleetWorktree(
+                  record.order.targetRoot,
+                  fleetWorktreeRoot,
+                  jobId,
+                );
+              return fleetRemoteWorkService.discardArtifacts(jobId);
+            },
+            search: (query, limit) => {
+              const deviceId = fabric.status().localDeviceId,
+                results = store
+                  .listWorkspaces()
+                  .flatMap((workspace) =>
+                    store.searchText(workspace.id, query, limit).map((result) => ({
+                      sourceDeviceId: deviceId,
+                      workspaceId: workspace.id,
+                      workspaceName: workspace.name,
+                      objectId: result.objectId,
+                      objectKind: result.objectKind,
+                      ...(result.revisionId
+                        ? { revisionId: result.revisionId }
+                        : {}),
+                      title: result.title,
+                      excerpt: result.excerpt,
+                      score: result.score,
+                      method: "text" as const,
+                    })),
+                  )
+                  .sort(
+                    (left, right) =>
+                      right.score - left.score ||
+                      left.workspaceId.localeCompare(right.workspaceId) ||
+                      left.objectId.localeCompare(right.objectId),
+                  )
+                  .slice(0, limit);
+              return {
+                version: 1 as const,
+                deviceId,
+                query,
+                generatedAt: new Date().toISOString(),
+                partial: false,
+                results,
+              };
+            },
+            workspaceGrant: (workspaceId, requesterDeviceId) => {
+              if (!store.listWorkspaces().some((item) => item.id === workspaceId))
+                throw new Error("Fleet workspace is not available here");
+              const grant = fleetCacheService.ensureAuthoritativeGrant(
+                workspaceId,
+                fabric.status().localDeviceId,
+              );
+              return {
+                version: 1 as const,
+                sourceDeviceId: fabric.status().localDeviceId,
+                recipientDeviceId: requesterDeviceId,
+                workspaceId,
+                keyEpoch: grant.keyEpoch,
+                wrappedWorkspaceKey: fabric.wrapWorkspaceKeyForDevice(
+                  grant.workspaceKey,
+                  requesterDeviceId,
+                ),
+                grantedAt: new Date().toISOString(),
+              };
+            },
+            encryptedObject: (input) => {
+              const workspace = store
+                .listWorkspaces()
+                .find((item) => item.id === input.workspaceId);
+              if (!workspace) throw new Error("Fleet workspace is not available here");
+              const document = store
+                  .listDocuments(input.workspaceId)
+                  .find((item) => item.id === input.objectId),
+                memory = store
+                  .listMemories(input.workspaceId)
+                  .find((item) => item.id === input.objectId),
+                chats = store.listChats(input.workspaceId),
+                chat = chats.find((item) => item.id === input.objectId),
+                chatWithMessage = chats.find((item) =>
+                  item.messages.some((message) => message.id === input.objectId),
+                ),
+                message = chatWithMessage?.messages.find(
+                  (item) => item.id === input.objectId,
+                ),
+                capture = store
+                  .listScreenCaptures(input.workspaceId)
+                  .find((item) => item.id === input.objectId),
+                attachment = store
+                  .listAttachments(input.workspaceId)
+                  .find((item) => item.id === input.objectId),
+                attachmentBytes =
+                  input.objectKind === "attachment" &&
+                  attachment &&
+                  attachment.bytes <= 6 * 1024 * 1024
+                    ? store.readSyncAttachment(input.workspaceId, input.objectId)
+                    : undefined,
+                resolved =
+                  input.objectKind === "document" && document
+                    ? {
+                        revisionId: document.revisionId,
+                        updatedAt: document.updatedAt,
+                        value: document,
+                      }
+                    : input.objectKind === "memory" && memory
+                      ? { updatedAt: memory.updatedAt, value: memory }
+                      : input.objectKind === "chat" && chat
+                        ? { updatedAt: chat.updatedAt, value: chat }
+                        : input.objectKind === "message" && message
+                          ? { updatedAt: message.createdAt, value: message }
+                          : input.objectKind === "screen_capture" && capture
+                            ? {
+                                updatedAt: capture.capturedAt,
+                                value: capture,
+                              }
+                            : input.objectKind === "attachment" &&
+                                attachment &&
+                                attachmentBytes &&
+                                createHash("sha256")
+                                  .update(attachmentBytes)
+                                  .digest("hex") === attachment.sha256
+                              ? {
+                                  updatedAt: attachment.createdAt,
+                                  value: {
+                                    ...attachment,
+                                    dataBase64:
+                                      Buffer.from(attachmentBytes).toString(
+                                        "base64",
+                                      ),
+                                  },
+                                }
+                            : undefined;
+              if (!resolved) throw new Error("Fleet object was not found");
+              return fleetCacheService.encryptAuthoritativeObject({
+                sourceDeviceId: fabric.status().localDeviceId,
+                workspaceId: input.workspaceId,
+                objectId: input.objectId,
+                objectKind: input.objectKind,
+                ...(resolved.revisionId
+                  ? { revisionId: resolved.revisionId }
+                  : {}),
+                updatedAt: resolved.updatedAt,
+                plaintext: JSON.stringify({
+                  version: 1,
+                  sourceDeviceId: fabric.status().localDeviceId,
+                  workspace: { id: workspace.id, name: workspace.name },
+                  objectKind: input.objectKind,
+                  object: resolved.value,
+                }),
+              });
+            },
+            workspaceInventory: (workspaceId) => {
+              if (!store.listWorkspaces().some((item) => item.id === workspaceId))
+                throw new Error("Fleet workspace is not available here");
+              const attachmentLimitBytes = 6 * 1024 * 1024,
+                attachments = store.listAttachments(workspaceId),
+                objects = [
+                  ...store
+                    .listDocuments(workspaceId)
+                    .map((item) => ({ objectId: item.id, objectKind: "document" })),
+                  ...store
+                    .listMemories(workspaceId)
+                    .map((item) => ({ objectId: item.id, objectKind: "memory" })),
+                  ...store.listChats(workspaceId).flatMap((chat) => [
+                    { objectId: chat.id, objectKind: "chat" },
+                    ...chat.messages.map((message) => ({
+                      objectId: message.id,
+                      objectKind: "message",
+                    })),
+                  ]),
+                  ...store
+                    .listScreenCaptures(workspaceId)
+                    .map((item) => ({
+                      objectId: item.id,
+                      objectKind: "screen_capture",
+                    })),
+                  ...attachments
+                    .filter((item) => item.bytes <= attachmentLimitBytes)
+                    .map((item) => ({
+                      objectId: item.id,
+                      objectKind: "attachment",
+                    })),
+                ];
+              if (objects.length > 4_096)
+                throw new Error("Fleet workspace inventory exceeds safe bounds");
+              return {
+                version: 1 as const,
+                sourceDeviceId: fabric.status().localDeviceId,
+                workspaceId,
+                generatedAt: new Date().toISOString(),
+                attachmentLimitBytes,
+                omittedAttachments: attachments.filter(
+                  (item) => item.bytes > attachmentLimitBytes,
+                ).length,
+                objects,
+              };
+            },
+          },
+        );
+        try {
+          await deviceNetworkRuntime.start();
+          deviceNetworkRuntime.setPauseState({
+            pauseWork: deviceHostPreferences.pauseWork,
+            pauseSync: deviceHostPreferences.pauseSync,
+          });
+        } catch (error) {
+          console.warn(
+            "Device Host could not start",
+            error instanceof Error ? error.message : "unknown error",
+          );
+        }
+        fleetRemoteWorkService.expirePending();
+        fleetRemoteWorkService.expireControllerPending();
+        setImmediate(() => void processFleetRemoteWork());
+        setImmediate(() => void reconcileFleetControllerWork());
+        const fleetRemoteReconciliationTimer = setInterval(() => {
+          fleetRemoteWorkService.expirePending();
+          fleetRemoteWorkService.expireControllerPending();
+          void processFleetRemoteWork();
+          void reconcileFleetControllerWork();
+        }, 5_000);
+        fleetRemoteReconciliationTimer.unref();
+        createDeviceTray();
+        for (const intent of syncLeaveIntentStore.list())
+          await finishSyncLeave(intent.workspaceId);
+        reconcileProtectedSyncDevices(store, vault);
+        const enrollmentRecovery = await Promise.allSettled(
+          store
+            .listWorkspaces()
+            .map((workspace) =>
+              syncService.resumePreparedEnrollment(workspace.id),
+            ),
+        );
+        for (const result of enrollmentRecovery)
+          if (result.status === "rejected")
+            console.warn(
+              "Prepared enrollment will retry when the device reconnects",
+              result.reason instanceof Error
+                ? result.reason.message
+                : "unknown error",
+            );
         registerIpc();
         createWindow();
         const initialWorkspace = store.listWorkspaces()[0];
@@ -7762,6 +9636,7 @@ else {
           );
         const timer = setInterval(() => {
           for (const workspace of store.listWorkspaces()) {
+            if (deviceHostPreferences.pauseSync) continue;
             const syncStatus = syncService.status(workspace.id);
             if (
               !syncStatus.configured ||
@@ -7825,21 +9700,18 @@ else {
         app.quit();
       });
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      showWaypointWindow();
     });
   });
   app.on("second-instance", () => {
-    const window = BrowserWindow.getAllWindows()[0];
-    if (window) {
-      if (window.isMinimized()) window.restore();
-      window.focus();
-    }
+    showWaypointWindow();
   });
   let shutdownStarted = false;
   app.on("before-quit", (event) => {
     if (shutdownStarted) return;
     event.preventDefault();
     shutdownStarted = true;
+    explicitQuit = true;
     globalShortcut.unregisterAll();
     syncAbort.abort();
     providerModelCatalogAbort.abort();
@@ -7860,8 +9732,11 @@ else {
       shutdownInstalledCliModelCatalog(),
       browserShutdown,
       peerHostRuntime?.stop(),
+      deviceNetworkRuntime?.stop(),
       Promise.allSettled([...activeAutoTitleTasks]),
     ]).finally(() => {
+      deviceTray?.destroy();
+      deviceTray = undefined;
       store?.close();
       app.exit(0);
     });

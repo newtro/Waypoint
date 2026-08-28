@@ -77,6 +77,7 @@ export function cliCompatibility(
 export interface DetectionOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
   canAccess?: (candidate: string) => Promise<void>;
   run?: (
     executable: string,
@@ -283,6 +284,7 @@ export async function detectCli(
               shell: false,
               windowsHide: true,
               env: cliExecutionEnvironment(executable, env, platform),
+              signal: options.signal,
             }),
           );
     const version = `${stdout}${stderr}`.trim();

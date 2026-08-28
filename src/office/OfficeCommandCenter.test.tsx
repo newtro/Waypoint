@@ -7,6 +7,7 @@ import {
   type OfficeCommandCenterProps,
 } from "./OfficeCommandCenter.js";
 import type { OfficeAgent } from "./office-state.js";
+import { targetRootOptionValue } from "./office-work-order.js";
 
 const baseAgent: OfficeAgent = {
   id: "chat-1",
@@ -60,6 +61,11 @@ function buttonsIn(node: ReactNode): Array<Record<string, unknown>> {
 }
 
 describe("OfficeCommandCenter", () => {
+  it("keeps multiple roots from one target profile independently selectable", () => {
+    expect(targetRootOptionValue("profile-1", "/repo/one")).not.toBe(
+      targetRootOptionValue("profile-1", "/repo/two"),
+    );
+  });
   it("renders the manager, truthful floor occupant, and complete roster semantics", () => {
     const html = renderToStaticMarkup(
       createElement(OfficeCommandCenter, {

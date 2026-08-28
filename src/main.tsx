@@ -49,6 +49,9 @@ import "./in-app-browser.css";
 import "./execution-timeline-polish.css";
 import "./main-tabs.css";
 import "./settings-workspace.css";
+import "./device-network/device-network.css";
+import { DeviceNetwork } from "./device-network/DeviceNetwork";
+import { FleetKnowledgePanel } from "./device-network/FleetKnowledgePanel";
 import {
   providerFormField,
   providerFormRequiredReady,
@@ -106,6 +109,7 @@ import {
 } from "./theme";
 import {
   dispatchOfficeWorkOrder as dispatchConfirmedOfficeWorkOrder,
+  officeWorkOrderPrompt,
   refreshAfterOfficeDispatch,
   type OfficeProviderOption,
   type OfficeWorkOrder,
@@ -247,9 +251,7 @@ type OpenRouterStatus = Awaited<
 >;
 type OpenRouterThinkingDraft = Pick<
   ThinkingPreferences,
-  | "openrouterStrategic"
-  | "openrouterEveryday"
-  | "openrouterAttachment"
+  "openrouterStrategic" | "openrouterEveryday" | "openrouterAttachment"
 >;
 type CliModelCatalog = Awaited<
   ReturnType<Window["waypoint"]["cliModelCatalog"]>
@@ -273,6 +275,7 @@ type Drawer = WorkspaceView | undefined;
 
 const workspaceViewTitles: Record<WorkspaceView, string> = {
   office: "Command Center",
+  devices: "Device Network",
   briefing: "Briefing",
   knowledge: "Knowledge",
   reflection: "Reflection",
@@ -986,6 +989,13 @@ export function App() {
   }
   const [desktopSync, setDesktopSync] =
       useState<Awaited<ReturnType<Window["waypoint"]["desktopSyncStatus"]>>>(),
+    [deviceFabric, setDeviceFabric] =
+      useState<Awaited<ReturnType<Window["waypoint"]["deviceFabricStatus"]>>>(),
+    [deviceNetwork, setDeviceNetwork] =
+      useState<
+        Awaited<ReturnType<Window["waypoint"]["deviceNetworkStatus"]>>
+      >(),
+    [deviceNetworkBusy, setDeviceNetworkBusy] = useState<string>(),
     [syncDevices, setSyncDevices] = useState<
       Awaited<ReturnType<Window["waypoint"]["syncDevices"]>>
     >([]),
@@ -1202,6 +1212,133 @@ export function App() {
       );
     }
   }
+  async function refreshDeviceNetwork() {
+    setDeviceNetwork(await window.waypoint.deviceNetworkStatus());
+  }
+  async function requestDevicePairing(deviceId: string) {
+    setDeviceNetworkBusy(deviceId);
+    try {
+      setDeviceNetwork(await window.waypoint.requestDevicePairing(deviceId));
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setDeviceNetworkBusy(undefined);
+    }
+  }
+  async function confirmDevicePairing(sessionId: string) {
+    setDeviceNetworkBusy(sessionId);
+    try {
+      setDeviceNetwork(await window.waypoint.confirmDevicePairing(sessionId));
+      setNotice(
+        "Pairing confirmation sent. Both devices must confirm the same code.",
+      );
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setDeviceNetworkBusy(undefined);
+    }
+  }
+  async function unlinkNetworkDevice(deviceId: string, displayName: string) {
+    if (
+      !(await confirmModal({
+        title: `Unlink ${displayName}?`,
+        message:
+          "This immediately revokes fleet trust on this device. Workspace content already stored on either computer is not deleted.",
+        okLabel: "Unlink device",
+        danger: true,
+      }))
+    )
+      return;
+    setDeviceNetworkBusy(deviceId);
+    try {
+      setDeviceNetwork(await window.waypoint.unlinkDevice(deviceId));
+      setNotice(`${displayName} was unlinked.`);
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setDeviceNetworkBusy(undefined);
+    }
+  }
+  async function setNetworkDeviceMode(
+    deviceId: string,
+    mode: "supervised" | "autonomous",
+  ) {
+    setDeviceNetworkBusy(deviceId);
+    try {
+      setDeviceNetwork(await window.waypoint.setDeviceMode(deviceId, mode));
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setDeviceNetworkBusy(undefined);
+    }
+  }
+  async function updateDeviceHostPreferences(
+    patch: Parameters<Window["waypoint"]["updateDeviceHostPreferences"]>[0],
+  ) {
+    try {
+      setDeviceNetwork(
+        await window.waypoint.updateDeviceHostPreferences(patch),
+      );
+    } catch (reason) {
+      showError(reason);
+    }
+  }
+  async function setRemoteProfileEligibility(
+    profileId: string,
+    peerEligible: boolean,
+  ) {
+    if (!workspace) return;
+    if (
+      peerEligible &&
+      !(await confirmModal({
+        title: "Allow this profile for remote work?",
+        message:
+          "Trusted devices will be able to request work inside this profile's exact repository, filesystem, network, tool, approval, and duration boundaries. Every request still requires fresh mutual authorization, and supervised tasks require approval here.",
+        okLabel: "Allow remote requests",
+      }))
+    )
+      return;
+    try {
+      setProfiles(
+        await window.waypoint.setSecurityProfilePeerEligible(
+          workspace.id,
+          profileId,
+          peerEligible,
+        ),
+      );
+      setNotice(
+        peerEligible
+          ? "Remote requests may now select that exact authority profile."
+          : "That authority profile is no longer advertised for remote work.",
+      );
+    } catch (reason) {
+      showError(reason);
+    }
+  }
+  useEffect(() => {
+    const open = window.waypoint.onOpenDeviceNetwork(() => {
+        const tab = viewTab("devices");
+        setMainTabs((current) => addMainTab(current, tab));
+        setActiveMainTabId(tab.id);
+        setSidebarOpen(false);
+        void refreshDeviceNetwork().catch(showError);
+      }),
+      changed = window.waypoint.onDeviceNetworkChanged(() => {
+        void refreshDeviceNetwork().catch(showError);
+      });
+    return () => {
+      open();
+      changed();
+    };
+  }, []);
+  useEffect(() => {
+    if (drawer !== "devices") return;
+    const timer = window.setInterval(
+      () => void refreshDeviceNetwork().catch(showError),
+      2_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [drawer]);
   useEffect(() => {
     if (!error && !notice) return;
     const timer = window.setTimeout(
@@ -1417,9 +1554,7 @@ export function App() {
     openRouterDraftGenerationRef.current += 1;
     setOpenRouterSettingsDraft(status.settings);
   }
-  function editOpenRouterSettingsDraft(
-    next: OpenRouterStatus["settings"],
-  ) {
+  function editOpenRouterSettingsDraft(next: OpenRouterStatus["settings"]) {
     openRouterDraftGenerationRef.current += 1;
     setOpenRouterSettingsDraft(next);
   }
@@ -1490,9 +1625,7 @@ export function App() {
         };
       setOpenRouter({ ...openRouter, settings: next });
       await window.waypoint.updateOpenRouterSettings(next);
-      const lane = imageRoute
-          ? "openrouterAttachment"
-          : "openrouterEveryday",
+      const lane = imageRoute ? "openrouterAttachment" : "openrouterEveryday",
         supported = openRouterModelThinking(value)?.supported ?? [];
       if (chatThinking[lane] && !supported.includes(chatThinking[lane]))
         await changeThinking(lane, "");
@@ -2081,6 +2214,7 @@ export function App() {
       nextRuns,
       nextSync,
       nextDesktop,
+      nextDeviceFabric,
       nextChatModels,
       nextChatThinking,
       nextVoice,
@@ -2097,6 +2231,7 @@ export function App() {
       window.waypoint.listExecutions(next.id),
       window.waypoint.syncStatus(next.id),
       window.waypoint.desktopSyncStatus(next.id),
+      window.waypoint.deviceFabricStatus(),
       window.waypoint.chatModelPreferences(next.id),
       window.waypoint.chatThinkingPreferences(next.id),
       window.waypoint.voicePreferences(next.id),
@@ -2142,6 +2277,7 @@ export function App() {
     );
     setSyncStatus(nextSync);
     setDesktopSync(nextDesktop);
+    setDeviceFabric(nextDeviceFabric);
     setChatModels(nextChatModels);
     setChatThinking(nextChatThinking);
     if (!settingsOpenRef.current)
@@ -2771,7 +2907,15 @@ export function App() {
       window.waypoint.chatThinkingPreferences(workspace.id),
     ])
       .then(
-        ([settings, receipts, failures, caps, provider, browsers, thinking]) => {
+        ([
+          settings,
+          receipts,
+          failures,
+          caps,
+          provider,
+          browsers,
+          thinking,
+        ]) => {
           if (
             !current ||
             !settingsOpenRef.current ||
@@ -3020,6 +3164,44 @@ export function App() {
     if (!workspace) throw new Error("Workspace is unavailable");
     let result;
     try {
+      if (order.targetDeviceId && order.targetRoot && order.targetProfileId) {
+        if (!workspace.executionRoot)
+          throw new Error(
+            "Select an agent repository before dispatching remote work",
+          );
+        const prompt = officeWorkOrderPrompt(order),
+          remote = await window.waypoint.dispatchDeviceNetworkWork({
+          workspaceId: workspace.id,
+          targetDeviceId: order.targetDeviceId,
+          provider: order.provider as "codex" | "claude" | "grok",
+          providerVersion: order.targetProviderVersion,
+          mode: order.remoteMode,
+          instruction: prompt,
+          targetRoot: order.targetRoot,
+          targetProfileId: order.targetProfileId,
+          sourceRoot: workspace.executionRoot,
+          sourceProfileId: order.securityProfileId,
+          idempotencyKey:
+            order.dispatchIdempotencyKey ?? crypto.randomUUID(),
+          timeoutMs: 30 * 60_000,
+          }),
+          chatId = await window.waypoint.createChat(
+            workspace.id,
+            `Remote · ${order.targetDeviceName ?? order.targetDeviceId}`,
+          );
+        await window.waypoint.addMessage(
+          workspace.id,
+          chatId,
+          "user",
+          prompt,
+          [],
+        );
+        result = {
+          chatId,
+          runId: remote.order.jobId,
+          provider: order.provider,
+        };
+      } else
       result = await dispatchConfirmedOfficeWorkOrder(
         {
           createChat: (workspaceId, title) =>
@@ -3065,7 +3247,7 @@ export function App() {
     const refreshed = await refreshAfterOfficeDispatch(refresh);
     if (refreshed) {
       setNotice(
-        `${order.provider === "openrouter" ? "OpenRouter" : order.provider} work order dispatched. Select the worker for live status.`,
+        `${order.targetDeviceId ? order.targetDeviceName ?? "Remote device" : order.provider === "openrouter" ? "OpenRouter" : order.provider} work order dispatched. Select the worker for live status.`,
       );
     } else {
       setNotice(
@@ -3739,9 +3921,7 @@ export function App() {
           attachmentIds,
           reasoningEffort:
             chatThinking[
-              queuedHasImage
-                ? "openrouterAttachment"
-                : "openrouterEveryday"
+              queuedHasImage ? "openrouterAttachment" : "openrouterEveryday"
             ] || undefined,
         });
         let exactRunId: string, runKind: "hosted" | "local";
@@ -4473,11 +4653,48 @@ export function App() {
     if (!token) return;
     try {
       const result = await window.waypoint.submitSyncEnrollment(token);
+      setWorkspaces((current) =>
+        current.some((item) => item.id === result.workspace.id)
+          ? current
+          : [...current, result.workspace],
+      );
+      if (workspace?.id === result.workspace.id)
+        await refresh(result.workspace);
+      else {
+        await selectWorkspace(result.workspace);
+        setDrawer("settings");
+      }
       setNotice(
         "Enrollment requested. After the owner approves, choose Complete enrollment.",
       );
-      if (workspaces.some((item) => item.id === result.workspaceId))
-        await refresh();
+    } catch (reason) {
+      showError(reason);
+    }
+  }
+  async function leaveSync() {
+    if (!workspace || !desktopSync) return;
+    const pending = desktopSync.pendingEnrollment;
+    const confirmed = await confirmModal({
+      title: pending
+        ? "Cancel this pending enrollment?"
+        : "Leave workspace sync on this device?",
+      message: pending
+        ? "Waypoint will remove the pending enrollment and its protected local key material. Your workspace chats, documents, and local files will stay on this device."
+        : "Waypoint will stop this desktop host, disable remote-worker authority, and remove this device's protected sync keys and pending sync state. Your workspace chats, documents, and local files will stay on this device. The device record may remain on the other host until an owner revokes it.",
+      okLabel: pending ? "Cancel enrollment" : "Leave sync",
+      danger: true,
+    });
+    if (!confirmed) return;
+    try {
+      await window.waypoint.leaveDesktopSync(workspace.id);
+      setSyncInvitation(undefined);
+      setBootstrapBundle("");
+      setNotice(
+        pending
+          ? "Pending enrollment canceled. Workspace content was preserved."
+          : "This device left workspace sync. Workspace content was preserved.",
+      );
+      await refresh(workspace);
     } catch (reason) {
       showError(reason);
     }
@@ -4740,7 +4957,8 @@ export function App() {
         label: "OpenRouter",
         available: Boolean(openRouter?.capability.available),
         availabilityReason:
-          openRouter?.capability.reason ?? "configure hosted requests in Settings",
+          openRouter?.capability.reason ??
+          "configure hosted requests in Settings",
         model: openRouter?.settings.everydayModel || undefined,
         modelLabel:
           openRouter?.settings.everydayModel || "OpenRouter everyday default",
@@ -4881,6 +5099,14 @@ export function App() {
             }}
           >
             <span>▦</span> Command Center <kbd>Experimental</kbd>
+          </button>
+          <button
+            onClick={() => {
+              openViewTab("devices");
+              void refreshDeviceNetwork().catch(showError);
+            }}
+          >
+            <span>◫</span> Device Network
           </button>
           <button onClick={() => void openBriefing()}>
             <span>☀</span> Briefing
@@ -5874,6 +6100,8 @@ export function App() {
                 workspaceName={workspace.name}
                 repositoryBoundary={workspace.executionRoot ?? ""}
                 providerOptions={officeProviderOptions}
+                localDeviceId={deviceNetwork?.local.localDeviceId}
+                deviceNetwork={deviceNetwork}
                 chats={chats}
                 runs={runs}
                 requests={providerRequests}
@@ -5885,6 +6113,31 @@ export function App() {
                 onDispatchWorkOrder={dispatchOfficeWorkOrder}
               />
             </Suspense>
+          )}
+          {drawer === "devices" && (
+            <DeviceNetwork
+              network={deviceNetwork}
+              busy={deviceNetworkBusy}
+              onRefresh={() => void refreshDeviceNetwork().catch(showError)}
+              onRequestPairing={(deviceId) =>
+                void requestDevicePairing(deviceId)
+              }
+              onConfirmPairing={(sessionId) =>
+                void confirmDevicePairing(sessionId)
+              }
+              onUnlink={(deviceId, displayName) =>
+                void unlinkNetworkDevice(deviceId, displayName)
+              }
+              onMode={(deviceId, mode) =>
+                void setNetworkDeviceMode(deviceId, mode)
+              }
+              onPreferences={(patch) => void updateDeviceHostPreferences(patch)}
+              repositoryBoundary={workspace.executionRoot}
+              profiles={profiles}
+              onProfileEligibility={(profileId, peerEligible) =>
+                void setRemoteProfileEligibility(profileId, peerEligible)
+              }
+            />
           )}
           {drawer === "browser" && (
             <div
@@ -6280,6 +6533,10 @@ export function App() {
           )}
           {drawer === "knowledge" && (
             <div className="drawer-body">
+              <FleetKnowledgePanel
+                context="knowledge"
+                localDeviceId={deviceNetwork?.local.localDeviceId}
+              />
               <p className="drawer-intro">
                 Review what Waypoint may remember from conversation. Nothing
                 becomes durable knowledge until you approve it.
@@ -7477,7 +7734,7 @@ export function App() {
                             : manualCaptureReadiness?.state ===
                                 "permission_denied"
                               ? "Screen Recording is disabled"
-                          : "Permission required"}
+                              : "Permission required"}
                     </strong>
                     <span>
                       {manualCaptureReadiness?.reason ||
@@ -8477,7 +8734,11 @@ export function App() {
                           <small>Device-local</small>
                         </div>
                         <div className="model-lane-grid">
-                          <div className="model-lane-card" role="group" aria-label="Codex model and thinking">
+                          <div
+                            className="model-lane-card"
+                            role="group"
+                            aria-label="Codex model and thinking"
+                          >
                             <span className="model-lane-label">
                               <i aria-hidden="true">C</i>
                               <span>
@@ -8486,33 +8747,51 @@ export function App() {
                               </span>
                             </span>
                             <label className="model-choice-field">
-                            <span className="sr-only">Codex model preference</span>
-                            <select
-                              aria-label="Codex model preference"
-                              value={chatModels.codex}
-                              onChange={(event) =>
-                                void changeSubscriptionModel(
-                                  "codex",
-                                  event.target.value,
-                                ).catch(showError)
-                              }
-                            >
-                              {codexModelChoices.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                  {item.label}
-                                </option>
-                              ))}
-                            </select>
+                              <span className="sr-only">
+                                Codex model preference
+                              </span>
+                              <select
+                                aria-label="Codex model preference"
+                                value={chatModels.codex}
+                                onChange={(event) =>
+                                  void changeSubscriptionModel(
+                                    "codex",
+                                    event.target.value,
+                                  ).catch(showError)
+                                }
+                              >
+                                {codexModelChoices.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
                             </label>
                             <ThinkingSelect
                               label="Codex thinking"
                               value={chatThinking.codex}
-                              supported={codexModelChoices.find((item) => item.id === chatModels.codex)?.thinking?.supported ?? []}
-                              defaultEffort={codexModelChoices.find((item) => item.id === chatModels.codex)?.thinking?.defaultEffort}
-                              onChange={(value) => void changeThinking("codex", value).catch(showError)}
+                              supported={
+                                codexModelChoices.find(
+                                  (item) => item.id === chatModels.codex,
+                                )?.thinking?.supported ?? []
+                              }
+                              defaultEffort={
+                                codexModelChoices.find(
+                                  (item) => item.id === chatModels.codex,
+                                )?.thinking?.defaultEffort
+                              }
+                              onChange={(value) =>
+                                void changeThinking("codex", value).catch(
+                                  showError,
+                                )
+                              }
                             />
                           </div>
-                          <div className="model-lane-card" role="group" aria-label="Claude model and thinking">
+                          <div
+                            className="model-lane-card"
+                            role="group"
+                            aria-label="Claude model and thinking"
+                          >
                             <span className="model-lane-label">
                               <i aria-hidden="true">A</i>
                               <span>
@@ -8521,33 +8800,51 @@ export function App() {
                               </span>
                             </span>
                             <label className="model-choice-field">
-                            <span className="sr-only">Claude model preference</span>
-                            <select
-                              aria-label="Claude model preference"
-                              value={chatModels.claude}
-                              onChange={(event) =>
-                                void changeSubscriptionModel(
-                                  "claude",
-                                  event.target.value,
-                                ).catch(showError)
-                              }
-                            >
-                              {claudeModelChoices.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                  {item.label}
-                                </option>
-                              ))}
-                            </select>
+                              <span className="sr-only">
+                                Claude model preference
+                              </span>
+                              <select
+                                aria-label="Claude model preference"
+                                value={chatModels.claude}
+                                onChange={(event) =>
+                                  void changeSubscriptionModel(
+                                    "claude",
+                                    event.target.value,
+                                  ).catch(showError)
+                                }
+                              >
+                                {claudeModelChoices.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
                             </label>
                             <ThinkingSelect
                               label="Claude thinking"
                               value={chatThinking.claude}
-                              supported={claudeModelChoices.find((item) => item.id === chatModels.claude)?.thinking?.supported ?? []}
-                              defaultEffort={claudeModelChoices.find((item) => item.id === chatModels.claude)?.thinking?.defaultEffort}
-                              onChange={(value) => void changeThinking("claude", value).catch(showError)}
+                              supported={
+                                claudeModelChoices.find(
+                                  (item) => item.id === chatModels.claude,
+                                )?.thinking?.supported ?? []
+                              }
+                              defaultEffort={
+                                claudeModelChoices.find(
+                                  (item) => item.id === chatModels.claude,
+                                )?.thinking?.defaultEffort
+                              }
+                              onChange={(value) =>
+                                void changeThinking("claude", value).catch(
+                                  showError,
+                                )
+                              }
                             />
                           </div>
-                          <div className="model-lane-card" role="group" aria-label="Grok Build model and thinking">
+                          <div
+                            className="model-lane-card"
+                            role="group"
+                            aria-label="Grok Build model and thinking"
+                          >
                             <span className="model-lane-label">
                               <i aria-hidden="true">G</i>
                               <span>
@@ -8556,30 +8853,44 @@ export function App() {
                               </span>
                             </span>
                             <label className="model-choice-field">
-                            <span className="sr-only">Grok Build model preference</span>
-                            <select
-                              aria-label="Grok Build model preference"
-                              value={chatModels.grok}
-                              onChange={(event) =>
-                                void changeSubscriptionModel(
-                                  "grok",
-                                  event.target.value,
-                                ).catch(showError)
-                              }
-                            >
-                              {grokModelChoices.map((item) => (
-                                <option key={item.id} value={item.id}>
-                                  {item.label}
-                                </option>
-                              ))}
-                            </select>
+                              <span className="sr-only">
+                                Grok Build model preference
+                              </span>
+                              <select
+                                aria-label="Grok Build model preference"
+                                value={chatModels.grok}
+                                onChange={(event) =>
+                                  void changeSubscriptionModel(
+                                    "grok",
+                                    event.target.value,
+                                  ).catch(showError)
+                                }
+                              >
+                                {grokModelChoices.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
                             </label>
                             <ThinkingSelect
                               label="Grok Build thinking"
                               value={chatThinking.grok}
-                              supported={grokModelChoices.find((item) => item.id === chatModels.grok)?.thinking?.supported ?? []}
-                              defaultEffort={grokModelChoices.find((item) => item.id === chatModels.grok)?.thinking?.defaultEffort}
-                              onChange={(value) => void changeThinking("grok", value).catch(showError)}
+                              supported={
+                                grokModelChoices.find(
+                                  (item) => item.id === chatModels.grok,
+                                )?.thinking?.supported ?? []
+                              }
+                              defaultEffort={
+                                grokModelChoices.find(
+                                  (item) => item.id === chatModels.grok,
+                                )?.thinking?.defaultEffort
+                              }
+                              onChange={(value) =>
+                                void changeThinking("grok", value).catch(
+                                  showError,
+                                )
+                              }
                             />
                           </div>
                         </div>
@@ -8700,14 +9011,13 @@ export function App() {
                                 });
                                 editOpenRouterThinkingDraft((current) => ({
                                   ...current,
-                                  openrouterStrategic:
-                                    openRouterModelThinking(
-                                      event.target.value,
-                                    )?.supported.includes(
-                                      current.openrouterStrategic as ThinkingEffort,
-                                    )
-                                      ? current.openrouterStrategic
-                                      : "",
+                                  openrouterStrategic: openRouterModelThinking(
+                                    event.target.value,
+                                  )?.supported.includes(
+                                    current.openrouterStrategic as ThinkingEffort,
+                                  )
+                                    ? current.openrouterStrategic
+                                    : "",
                                 }));
                               }}
                             >
@@ -8738,14 +9048,13 @@ export function App() {
                                 });
                                 editOpenRouterThinkingDraft((current) => ({
                                   ...current,
-                                  openrouterEveryday:
-                                    openRouterModelThinking(
-                                      event.target.value,
-                                    )?.supported.includes(
-                                      current.openrouterEveryday as ThinkingEffort,
-                                    )
-                                      ? current.openrouterEveryday
-                                      : "",
+                                  openrouterEveryday: openRouterModelThinking(
+                                    event.target.value,
+                                  )?.supported.includes(
+                                    current.openrouterEveryday as ThinkingEffort,
+                                  )
+                                    ? current.openrouterEveryday
+                                    : "",
                                 }));
                               }}
                             >
@@ -8776,14 +9085,13 @@ export function App() {
                                 });
                                 editOpenRouterThinkingDraft((current) => ({
                                   ...current,
-                                  openrouterAttachment:
-                                    openRouterModelThinking(
-                                      event.target.value,
-                                    )?.supported.includes(
-                                      current.openrouterAttachment as ThinkingEffort,
-                                    )
-                                      ? current.openrouterAttachment
-                                      : "",
+                                  openrouterAttachment: openRouterModelThinking(
+                                    event.target.value,
+                                  )?.supported.includes(
+                                    current.openrouterAttachment as ThinkingEffort,
+                                  )
+                                    ? current.openrouterAttachment
+                                    : "",
                                 }));
                               }}
                             >
@@ -8902,16 +9210,10 @@ export function App() {
                             </span>
                             <progress
                               aria-label="Monthly OpenRouter budget used"
-                              max={Math.max(
-                                1,
-                                hostedSettings.monthlyCapMicros,
-                              )}
+                              max={Math.max(1, hostedSettings.monthlyCapMicros)}
                               value={Math.min(
                                 openRouter.usage.summary.monthMicros,
-                                Math.max(
-                                  1,
-                                  hostedSettings.monthlyCapMicros,
-                                ),
+                                Math.max(1, hostedSettings.monthlyCapMicros),
                               )}
                             />
                           </article>
@@ -8938,10 +9240,7 @@ export function App() {
                             </span>
                             <progress
                               aria-label="Year-to-date OpenRouter budget used"
-                              max={Math.max(
-                                1,
-                                hostedSettings.ytdCapMicros,
-                              )}
+                              max={Math.max(1, hostedSettings.ytdCapMicros)}
                               value={Math.min(
                                 openRouter.usage.summary.ytdMicros,
                                 Math.max(1, hostedSettings.ytdCapMicros),
@@ -8975,9 +9274,7 @@ export function App() {
                               type="number"
                               min="0"
                               step="1"
-                              value={
-                                hostedSettings.ytdCapMicros / 1_000_000
-                              }
+                              value={hostedSettings.ytdCapMicros / 1_000_000}
                               onChange={(event) =>
                                 editOpenRouterSettingsDraft({
                                   ...hostedSettings,
@@ -9006,9 +9303,7 @@ export function App() {
                           <label>
                             Cap fallback
                             <select
-                              value={
-                                hostedSettings.fallbackProvider ?? "codex"
-                              }
+                              value={hostedSettings.fallbackProvider ?? "codex"}
                               onChange={(event) =>
                                 editOpenRouterSettingsDraft({
                                   ...hostedSettings,
@@ -9082,6 +9377,22 @@ export function App() {
                   </p>
                   <dl className="settings-list">
                     <div>
+                      <dt>This Waypoint</dt>
+                      <dd>
+                        {deviceFabric
+                          ? `${deviceFabric.metadata.displayName} · ${deviceFabric.metadata.platform}`
+                          : "Starting device identity…"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Installation identity</dt>
+                      <dd>
+                        {deviceFabric
+                          ? `${deviceFabric.localDeviceId.slice(0, 12)}… · ${deviceFabric.activeTrustedDeviceCount} trusted`
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div>
                       <dt>Transport</dt>
                       <dd>
                         {desktopSync?.configured
@@ -9112,25 +9423,37 @@ export function App() {
                       <dd>{syncStatus?.localOnlyAttachments ?? 0}</dd>
                     </div>
                   </dl>
-                  {!desktopSync?.configured &&
-                    !desktopSync?.pendingEnrollment && (
-                      <div className="drawer-actions">
+                  <div className="drawer-actions">
+                    {!desktopSync?.configured &&
+                      !desktopSync?.pendingEnrollment && (
                         <button onClick={() => void initializeSync()}>
                           Set up first device
                         </button>
+                      )}
+                    {!desktopSync?.pendingEnrollment && (
+                      <button
+                        className="secondary"
+                        onClick={() => void joinSync()}
+                      >
+                        {desktopSync?.configured
+                          ? "Join another workspace"
+                          : "Join with invitation"}
+                      </button>
+                    )}
+                    {desktopSync?.pendingEnrollment && (
+                      <>
+                        <button onClick={() => void completeSync()}>
+                          Complete approved enrollment
+                        </button>
                         <button
                           className="secondary"
-                          onClick={() => void joinSync()}
+                          onClick={() => void leaveSync()}
                         >
-                          Join with invitation
+                          Cancel enrollment
                         </button>
-                      </div>
+                      </>
                     )}
-                  {desktopSync?.pendingEnrollment && (
-                    <button onClick={() => void completeSync()}>
-                      Complete approved enrollment
-                    </button>
-                  )}
+                  </div>
                   {bootstrapBundle && (
                     <div className="bootstrap-bundle">
                       <p>Public operator bootstrap bundle</p>
@@ -9205,6 +9528,12 @@ export function App() {
                             Resume rotation
                           </button>
                         )}
+                        <button
+                          className="danger"
+                          onClick={() => void leaveSync()}
+                        >
+                          Leave sync on this device
+                        </button>
                       </div>
                       {syncInvitation && (
                         <section
@@ -9214,7 +9543,8 @@ export function App() {
                           <div>
                             <strong>Device invitation ready</strong>
                             <span>
-                              Expires {new Date(
+                              Expires{" "}
+                              {new Date(
                                 syncInvitation.expiresAt,
                               ).toLocaleTimeString()}
                             </span>

@@ -3,7 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd(),
-  source = (name: string) => readFileSync(path.join(root, name), "utf8");
+  source = (name: string) =>
+    readFileSync(path.join(root, name), "utf8").replace(/\r\n/g, "\n");
 
 describe("model-directed configuration integration", () => {
   it("advertises one bounded proposal tool on every direct provider chat", () => {

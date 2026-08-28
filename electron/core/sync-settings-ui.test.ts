@@ -25,4 +25,12 @@ describe("device invitation settings flow", () => {
     expect(source).toContain("Copy it from the visible invitation card");
     expect(source).toContain("Clipboard access was denied");
   });
+
+  it("keeps invitation entry available and provides a content-preserving device leave", () => {
+    expect(source).toContain("Join another workspace");
+    expect(source).toContain("Leave sync on this device");
+    expect(source).toContain("window.waypoint.leaveDesktopSync(workspace.id)");
+    expect(source).toContain("Your workspace chats, documents, and local files will stay on this device");
+    expect(source).toMatch(/!desktopSync\?\.pendingEnrollment.*joinSync\(\)/);
+  });
 });

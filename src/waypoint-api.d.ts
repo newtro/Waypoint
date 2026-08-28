@@ -12,6 +12,127 @@ import type {
   WorkspaceSummary,
 } from "../electron/core/types";
 import type { DiagnosticsReport } from "../electron/core/diagnostics";
+type DeviceNetworkView = {
+  version: 1;
+  host: {
+    running: boolean;
+    endpoint?: string;
+    paused: boolean;
+    pauseWork: boolean;
+    pauseSync: boolean;
+    reason: string;
+  };
+  local: {
+    version: 1;
+    localDeviceId: string;
+    fingerprintSha256: string;
+    metadata: {
+      displayName: string;
+      platform: "darwin" | "win32" | "linux" | "unknown";
+      architecture: string;
+      appVersion: string;
+    };
+    trustedDeviceCount: number;
+    activeTrustedDeviceCount: number;
+    legacyWorkspaceIdentityCount: number;
+  };
+  peers: Array<{
+    deviceId: string;
+    displayName: string;
+    platform: string;
+    architecture: string;
+    appVersion: string;
+    fingerprintSha256: string;
+    status:
+      | "unlinked"
+      | "link-requested"
+      | "trusted-online"
+      | "trusted-offline"
+      | "working"
+      | "needs-attention"
+      | "paused"
+      | "identity-conflict";
+    trusted: boolean;
+    online: boolean;
+    lastSeenAt?: string;
+    endpoint?: string;
+    capabilities: string[];
+    pauseWork: boolean;
+    pauseSync: boolean;
+    runningJobs: number;
+    attentionItems: number;
+    defaultMode?: "supervised" | "autonomous";
+    catalogWorkspaceCount?: number;
+    catalogUpdatedAt?: string;
+    pairing?: {
+      sessionId: string;
+      direction: "incoming" | "outgoing";
+      code: string;
+      expiresAt: string;
+      localConfirmed: boolean;
+      remoteConfirmed: boolean;
+    };
+  }>;
+  preferences: {
+    version: 1;
+    startAtLogin: boolean;
+    closeToTray: boolean;
+    pauseWork: boolean;
+    pauseSync: boolean;
+  };
+};
+type FleetRemoteWorkRecordView = {
+  order: {
+    version: 1;
+    jobId: string;
+    idempotencyKey: string;
+    controllerDeviceId: string;
+    targetDeviceId: string;
+    workspaceId: string;
+    provider: "codex" | "claude" | "grok";
+    providerVersion?: string;
+    mode: "supervised" | "autonomous";
+    instruction: string;
+    controllerRoot: string;
+    controllerProfileId: string;
+    targetRoot: string;
+    targetProfileId: string;
+    timeoutMs: number;
+    createdAt: string;
+    handoff?: {
+      kind: "git_bundle" | "patch_bundle";
+      repositoryName: string;
+      baseCommit?: string;
+      headCommit?: string;
+      bytesBase64: string;
+      sha256: string;
+    };
+  };
+  status: "queued" | "waiting_approval" | "running" | "completed" | "failed" | "canceled";
+  worktreePath?: string;
+  resultSummary?: string;
+  errorCode?: string;
+  pendingApproval?: {
+    requestId: string;
+    kind: string;
+    title: string;
+    detail: string;
+    createdAt: string;
+  };
+  resultArtifact?: {
+    patchBase64: string;
+    patchSha256: string;
+    baseCommit: string;
+    status: string[];
+  };
+  events: Array<{
+    sequence: number;
+    type: string;
+    message: string;
+    createdAt: string;
+  }>;
+  updatedAt: string;
+};
 
 type ScreenCaptureLayer = {
   id: string;
@@ -57,6 +178,8 @@ declare global {
   interface Window {
     waypoint: {
       platform: string;
+      onOpenDeviceNetwork(listener: () => void): () => void;
+      onDeviceNetworkChanged(listener: () => void): () => void;
       onScreenCaptureRequest(listener: () => void): () => void;
       onScreenCaptureCompleted(
         listener: (value: {
@@ -406,6 +529,189 @@ declare global {
           identityRotated?: boolean;
         };
       }>;
+      deviceFabricStatus(): Promise<{
+        version: 1;
+        localDeviceId: string;
+        fingerprintSha256: string;
+        metadata: {
+          displayName: string;
+          platform: "darwin" | "win32" | "linux" | "unknown";
+          architecture: string;
+          appVersion: string;
+        };
+        trustedDeviceCount: number;
+        activeTrustedDeviceCount: number;
+        legacyWorkspaceIdentityCount: number;
+      }>;
+      deviceNetworkStatus(): Promise<DeviceNetworkView>;
+      deviceNetworkCatalog(): Promise<
+        Array<{
+          version: 1;
+          deviceId: string;
+          generatedAt: string;
+          workspaces: Array<{
+            workspaceId: string;
+            name: string;
+            createdAt: string;
+            updatedAt: string;
+            authoritativeDeviceId: string;
+            keyEpoch: number;
+            counts: {
+              chats: number;
+              documents: number;
+              memories: number;
+              attachments: number;
+            };
+          }>;
+        }>
+      >;
+      searchDeviceNetwork(
+        query: string,
+        limit?: number,
+      ): Promise<{
+        query: string;
+        partial: boolean;
+        unavailableDeviceIds: string[];
+        results: Array<{
+          sourceDeviceId: string;
+          workspaceId: string;
+          workspaceName: string;
+          objectId: string;
+          objectKind: string;
+          revisionId?: string;
+          title: string;
+          excerpt: string;
+          score: number;
+          method: "text" | "cached_text";
+        }>;
+      }>;
+      openDeviceNetworkObject(input: {
+        sourceDeviceId: string;
+        workspaceId: string;
+        objectId: string;
+        objectKind: string;
+        requireFreshAuthorization?: boolean;
+      }): Promise<{
+        version: 1;
+        sourceDeviceId: string;
+        workspace: { id: string; name: string };
+        objectKind: string;
+        object: unknown;
+        cache: { sourceOnline: boolean; encrypted: true };
+      }>;
+      pinDeviceNetworkWorkspace(
+        sourceDeviceId: string,
+        workspaceId: string,
+        pinned: boolean,
+      ): Promise<{
+        grants: number;
+        objects: number;
+        bytes: number;
+        pinnedWorkspaceIds: string[];
+        pins: Array<{
+          sourceDeviceId: string;
+          workspaceId: string;
+          completeWithinBounds: boolean;
+          attachmentLimitBytes: number;
+          omittedAttachments: number;
+          pinnedAt: string;
+        }>;
+        completeWithinBounds?: boolean;
+        attachmentLimitBytes?: number;
+        omittedAttachments?: number;
+      }>;
+      deviceNetworkCacheStatus(): Promise<{
+        grants: number;
+        objects: number;
+        bytes: number;
+        pinnedWorkspaceIds: string[];
+        pins: Array<{
+          sourceDeviceId: string;
+          workspaceId: string;
+          completeWithinBounds: boolean;
+          attachmentLimitBytes: number;
+          omittedAttachments: number;
+          pinnedAt: string;
+        }>;
+      }>;
+      deviceNetworkWorkerInventory(deviceId: string): Promise<{
+        version: 1;
+        deviceId: string;
+        platform: string;
+        architecture: string;
+        paused: boolean;
+        totalMemoryMb: number;
+        providers: Array<{
+          id: "codex" | "claude" | "grok";
+          available: boolean;
+          version?: string;
+          reason?: string;
+          modelPolicy: "provider-default";
+        }>;
+        roots: Array<{
+          root: string;
+          profileId: string;
+          profileName: string;
+          filesystem: string;
+          network: string;
+          tools: string[];
+          approval: string;
+          maxDurationMs: number;
+        }>;
+      }>;
+      dispatchDeviceNetworkWork(input: {
+        workspaceId: string;
+        targetDeviceId: string;
+        provider: "codex" | "claude" | "grok";
+        providerVersion?: string;
+        mode?: "supervised" | "autonomous";
+        instruction: string;
+        targetRoot: string;
+        targetProfileId: string;
+        sourceRoot: string;
+        sourceProfileId: string;
+        idempotencyKey: string;
+        timeoutMs?: number;
+      }): Promise<FleetRemoteWorkRecordView>;
+      deviceNetworkWorkStatus(
+        deviceId: string,
+        jobId: string,
+      ): Promise<FleetRemoteWorkRecordView>;
+      cancelDeviceNetworkWork(
+        deviceId: string,
+        jobId: string,
+      ): Promise<FleetRemoteWorkRecordView>;
+      applyDeviceNetworkWorkResult(
+        deviceId: string,
+        jobId: string,
+        sourceRoot: string,
+      ): Promise<{ applied: boolean; reason: "clean" | "applied" }>;
+      discardDeviceNetworkWork(
+        deviceId: string,
+        jobId: string,
+      ): Promise<FleetRemoteWorkRecordView>;
+      localFleetWork(): Promise<FleetRemoteWorkRecordView[]>;
+      controllerFleetWork(): Promise<FleetRemoteWorkRecordView[]>;
+      approveLocalFleetWork(jobId: string): Promise<FleetRemoteWorkRecordView>;
+      rejectLocalFleetWork(jobId: string): Promise<FleetRemoteWorkRecordView>;
+      resolveLocalFleetProviderApproval(
+        jobId: string,
+        requestId: string,
+        accepted: boolean,
+      ): Promise<FleetRemoteWorkRecordView>;
+      requestDevicePairing(deviceId: string): Promise<DeviceNetworkView>;
+      confirmDevicePairing(sessionId: string): Promise<DeviceNetworkView>;
+      unlinkDevice(deviceId: string): Promise<DeviceNetworkView>;
+      setDeviceMode(
+        deviceId: string,
+        mode: "supervised" | "autonomous",
+      ): Promise<DeviceNetworkView>;
+      updateDeviceHostPreferences(preferences: {
+        startAtLogin?: boolean;
+        closeToTray?: boolean;
+        pauseWork?: boolean;
+        pauseSync?: boolean;
+      }): Promise<DeviceNetworkView>;
       startDesktopSyncHost(workspaceId: string): Promise<{
         canceled: boolean;
         running?: boolean;
@@ -417,6 +723,11 @@ declare global {
         mode: "desktop-host";
         endpoint?: string;
         reason: string;
+      }>;
+      leaveDesktopSync(workspaceId: string): Promise<{
+        configured: false;
+        pendingEnrollment: false;
+        contentPreserved: true;
       }>;
       initializeDesktopSync(workspaceId: string): Promise<{
         canceled: boolean;
@@ -432,9 +743,12 @@ declare global {
       createSyncInvitation(
         workspaceId: string,
       ): Promise<{ token: string; expiresAt: string }>;
-      submitSyncEnrollment(
-        token: string,
-      ): Promise<{ workspaceId: string; requestId: string; status: "pending" }>;
+      submitSyncEnrollment(token: string): Promise<{
+        workspaceId: string;
+        requestId: string;
+        status: "pending";
+        workspace: WorkspaceSummary;
+      }>;
       completeSyncEnrollment(
         workspaceId: string,
       ): Promise<{ configured: true; deviceId: string; keyEpoch: number }>;
@@ -1068,6 +1382,11 @@ declare global {
           secretNames: string[];
         }>
       >;
+      setSecurityProfilePeerEligible(
+        workspaceId: string,
+        profileId: string,
+        peerEligible: boolean,
+      ): ReturnType<Window["waypoint"]["listSecurityProfiles"]>;
       listProviderSessions(
         workspaceId: string,
         chatId?: string,
@@ -1146,7 +1465,15 @@ declare global {
         parentExecutionId?: string,
         attachmentIds?: string[],
         taskType?: "analyze" | "summarize" | "critique",
-        reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra",
+        reasoningEffort?:
+          | "none"
+          | "minimal"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh"
+          | "max"
+          | "ultra",
       ): Promise<{
         runId: string;
         status: "running";
@@ -1647,8 +1974,25 @@ declare global {
             label: string;
             legacy?: boolean;
             thinking?: {
-              supported: Array<"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra">;
-              defaultEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+              supported: Array<
+                | "none"
+                | "minimal"
+                | "low"
+                | "medium"
+                | "high"
+                | "xhigh"
+                | "max"
+                | "ultra"
+              >;
+              defaultEffort?:
+                | "none"
+                | "minimal"
+                | "low"
+                | "medium"
+                | "high"
+                | "xhigh"
+                | "max"
+                | "ultra";
             };
           }>;
           reason: string;
@@ -1662,7 +2006,9 @@ declare global {
         provider: "codex" | "claude" | "grok",
         model: string,
       ): Promise<Record<"codex" | "claude" | "grok", string>>;
-      chatThinkingPreferences(workspaceId: string): Promise<
+      chatThinkingPreferences(
+        workspaceId: string,
+      ): Promise<
         Record<
           | "codex"
           | "claude"
@@ -1670,7 +2016,15 @@ declare global {
           | "openrouterStrategic"
           | "openrouterEveryday"
           | "openrouterAttachment",
-          "" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+          | ""
+          | "none"
+          | "minimal"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh"
+          | "max"
+          | "ultra"
         >
       >;
       setChatThinkingPreference(
@@ -1833,16 +2187,10 @@ declare global {
       }>;
       updateOpenRouterRouting(
         workspaceId: string,
-        settings: Parameters<
-          Window["waypoint"]["updateOpenRouterSettings"]
-        >[0],
+        settings: Parameters<Window["waypoint"]["updateOpenRouterSettings"]>[0],
         thinking: Pick<
-          Awaited<
-            ReturnType<Window["waypoint"]["chatThinkingPreferences"]>
-          >,
-          | "openrouterStrategic"
-          | "openrouterEveryday"
-          | "openrouterAttachment"
+          Awaited<ReturnType<Window["waypoint"]["chatThinkingPreferences"]>>,
+          "openrouterStrategic" | "openrouterEveryday" | "openrouterAttachment"
         >,
       ): Promise<{
         settings: Awaited<
@@ -1860,7 +2208,15 @@ declare global {
         role: "strategic" | "everyday";
         securityProfileId: string;
         attachmentIds: string[];
-        reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+        reasoningEffort?:
+          | "none"
+          | "minimal"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh"
+          | "max"
+          | "ultra";
       }): Promise<{
         runId?: string;
         status?: "running";

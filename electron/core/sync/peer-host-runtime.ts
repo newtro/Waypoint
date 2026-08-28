@@ -29,6 +29,7 @@ export class PeerHostRuntime {
   private external?: HttpsServer;
   private internal?: Awaited<ReturnType<typeof createRelayServer>>;
   private current?: PeerHostStatus;
+  private transition: Promise<void> = Promise.resolve();
   constructor(
     private readonly root: string,
     private readonly vault: ProtectedSyncVault,
@@ -44,6 +45,12 @@ export class PeerHostRuntime {
     );
   }
   async start(
+    active: ProtectedWorkspaceSecrets,
+    bindAddress?: string,
+  ): Promise<PeerHostStatus & { descriptor: DesktopHostDescriptor }> {
+    return this.serialize(() => this.startUnlocked(active, bindAddress));
+  }
+  private async startUnlocked(
     active: ProtectedWorkspaceSecrets,
     bindAddress?: string,
   ): Promise<PeerHostStatus & { descriptor: DesktopHostDescriptor }> {
@@ -223,17 +230,28 @@ export class PeerHostRuntime {
     return { ...this.current, descriptor };
   }
   async stop() {
+    return this.serialize(() => this.stopUnlocked());
+  }
+  private async stopUnlocked() {
     const external = this.external,
       internal = this.internal;
+    await Promise.all([close(external), close(internal?.server)]);
     this.external = undefined;
     this.internal = undefined;
-    await Promise.all([close(external), close(internal?.server)]);
     this.current = {
       running: false,
       mode: "desktop-host",
       reason:
         "Desktop host is stopped. Peers wait locally unless optional relay fallback is configured.",
     };
+  }
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.transition.then(operation, operation);
+    this.transition = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 function preferredLanAddress() {

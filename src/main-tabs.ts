@@ -1,5 +1,6 @@
 export type WorkspaceView =
   | "office"
+  | "devices"
   | "briefing"
   | "knowledge"
   | "reflection"
@@ -15,7 +16,8 @@ export type MainTab =
   | { id: `chat:${string}`; kind: "chat"; chatId: string }
   | { id: `view:${WorkspaceView}`; kind: "view"; view: WorkspaceView };
 
-export type TabCloseAction = "close" | "close-others" | "close-right" | "close-all";
+export type TabCloseAction =
+  "close" | "close-others" | "close-right" | "close-all";
 
 export function chatTab(chatId: string): MainTab {
   return { id: `chat:${chatId}`, kind: "chat", chatId };
@@ -50,6 +52,9 @@ export function nextActiveMainTabId(
 ): string | undefined {
   if (activeId && after.some((tab) => tab.id === activeId)) return activeId;
   if (!after.length) return undefined;
-  const targetIndex = Math.max(0, before.findIndex((tab) => tab.id === targetId));
+  const targetIndex = Math.max(
+    0,
+    before.findIndex((tab) => tab.id === targetId),
+  );
   return after[Math.min(targetIndex, after.length - 1)]?.id;
 }

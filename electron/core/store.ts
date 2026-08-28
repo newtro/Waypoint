@@ -1400,15 +1400,7 @@ export class WorkspaceStore {
     }
   }
 
-  createWorkspace(name: string, localPath: string): WorkspaceSummary {
-    if (!name.trim() || !path.isAbsolute(localPath))
-      throw new Error("Workspace name and absolute local path are required");
-    const workspace = {
-      id: randomUUID(),
-      name: name.trim(),
-      localPath: path.resolve(localPath),
-      createdAt: now(),
-    };
+  private insertWorkspace(workspace: WorkspaceSummary): WorkspaceSummary {
     this.transaction(() => {
       this.db
         .prepare(
@@ -1435,6 +1427,37 @@ export class WorkspaceStore {
       );
     });
     return workspace;
+  }
+
+  createWorkspace(name: string, localPath: string): WorkspaceSummary {
+    if (!name.trim() || !path.isAbsolute(localPath))
+      throw new Error("Workspace name and absolute local path are required");
+    return this.insertWorkspace({
+      id: randomUUID(),
+      name: name.trim(),
+      localPath: path.resolve(localPath),
+      createdAt: now(),
+    });
+  }
+
+  ensureInvitedWorkspace(
+    workspaceId: string,
+    localPath: string,
+  ): WorkspaceSummary {
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(workspaceId))
+      throw new Error("Invalid invited workspace identity");
+    if (!path.isAbsolute(localPath))
+      throw new Error("Invited workspace requires an absolute local path");
+    const existing = this.listWorkspaces().find(
+      (item) => item.id === workspaceId,
+    );
+    if (existing) return existing;
+    return this.insertWorkspace({
+      id: workspaceId,
+      name: "Joined workspace",
+      localPath: path.resolve(localPath),
+      createdAt: now(),
+    });
   }
 
   deleteWorkspace(workspaceId: string): WorkspaceSummary {
@@ -1492,7 +1515,12 @@ export class WorkspaceStore {
     return { ...this.syncJournal.status(workspaceId), localOnlyAttachments };
   }
   configureSyncDevice(workspaceId: string, deviceId: string): void {
-    this.syncJournal.configureDevice(workspaceId, deviceId);
+    this.transaction(() =>
+      this.syncJournal.configureDevice(workspaceId, deviceId),
+    );
+  }
+  resetSyncDevice(workspaceId: string): void {
+    this.transaction(() => this.syncJournal.resetWorkspace(workspaceId));
   }
   pendingSyncChanges(workspaceId: string): LocalMutation[] {
     return this.syncJournal.pending(workspaceId);
@@ -2927,6 +2955,39 @@ export class WorkspaceStore {
       maxConcurrency: Number(row.maxConcurrency),
       peerEligible: Boolean(row.peerEligible),
     }));
+  }
+
+  setSecurityProfilePeerEligible(
+    workspaceId: string,
+    profileId: string,
+    peerEligible: boolean,
+  ) {
+    const profile = this.listSecurityProfiles(workspaceId).find(
+      (item) => item.id === profileId,
+    );
+    if (!profile) throw new Error("Security profile is unavailable");
+    this.transaction(() => {
+      this.db
+        .prepare(
+          "UPDATE security_profiles SET peer_eligible=? WHERE id=? AND workspace_id=?",
+        )
+        .run(peerEligible ? 1 : 0, profileId, workspaceId);
+      this.activity(
+        workspaceId,
+        "workspace",
+        peerEligible
+          ? "security_profile.remote_enabled"
+          : "security_profile.remote_disabled",
+        profileId,
+        "security_profile",
+        {
+          profileName: profile.name,
+          roots: profile.roots,
+          peerEligible,
+        },
+      );
+    });
+    return this.listSecurityProfiles(workspaceId);
   }
 
   bindProviderSession(input: {
@@ -8801,18 +8862,14 @@ export class WorkspaceStore {
     value: OpenRouterSettings,
     thinking: Pick<
       ThinkingPreferences,
-      | "openrouterStrategic"
-      | "openrouterEveryday"
-      | "openrouterAttachment"
+      "openrouterStrategic" | "openrouterEveryday" | "openrouterAttachment"
     >,
   ): { settings: OpenRouterSettings; thinking: ThinkingPreferences } {
     if (
       !this.db.prepare("SELECT 1 FROM workspaces WHERE id=?").get(workspaceId)
     )
       throw new Error("Workspace not found");
-    const entries = Object.entries(thinking) as Array<
-      [ThinkingLane, string]
-    >;
+    const entries = Object.entries(thinking) as Array<[ThinkingLane, string]>;
     if (
       entries.length !== 3 ||
       entries.some(
@@ -9074,9 +9131,7 @@ export class WorkspaceStore {
       )
       .run(id, workspaceId, chatId, sourceMessageId, role, model, timestamp);
     this.db
-      .prepare(
-        "INSERT INTO hosted_run_events VALUES (?,?,1,'policy',?,?)",
-      )
+      .prepare("INSERT INTO hosted_run_events VALUES (?,?,1,'policy',?,?)")
       .run(
         randomUUID(),
         id,

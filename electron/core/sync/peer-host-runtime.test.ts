@@ -33,14 +33,30 @@ describe("desktop peer host", () => {
       owner = await DesktopSyncService.create(ownerVault, runtime),
       peer = await DesktopSyncService.create(peerVault);
     owner.initializeOwner("workspace_peer_host_01");
-    const started = await owner.startPeerHost(
-      "workspace_peer_host_01",
-      "127.0.0.1",
-    );
+    const firstStart = owner.startPeerHost(
+        "workspace_peer_host_01",
+        "127.0.0.1",
+      ),
+      competingStart = owner.startPeerHost(
+        "workspace_peer_host_01",
+        "127.0.0.1",
+      ),
+      started = await firstStart;
+    await expect(competingStart).rejects.toThrow(/already running/);
     expect(started.endpoint).toMatch(/^https:\/\/127\.0\.0\.1:\d+$/);
     const invitation = await owner.createInvitation("workspace_peer_host_01"),
       submitted = await peer.submitEnrollment(invitation.token);
     expect(submitted.status).toBe("pending");
+    const uncertain = peerVault.loadPending("workspace_peer_host_01")!;
+    peerVault.savePending({
+      ...uncertain,
+      submission: { ...uncertain.submission!, status: "prepared" },
+    });
+    const resumed = await peer.submitEnrollment(invitation.token);
+    expect(resumed.requestId).toBe(submitted.requestId);
+    expect(
+      peerVault.loadPending("workspace_peer_host_01")!.submission?.status,
+    ).toBe("submitted");
     expect(
       (await owner.pendingEnrollments("workspace_peer_host_01")).map(
         (item) => item.requestId,
@@ -50,7 +66,18 @@ describe("desktop peer host", () => {
       "workspace_peer_host_01",
       submitted.requestId,
     );
+    const completionPending = peerVault.loadPending("workspace_peer_host_01")!;
     await peer.completeEnrollment("workspace_peer_host_01");
+    peerVault.remove("workspace_peer_host_01");
+    peerVault.savePending(completionPending);
+    expect(peer.status("workspace_peer_host_01")).toMatchObject({
+      configured: false,
+      pendingEnrollment: true,
+    });
+    await peer.completeEnrollment("workspace_peer_host_01");
+    await expect(peer.submitEnrollment(invitation.token)).rejects.toThrow(
+      /already sync-configured/,
+    );
     expect(
       (await owner.devices("workspace_peer_host_01")).filter(
         (item) => item.status === "active",
@@ -64,8 +91,17 @@ describe("desktop peer host", () => {
         AbortSignal.abort("fixture canceled"),
       ),
     ).rejects.toThrow(/did not respond in time/);
-    const stoppedChannels=await owner.webhookChannels("workspace_peer_host_01");
-    expect(stoppedChannels).toMatchObject({reachable:false,managementState:'unknown',killSwitch:null,certificatePem:firstPin?.mode==='desktop-host'?firstPin.certificatePem:undefined,fingerprintSha256:started.fingerprintSha256});
+    const stoppedChannels = await owner.webhookChannels(
+      "workspace_peer_host_01",
+    );
+    expect(stoppedChannels).toMatchObject({
+      reachable: false,
+      managementState: "unknown",
+      killSwitch: null,
+      certificatePem:
+        firstPin?.mode === "desktop-host" ? firstPin.certificatePem : undefined,
+      fingerprintSha256: started.fingerprintSha256,
+    });
     await expect(owner.devices("workspace_peer_host_01")).rejects.toThrow();
     const restarted = await owner.startPeerHost(
       "workspace_peer_host_01",
@@ -81,5 +117,11 @@ describe("desktop peer host", () => {
       ),
     ).toHaveLength(2);
     await owner.stopPeerHost("workspace_peer_host_01");
+    await peer.leave("workspace_peer_host_01");
+    expect(peer.status("workspace_peer_host_01")).toMatchObject({
+      configured: false,
+      pendingEnrollment: false,
+    });
+    expect(peerVault.load("workspace_peer_host_01")).toBeUndefined();
   });
 });

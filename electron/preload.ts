@@ -3,6 +3,18 @@ let currentWorkspaceId: string | undefined;
 
 contextBridge.exposeInMainWorld("waypoint", {
   platform: process.platform,
+  onOpenDeviceNetwork: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("waypoint:open-device-network", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:open-device-network", handler);
+  },
+  onDeviceNetworkChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("waypoint:device-network-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("waypoint:device-network-changed", handler);
+  },
   onScreenCaptureRequest: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("waypoint:screen-capture-request", handler);
@@ -313,10 +325,103 @@ contextBridge.exposeInMainWorld("waypoint", {
     ipcRenderer.invoke("waypoint:sync-status", { workspaceId }),
   desktopSyncStatus: (workspaceId: string) =>
     ipcRenderer.invoke("waypoint:desktop-sync-status", { workspaceId }),
+  deviceFabricStatus: () => ipcRenderer.invoke("waypoint:device-fabric-status"),
+  deviceNetworkStatus: () =>
+    ipcRenderer.invoke("waypoint:device-network-status"),
+  deviceNetworkCatalog: () =>
+    ipcRenderer.invoke("waypoint:device-network-catalog"),
+  searchDeviceNetwork: (query: string, limit = 20) =>
+    ipcRenderer.invoke("waypoint:device-network-search", { query, limit }),
+  openDeviceNetworkObject: (input: {
+    sourceDeviceId: string;
+    workspaceId: string;
+    objectId: string;
+    objectKind: string;
+    requireFreshAuthorization?: boolean;
+  }) => ipcRenderer.invoke("waypoint:device-network-open-object", input),
+  pinDeviceNetworkWorkspace: (
+    sourceDeviceId: string,
+    workspaceId: string,
+    pinned: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:device-network-pin-workspace", {
+      sourceDeviceId,
+      workspaceId,
+      pinned,
+    }),
+  deviceNetworkCacheStatus: () =>
+    ipcRenderer.invoke("waypoint:device-network-cache-status"),
+  deviceNetworkWorkerInventory: (deviceId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-worker-inventory", { deviceId }),
+  dispatchDeviceNetworkWork: (input: {
+    workspaceId: string;
+    targetDeviceId: string;
+    provider: "codex" | "claude" | "grok";
+    providerVersion?: string;
+    mode?: "supervised" | "autonomous";
+    instruction: string;
+    targetRoot: string;
+    targetProfileId: string;
+    sourceRoot: string;
+    sourceProfileId: string;
+    idempotencyKey: string;
+    timeoutMs?: number;
+  }) => ipcRenderer.invoke("waypoint:device-network-work-dispatch", input),
+  deviceNetworkWorkStatus: (deviceId: string, jobId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-work-status", { deviceId, jobId }),
+  cancelDeviceNetworkWork: (deviceId: string, jobId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-work-cancel", { deviceId, jobId }),
+  applyDeviceNetworkWorkResult: (
+    deviceId: string,
+    jobId: string,
+    sourceRoot: string,
+  ) =>
+    ipcRenderer.invoke("waypoint:device-network-work-apply", {
+      deviceId,
+      jobId,
+      sourceRoot,
+    }),
+  discardDeviceNetworkWork: (deviceId: string, jobId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-work-discard", {
+      deviceId,
+      jobId,
+    }),
+  localFleetWork: () => ipcRenderer.invoke("waypoint:fleet-local-work"),
+  controllerFleetWork: () => ipcRenderer.invoke("waypoint:fleet-controller-work"),
+  approveLocalFleetWork: (jobId: string) =>
+    ipcRenderer.invoke("waypoint:fleet-local-work-approve", { jobId }),
+  rejectLocalFleetWork: (jobId: string) =>
+    ipcRenderer.invoke("waypoint:fleet-local-work-reject", { jobId }),
+  resolveLocalFleetProviderApproval: (
+    jobId: string,
+    requestId: string,
+    accepted: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:fleet-provider-approval-resolve", {
+      jobId,
+      requestId,
+      accepted,
+    }),
+  requestDevicePairing: (deviceId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-pair-request", { deviceId }),
+  confirmDevicePairing: (sessionId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-pair-confirm", { sessionId }),
+  unlinkDevice: (deviceId: string) =>
+    ipcRenderer.invoke("waypoint:device-network-unlink", { deviceId }),
+  setDeviceMode: (deviceId: string, mode: "supervised" | "autonomous") =>
+    ipcRenderer.invoke("waypoint:device-network-mode", { deviceId, mode }),
+  updateDeviceHostPreferences: (preferences: {
+    startAtLogin?: boolean;
+    closeToTray?: boolean;
+    pauseWork?: boolean;
+    pauseSync?: boolean;
+  }) => ipcRenderer.invoke("waypoint:device-network-preferences", preferences),
   startDesktopSyncHost: (workspaceId: string) =>
     ipcRenderer.invoke("waypoint:desktop-sync-host-start", { workspaceId }),
   stopDesktopSyncHost: (workspaceId: string) =>
     ipcRenderer.invoke("waypoint:desktop-sync-host-stop", { workspaceId }),
+  leaveDesktopSync: (workspaceId: string) =>
+    ipcRenderer.invoke("waypoint:desktop-sync-leave", { workspaceId }),
   initializeDesktopSync: (workspaceId: string) =>
     ipcRenderer.invoke("waypoint:desktop-sync-initialize", { workspaceId }),
   createSyncInvitation: (workspaceId: string) =>
@@ -734,6 +839,16 @@ contextBridge.exposeInMainWorld("waypoint", {
     }),
   listSecurityProfiles: (workspaceId: string) =>
     ipcRenderer.invoke("waypoint:list-security-profiles", { workspaceId }),
+  setSecurityProfilePeerEligible: (
+    workspaceId: string,
+    profileId: string,
+    peerEligible: boolean,
+  ) =>
+    ipcRenderer.invoke("waypoint:security-profile-peer-eligible", {
+      workspaceId,
+      profileId,
+      peerEligible,
+    }),
   listProviderSessions: (workspaceId: string, chatId?: string) =>
     ipcRenderer.invoke("waypoint:list-provider-sessions", {
       workspaceId,

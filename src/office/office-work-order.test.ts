@@ -3,6 +3,7 @@ import {
   dispatchOfficeWorkOrder,
   officeWorkOrderTitle,
   refreshAfterOfficeDispatch,
+  validateOfficeFleetContextForDispatch,
   validateOfficeWorkOrder,
   type OfficeDispatchApi,
   type OfficeProviderOption,
@@ -94,6 +95,55 @@ describe("Office Manager work orders", () => {
     );
   });
 
+  it("requires an authorized target root and target-local provider for remote work", () => {
+    expect(
+      validateOfficeWorkOrder(
+        {
+          objective: "Run this on the Mac",
+          provider: "openrouter",
+          securityProfileId: "profile-1",
+          targetDeviceId: "target_device_0000001",
+          targetRoot: "/Users/scott/Waypoint",
+          targetProfileId: "profile_remote_0001",
+        },
+        [
+          ...providers,
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            available: true,
+            modelLabel: "Hosted",
+          },
+        ],
+        profiles,
+        "D:\\Repos\\Waypoint",
+      ).errors.target,
+    ).toMatch(/target-local/);
+    expect(
+      validateOfficeWorkOrder(
+        {
+          objective: "Run this on the Mac",
+          provider: "codex",
+          securityProfileId: "profile-1",
+          targetDeviceId: "target_device_0000001",
+          targetDeviceName: "Studio Mac",
+          targetRoot: "/Users/scott/Waypoint",
+          targetProfileId: "profile_remote_0001",
+          remoteMode: "autonomous",
+        },
+        providers,
+        profiles,
+        "D:\\Repos\\Waypoint",
+      ).order,
+    ).toMatchObject({
+      targetDeviceId: "target_device_0000001",
+      targetDeviceName: "Studio Mac",
+      targetRoot: "/Users/scott/Waypoint",
+      targetProfileId: "profile_remote_0001",
+      remoteMode: "autonomous",
+    });
+  });
+
   it("creates one real chat and dispatches the exact local payload once", async () => {
     const bridge = api(),
       order: OfficeWorkOrder = {
@@ -127,6 +177,82 @@ describe("Office Manager work orders", () => {
       model: "gpt-test",
     });
     expect(bridge.runHosted).not.toHaveBeenCalled();
+  });
+
+  it("binds selected fleet provenance into the audited message and agent prompt", async () => {
+    const bridge = api(),
+      order: OfficeWorkOrder = {
+        objective: "Compare the remote decision",
+        provider: "codex",
+        securityProfileId: "profile-1",
+        fleetContext: [
+          {
+            sourceDeviceId: "source_device_0001",
+            workspaceId: "workspace_remote_0001",
+            workspaceName: "Mac research",
+            objectId: "memory_remote_000001",
+            objectKind: "memory",
+            revisionId: "revision_remote_0001",
+            title: "Remote decision",
+            excerpt: "Use the signed local transport.",
+          },
+        ],
+      };
+    await dispatchOfficeWorkOrder(bridge, "workspace-1", order);
+    const prompt = expect.stringContaining(
+      "device=source_device_0001; workspace=Mac research (workspace_remote_0001); memory=memory_remote_000001; revision=revision_remote_0001",
+    );
+    expect(bridge.addMessage).toHaveBeenCalledWith(
+      "workspace-1",
+      "chat-1",
+      "user",
+      prompt,
+      [],
+    );
+    expect(bridge.runLocal).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt }),
+    );
+  });
+
+  it("reauthorizes remote fleet context and rejects a changed revision", async () => {
+    const reference = {
+        sourceDeviceId: "source_device_0001",
+        workspaceId: "workspace_remote_0001",
+        workspaceName: "Mac research",
+        objectId: "document_remote_0001",
+        objectKind: "document",
+        revisionId: "revision_remote_0001",
+        title: "Remote decision",
+        excerpt: "Earlier decision",
+      },
+      openDeviceNetworkObject = vi.fn(async () => ({
+        object: { revisionId: "revision_remote_0002" },
+      }));
+    await expect(
+      validateOfficeFleetContextForDispatch(
+        { openDeviceNetworkObject },
+        "local_device_000001",
+        [reference],
+      ),
+    ).rejects.toThrow(/changed after it was selected/);
+    expect(openDeviceNetworkObject).toHaveBeenCalledWith({
+      sourceDeviceId: reference.sourceDeviceId,
+      workspaceId: reference.workspaceId,
+      objectId: reference.objectId,
+      objectKind: reference.objectKind,
+      requireFreshAuthorization: true,
+    });
+
+    openDeviceNetworkObject.mockRejectedValueOnce(
+      new Error("Fleet source is no longer actively trusted"),
+    );
+    await expect(
+      validateOfficeFleetContextForDispatch(
+        { openDeviceNetworkObject },
+        "local_device_000001",
+        [reference],
+      ),
+    ).rejects.toThrow(/no longer actively trusted/);
   });
 
   it("dispatches hosted work without silently accepting a provider fallback", async () => {

@@ -128,6 +128,10 @@
 .provider-question-request .automation-confirmation-actions { align-self: flex-end; }
 .provider-question-request .automation-confirmation-actions button:disabled { cursor: not-allowed; opacity: .45; }
 .settings-page-body .drawer-actions { margin-top: 16px; }
+.settings-page-body .drawer-actions .danger {
+  background: #a64747;
+  color: #fff;
+}
 
 .settings-page-body .settings-copy,
 .settings-page-body .settings-help {
@@ -194,6 +198,11 @@ html[data-theme="dark"] .settings-page-body textarea {
   color: #d7e0db;
 }
 html[data-theme="dark"] .settings-page-body button:disabled { color: #65746c; opacity: .62; }
+html[data-theme="dark"] .settings-page-body .drawer-actions .danger {
+  border-color: #9f5a5a;
+  background: #8b4444;
+  color: #fff;
+}
 html[data-theme="dark"] .settings-heading-row button,
 html[data-theme="dark"] .settings-page-body .provider-row button {
   border-color: #34473d;

@@ -73,6 +73,35 @@ describe("durable local workspace", () => {
     store.close();
   });
 
+  it("explicitly enables and disables an exact profile for remote work", () => {
+    const { database, store, workspace } = fixture(),
+      developer = store
+        .listSecurityProfiles(workspace.id)
+        .find((profile) => profile.name === "Developer · approve changes")!;
+    expect(developer.peerEligible).toBe(false);
+    expect(
+      store.setSecurityProfilePeerEligible(workspace.id, developer.id, true),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: developer.id, peerEligible: true }),
+      ]),
+    );
+    store.close();
+    const restarted = new WorkspaceStore(database);
+    expect(
+      restarted
+        .listSecurityProfiles(workspace.id)
+        .find((profile) => profile.id === developer.id)?.peerEligible,
+    ).toBe(true);
+    restarted.setSecurityProfilePeerEligible(workspace.id, developer.id, false);
+    expect(
+      restarted
+        .listSecurityProfiles(workspace.id)
+        .find((profile) => profile.id === developer.id)?.peerEligible,
+    ).toBe(false);
+    restarted.close();
+  });
+
   it("hard-deletes a non-last workspace and its attachment bytes while preserving other workspaces", () => {
     const { root, store, workspace } = fixture();
     const disposable = store.createWorkspace("Disposable QA", root);

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import officeFloor from "../assets/office/waypoint-office-floor.png";
+import { FleetKnowledgePanel } from "../device-network/FleetKnowledgePanel";
 import type { BuildOfficeAgentsInput, OfficeAgent } from "./office-state";
 import {
   agentsForOfficeFloor,
@@ -8,6 +9,8 @@ import {
 } from "./office-state";
 import {
   validateOfficeWorkOrder,
+  validateOfficeFleetContextForDispatch,
+  targetRootOptionValue,
   type OfficeManagerDispatchResult,
   type OfficeProviderOption,
   type OfficeWorkOrder,
@@ -19,6 +22,8 @@ export interface OfficeCommandCenterProps extends BuildOfficeAgentsInput {
   workspaceName: string;
   repositoryBoundary: string;
   providerOptions: OfficeProviderOption[];
+  localDeviceId?: string;
+  deviceNetwork?: Awaited<ReturnType<Window["waypoint"]["deviceNetworkStatus"]>>;
   onOpenChat(chatId: string): void;
   onCancelRun(runId: string): Promise<void> | void;
   onAuthorizeProfile(profileId: string): Promise<boolean>;
@@ -119,6 +124,8 @@ export function OfficeCommandCenter({
   workspaceName,
   repositoryBoundary,
   providerOptions,
+  localDeviceId,
+  deviceNetwork,
   onOpenChat,
   onCancelRun,
   onAuthorizeProfile,
@@ -144,19 +151,43 @@ export function OfficeCommandCenter({
         providerOptions[0]?.id ??
         "codex",
       securityProfileId: sources.profiles[0]?.id ?? "",
+      fleetContext: [],
     })),
     [workOrderValidation, setWorkOrderValidation] =
       useState<WorkOrderValidation>(),
     [managerBusy, setManagerBusy] = useState(false),
     [managerError, setManagerError] = useState<string>(),
     [managerNotice, setManagerNotice] = useState<string>(),
+    [workerInventory, setWorkerInventory] = useState<
+      Awaited<ReturnType<Window["waypoint"]["deviceNetworkWorkerInventory"]>>
+    >(),
+    targetInventoryRequest = useRef<string | undefined>(undefined),
     dispatchGuard = useRef(false),
     objectiveRef = useRef<HTMLTextAreaElement>(null),
     providerRef = useRef<HTMLSelectElement>(null),
     profileRef = useRef<HTMLSelectElement>(null),
     repositoryRef = useRef<HTMLElement>(null);
   const selectedAgent = agents.find((agent) => agent.id === selection),
-    activeSelection = selectedAgent ? selection : "manager";
+    activeSelection = selectedAgent ? selection : "manager",
+    validationProviders = workOrder.targetDeviceId
+      ? providerOptions.map((provider) => {
+          const remote = workerInventory?.providers.find(
+            (item) => item.id === provider.id,
+          );
+          return {
+            ...provider,
+            available: Boolean(remote?.available),
+            model: undefined,
+            modelLabel: remote
+              ? `${remote.id}${remote.version ? ` ${remote.version}` : ""} · target provider default model`
+              : "Target provider inventory unavailable",
+            availabilityReason: remote?.available
+              ? undefined
+              : remote?.reason ??
+                "Provider is unavailable on the selected target device.",
+          };
+        })
+      : providerOptions;
 
   async function act(
     actionSelection: string,
@@ -202,7 +233,7 @@ export function OfficeCommandCenter({
     event.preventDefault();
     const validation = validateOfficeWorkOrder(
       workOrder,
-      providerOptions,
+      validationProviders,
       sources.profiles,
       repositoryBoundary,
     );
@@ -227,7 +258,7 @@ export function OfficeCommandCenter({
     if (dispatchGuard.current) return;
     const validation = validateOfficeWorkOrder(
       workOrder,
-      providerOptions,
+      validationProviders,
       sources.profiles,
       repositoryBoundary,
     );
@@ -240,13 +271,26 @@ export function OfficeCommandCenter({
     setManagerBusy(true);
     setManagerError(undefined);
     try {
+      await validateOfficeFleetContextForDispatch(
+        window.waypoint,
+        localDeviceId,
+        validation.order.fleetContext ?? [],
+      );
       if (!(await onAuthorizeProfile(validation.order.securityProfileId))) {
         setManagerError(
           "Work order not dispatched. The selected authority profile was not enabled.",
         );
         return;
       }
-      const result = await onDispatchWorkOrder(validation.order);
+      const dispatchOrder = validation.order.targetDeviceId
+        ? {
+            ...validation.order,
+            dispatchIdempotencyKey:
+              validation.order.dispatchIdempotencyKey ?? crypto.randomUUID(),
+          }
+        : validation.order;
+      setWorkOrder(dispatchOrder);
+      const result = await onDispatchWorkOrder(dispatchOrder);
       setManagerNotice(
         result.statusRefresh === "delayed"
           ? "Work started successfully, but live office status is delayed. Do not dispatch this work order again."
@@ -254,7 +298,11 @@ export function OfficeCommandCenter({
       );
       setSelection(result.chatId);
       setManagerStep("overview");
-      setWorkOrder((current) => ({ ...current, objective: "" }));
+      setWorkOrder((current) => ({
+        ...current,
+        objective: "",
+        dispatchIdempotencyKey: undefined,
+      }));
     } catch (reason) {
       setManagerError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -263,11 +311,14 @@ export function OfficeCommandCenter({
     }
   }
 
-  const selectedProvider = providerOptions.find(
+  const selectedProvider = validationProviders.find(
       (item) => item.id === workOrder.provider,
     ),
     selectedProfile = sources.profiles.find(
       (item) => item.id === workOrder.securityProfileId,
+    ),
+    selectedTargetProfile = workerInventory?.roots.find(
+      (item) => item.profileId === workOrder.targetProfileId,
     ),
     managerStatusLabel = managerBusy
       ? "Dispatching"
@@ -409,6 +460,27 @@ export function OfficeCommandCenter({
               </span>
               {managerStep === "overview" && (
                 <>
+                  <FleetKnowledgePanel
+                    context="office"
+                    localDeviceId={localDeviceId}
+                    onSelect={(reference) => {
+                      setWorkOrder((current) => ({
+                        ...current,
+                        fleetContext: [
+                          ...(current.fleetContext ?? []).filter(
+                            (item) =>
+                              item.sourceDeviceId !== reference.sourceDeviceId ||
+                              item.workspaceId !== reference.workspaceId ||
+                              item.objectId !== reference.objectId,
+                          ),
+                          reference,
+                        ].slice(-8),
+                      }));
+                      setManagerNotice(
+                        `Added ${reference.title} from ${reference.workspaceName} to the next work order.`,
+                      );
+                    }}
+                  />
                   <section>
                     <h4>Role</h4>
                     <p>
@@ -467,6 +539,7 @@ export function OfficeCommandCenter({
                         setWorkOrder((current) => ({
                           ...current,
                           objective: event.target.value,
+                          dispatchIdempotencyKey: undefined,
                         }))
                       }
                     />
@@ -479,6 +552,200 @@ export function OfficeCommandCenter({
                       </small>
                     )}
                   </label>
+                  {Boolean(workOrder.fleetContext?.length) && (
+                    <section className="office-boundary-card">
+                      <h4>Trusted fleet context</h4>
+                      <p>
+                        These exact source references will be included in the
+                        agent prompt with provenance.
+                      </p>
+                      {workOrder.fleetContext?.map((item) => (
+                        <div key={`${item.sourceDeviceId}:${item.workspaceId}:${item.objectId}`}>
+                          <strong>{item.title}</strong>
+                          <small>
+                            {item.workspaceName} · device {item.sourceDeviceId.slice(0, 10)}…
+                          </small>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() =>
+                              setWorkOrder((current) => ({
+                                ...current,
+                                fleetContext: current.fleetContext?.filter(
+                                  (candidate) => candidate !== item,
+                                ),
+                              }))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </section>
+                  )}
+                  <label>
+                    Target machine
+                    <select
+                      value={workOrder.targetDeviceId ?? "local"}
+                      onChange={(event) => {
+                        const deviceId = event.target.value;
+                        targetInventoryRequest.current =
+                          deviceId === "local" ? undefined : deviceId;
+                        if (deviceId === "local") {
+                          setWorkerInventory(undefined);
+                          setWorkOrder((current) => ({
+                            ...current,
+                            targetDeviceId: undefined,
+                            targetDeviceName: undefined,
+                            targetRoot: undefined,
+                            targetProfileId: undefined,
+                            targetProviderVersion: undefined,
+                            dispatchIdempotencyKey: undefined,
+                            remoteMode: undefined,
+                          }));
+                          return;
+                        }
+                        const peer = deviceNetwork?.peers.find(
+                          (item) => item.deviceId === deviceId,
+                        );
+                        setWorkerInventory(undefined);
+                        setWorkOrder((current) => ({
+                          ...current,
+                          targetDeviceId: deviceId,
+                          targetDeviceName: peer?.displayName ?? deviceId,
+                          targetRoot: undefined,
+                          targetProfileId: undefined,
+                          targetProviderVersion: undefined,
+                          dispatchIdempotencyKey: undefined,
+                          remoteMode: peer?.defaultMode ?? "supervised",
+                        }));
+                        void window.waypoint
+                          .deviceNetworkWorkerInventory(deviceId)
+                          .then((inventory) => {
+                            if (targetInventoryRequest.current !== deviceId)
+                              return;
+                            setWorkerInventory(inventory);
+                            const target = inventory.roots[0];
+                            setWorkOrder((current) => {
+                              const provider = inventory.providers.find(
+                                (item) => item.id === current.provider,
+                              );
+                              return {
+                                ...current,
+                                targetRoot: target?.root,
+                                targetProfileId: target?.profileId,
+                                targetProviderVersion: provider?.version,
+                              };
+                            });
+                          })
+                          .catch((reason) => {
+                            if (targetInventoryRequest.current === deviceId)
+                              setManagerError(
+                                reason instanceof Error
+                                  ? reason.message
+                                  : String(reason),
+                              );
+                          });
+                      }}
+                    >
+                      <option value="local">This device</option>
+                      {deviceNetwork?.peers
+                        .filter(
+                          (peer) =>
+                            peer.trusted &&
+                            peer.online &&
+                            peer.capabilities.includes("remote-work"),
+                        )
+                        .map((peer) => (
+                          <option key={peer.deviceId} value={peer.deviceId}>
+                            {peer.displayName} · {peer.platform}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  {workOrder.targetDeviceId && (
+                    <>
+                      {workerInventory && (
+                        <p className="office-target-inventory">
+                          {workerInventory.platform}/{workerInventory.architecture} ·{" "}
+                          {Math.max(
+                            1,
+                            Math.round(workerInventory.totalMemoryMb / 1024),
+                          )} GB memory ·{" "}
+                          {workerInventory.providers
+                            .filter((provider) => provider.available)
+                            .map(
+                              (provider) =>
+                                `${provider.id}${provider.version ? ` ${provider.version}` : ""} (${provider.modelPolicy.replaceAll("-", " ")})`,
+                            )
+                            .join(", ") || "no target-local providers available"}
+                        </p>
+                      )}
+                      <label>
+                        Target repository
+                        <select
+                          value={
+                            workOrder.targetProfileId && workOrder.targetRoot
+                              ? targetRootOptionValue(
+                                  workOrder.targetProfileId,
+                                  workOrder.targetRoot,
+                                )
+                              : ""
+                          }
+                          onChange={(event) => {
+                            const target = workerInventory?.roots.find(
+                              (root) =>
+                                targetRootOptionValue(
+                                  root.profileId,
+                                  root.root,
+                                ) === event.target.value,
+                            );
+                            setWorkOrder((current) => ({
+                              ...current,
+                              targetRoot: target?.root,
+                              targetProfileId: target?.profileId,
+                              dispatchIdempotencyKey: undefined,
+                            }));
+                          }}
+                        >
+                          {workerInventory?.roots.map((root) => (
+                            <option
+                              key={`${root.profileId}:${root.root}`}
+                              value={targetRootOptionValue(
+                                root.profileId,
+                                root.root,
+                              )}
+                            >
+                              {root.root} · {root.profileName} · {root.filesystem} · {root.approval}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Remote mode
+                        <select
+                          value={workOrder.remoteMode ?? "supervised"}
+                          onChange={(event) =>
+                            setWorkOrder((current) => ({
+                              ...current,
+                              remoteMode: event.target.value as
+                                | "supervised"
+                                | "autonomous",
+                              dispatchIdempotencyKey: undefined,
+                            }))
+                          }
+                        >
+                          <option value="supervised">Supervised · approve on target</option>
+                          <option value="autonomous">Autonomous within target profile</option>
+                        </select>
+                      </label>
+                    </>
+                  )}
+                  {workOrderValidation?.errors.target && (
+                    <small className="field-error">
+                      {workOrderValidation.errors.target}
+                    </small>
+                  )}
                   <label>
                     Provider
                     <select
@@ -493,13 +760,20 @@ export function OfficeCommandCenter({
                           : undefined
                       }
                       onChange={(event) =>
-                        setWorkOrder((current) => ({
-                          ...current,
-                          provider: event.target.value as OfficeWorkOrder["provider"],
-                        }))
+                        setWorkOrder((current) => {
+                          const provider = event.target.value as OfficeWorkOrder["provider"];
+                          return {
+                            ...current,
+                            provider,
+                            targetProviderVersion: workerInventory?.providers.find(
+                              (item) => item.id === provider,
+                            )?.version,
+                            dispatchIdempotencyKey: undefined,
+                          };
+                        })
                       }
                     >
-                      {providerOptions.map((provider) => (
+                      {validationProviders.map((provider) => (
                         <option
                           key={provider.id}
                           value={provider.id}
@@ -539,6 +813,7 @@ export function OfficeCommandCenter({
                         setWorkOrder((current) => ({
                           ...current,
                           securityProfileId: event.target.value,
+                          dispatchIdempotencyKey: undefined,
                         }))
                       }
                     >
@@ -600,7 +875,7 @@ export function OfficeCommandCenter({
                     <div><dt>Provider</dt><dd>{selectedProvider?.label}</dd></div>
                     <div><dt>Model</dt><dd>{selectedProvider?.modelLabel}</dd></div>
                     <div>
-                      <dt>Authority</dt>
+                      <dt>Controller authority</dt>
                       <dd>
                         {selectedProfile
                           ? `${selectedProfile.name} · ${selectedProfile.filesystem} · ${selectedProfile.network} · ${selectedProfile.approval}`
@@ -608,6 +883,37 @@ export function OfficeCommandCenter({
                       </dd>
                     </div>
                     <div><dt>Repository</dt><dd>{repositoryBoundary}</dd></div>
+                    <div>
+                      <dt>Target</dt>
+                      <dd>
+                        {workOrder.targetDeviceId
+                          ? `${workOrder.targetDeviceName ?? workOrder.targetDeviceId} · ${workOrder.remoteMode ?? "supervised"} · ${workOrder.targetRoot}`
+                          : "This device"}
+                      </dd>
+                    </div>
+                    {workOrder.targetDeviceId && (
+                      <div>
+                        <dt>Target authority</dt>
+                        <dd>
+                          {selectedTargetProfile
+                            ? `${selectedTargetProfile.profileName} · ${selectedTargetProfile.filesystem} · ${selectedTargetProfile.network} · ${selectedTargetProfile.approval}`
+                            : workOrder.targetProfileId ?? "Unavailable"}
+                        </dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>Fleet context</dt>
+                      <dd>
+                        {workOrder.fleetContext?.length
+                          ? workOrder.fleetContext
+                              .map(
+                                (item) =>
+                                  `${item.title} · ${item.workspaceName} · ${item.sourceDeviceId.slice(0, 10)}…`,
+                              )
+                              .join("; ")
+                          : "None"}
+                      </dd>
+                    </div>
                   </dl>
                   <p>
                     Confirming creates one real conversation and starts only

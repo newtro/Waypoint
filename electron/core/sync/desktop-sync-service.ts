@@ -37,6 +37,8 @@ const decode = (value: string): InvitationToken => {
 };
 
 export class DesktopSyncService {
+  private readonly leaving = new Set<string>();
+  private readonly leaveRecoveryRequired = new Set<string>();
   private constructor(
     private readonly vault: ProtectedSyncVault,
     private readonly crypto: WaypointCrypto,
@@ -50,6 +52,7 @@ export class DesktopSyncService {
     );
   }
   initializeOwner(workspaceId: string) {
+    this.assertAvailable(workspaceId);
     if (this.vault.load(workspaceId))
       throw new Error("Workspace sync is already configured");
     const device = this.crypto.generateDevice(),
@@ -72,6 +75,18 @@ export class DesktopSyncService {
     };
   }
   status(workspaceId: string) {
+    if (
+      this.leaving.has(workspaceId) ||
+      this.leaveRecoveryRequired.has(workspaceId)
+    )
+      return {
+        configured: false,
+        pendingEnrollment: false,
+        leaving: true,
+        keyEpoch: 0,
+        endpoint: WAYPOINT_RELAY_ORIGIN,
+        transportMode: "hosted-relay" as const,
+      };
     const active = this.vault.load(workspaceId),
       pending = this.vault.loadPending(workspaceId),
       currentHost = this.peerHost?.status(),
@@ -107,6 +122,7 @@ export class DesktopSyncService {
           };
   }
   async startPeerHost(workspaceId: string, bindAddress?: string) {
+    this.assertAvailable(workspaceId);
     if (!this.peerHost)
       throw new Error("Desktop hosting is unavailable in this runtime");
     const active = this.required(workspaceId),
@@ -120,6 +136,7 @@ export class DesktopSyncService {
     return result;
   }
   async stopPeerHost(workspaceId: string) {
+    this.assertAvailable(workspaceId);
     if (!this.peerHost)
       throw new Error("Desktop hosting is unavailable in this runtime");
     const status = this.peerHost.status();
@@ -155,42 +172,120 @@ export class DesktopSyncService {
       expiresAt: value.invitation.expiresAt,
     };
   }
-  async submitEnrollment(token: string) {
+  previewEnrollmentToken(token: string): { workspaceId: string } {
     const value = decode(token),
-      device = this.crypto.generateDevice(),
-      request = this.crypto.createEnrollmentRequest({
-        workspaceId: value.invitation.workspaceId,
-        device,
-      }),
-      endpoint =
-        value.transport?.mode === "desktop-host"
-          ? value.transport.endpoint
-          : WAYPOINT_RELAY_ORIGIN,
-      peer =
-        value.transport?.mode === "desktop-host" ? value.transport : undefined;
-    await DesktopRelayClient.submitEnrollment(
-      endpoint,
-      value.invitation.invitationId,
-      value.secret,
-      request,
-      undefined,
-      peer,
+      workspaceId = value.invitation?.workspaceId;
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(String(workspaceId)))
+      throw new Error("Enrollment token has an invalid workspace identity");
+    return { workspaceId };
+  }
+  matchesPendingEnrollment(token: string): boolean {
+    const value = decode(token),
+      pending = this.vault.loadPending(value.invitation.workspaceId);
+    return Boolean(
+      pending?.submission &&
+      pending.submission.invitationId === value.invitation.invitationId &&
+      pending.submission.invitationSecret === value.secret,
     );
-    this.vault.savePending({
-      version: 1,
-      workspaceId: request.workspaceId,
-      device,
-      request,
-      endpoint,
-      transport: value.transport,
-    });
+  }
+  hasPendingEnrollment(workspaceId: string): boolean {
+    return Boolean(this.vault.loadPending(workspaceId));
+  }
+  async submitEnrollment(token: string) {
+    const value = decode(token);
+    this.assertAvailable(value.invitation.workspaceId);
+    if (this.vault.load(value.invitation.workspaceId))
+      throw new Error(
+        "This workspace is already sync-configured on this device. Leave sync on this device before joining it again.",
+      );
+    const existingPending = this.vault.loadPending(
+        value.invitation.workspaceId,
+      ),
+      prepared = existingPending
+        ? existingPending
+        : (() => {
+            const device = this.crypto.generateDevice(),
+              request = this.crypto.createEnrollmentRequest({
+                workspaceId: value.invitation.workspaceId,
+                device,
+              }),
+              endpoint =
+                value.transport?.mode === "desktop-host"
+                  ? value.transport.endpoint
+                  : WAYPOINT_RELAY_ORIGIN,
+              pending = {
+                version: 1 as const,
+                workspaceId: request.workspaceId,
+                device,
+                request,
+                endpoint,
+                transport: value.transport,
+                submission: {
+                  invitationId: value.invitation.invitationId,
+                  invitationSecret: value.secret,
+                  status: "prepared" as const,
+                },
+              };
+            this.vault.savePending(pending);
+            return pending;
+          })(),
+      submission = prepared.submission;
+    if (
+      !submission ||
+      submission.invitationId !== value.invitation.invitationId ||
+      submission.invitationSecret !== value.secret
+    )
+      throw new Error(
+        "This workspace already has a different pending enrollment on this device.",
+      );
+    if (submission.status === "prepared") await this.submitPrepared(prepared);
     return {
-      workspaceId: request.workspaceId,
-      requestId: request.requestId,
+      workspaceId: prepared.request.workspaceId,
+      requestId: prepared.request.requestId,
       status: "pending" as const,
     };
   }
+  async resumePreparedEnrollment(
+    workspaceId: string,
+    signal: AbortSignal = AbortSignal.timeout(12_000),
+  ): Promise<boolean> {
+    const pending = this.vault.loadPending(workspaceId);
+    if (!pending?.submission || pending.submission.status !== "prepared")
+      return false;
+    await this.submitPrepared(pending, signal);
+    return true;
+  }
+  async leave(
+    workspaceId: string,
+    onLocked?: () => void,
+    onRemoved?: () => void | Promise<void>,
+  ) {
+    if (this.leaving.has(workspaceId))
+      throw new Error("Workspace sync leave is already in progress");
+    this.leaving.add(workspaceId);
+    let committed = false;
+    try {
+      onLocked?.();
+      committed = true;
+      const currentHost = this.peerHost?.status();
+      if (currentHost?.workspaceId === workspaceId) await this.peerHost?.stop();
+      this.vault.remove(workspaceId);
+      await onRemoved?.();
+      this.leaveRecoveryRequired.delete(workspaceId);
+      return {
+        configured: false as const,
+        pendingEnrollment: false as const,
+        contentPreserved: true as const,
+      };
+    } catch (error) {
+      if (committed) this.leaveRecoveryRequired.add(workspaceId);
+      throw error;
+    } finally {
+      this.leaving.delete(workspaceId);
+    }
+  }
   async completeEnrollment(workspaceId: string) {
+    this.assertAvailable(workspaceId);
     const pending = this.vault.loadPending(workspaceId);
     if (!pending) throw new Error("No protected pending enrollment");
     const peer =
@@ -234,6 +329,42 @@ export class DesktopSyncService {
       deviceId: pending.device.deviceId,
       keyEpoch: result.keyEpoch,
     };
+  }
+  private async submitPrepared(
+    pending: NonNullable<ReturnType<ProtectedSyncVault["loadPending"]>>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const submission = pending.submission;
+    if (!submission) throw new Error("Pending enrollment cannot be resumed");
+    const peer =
+      pending.transport?.mode === "desktop-host"
+        ? pending.transport
+        : undefined;
+    await DesktopRelayClient.submitEnrollment(
+      pending.endpoint,
+      submission.invitationId,
+      submission.invitationSecret,
+      pending.request,
+      signal,
+      peer,
+    );
+    this.vault.savePending({
+      ...pending,
+      submission: { ...submission, status: "submitted" },
+    });
+  }
+  isLeaving(workspaceId: string): boolean {
+    return (
+      this.leaving.has(workspaceId) ||
+      this.leaveRecoveryRequired.has(workspaceId)
+    );
+  }
+  private assertAvailable(workspaceId: string): void {
+    if (
+      this.leaving.has(workspaceId) ||
+      this.leaveRecoveryRequired.has(workspaceId)
+    )
+      throw new Error("Workspace sync leave is in progress");
   }
   async pendingEnrollments(workspaceId: string) {
     const active = this.required(workspaceId),
@@ -282,12 +413,54 @@ export class DesktopSyncService {
     const active = this.required(workspaceId);
     return (await DesktopRelayClient.create(active)).revokeDevice(deviceId);
   }
-  planWebhookChannel(workspaceId:string,connectorId="generic"){const active=this.required(workspaceId),channelId=randomBytes(24).toString("base64url"),transportMode=active.transport?.mode??"hosted-relay";return{channelId,endpoint:`${active.endpoint.replace(/\/$/,"")}/${connectorId==="generic"?"v1/hooks":"v1/native-hooks"}/${channelId}`,reachability:transportMode==="hosted-relay"?"public_relay" as const:"local_network" as const}}
-  async createWebhookChannel(workspaceId: string, label: string, connectorId = "generic", requestedChannelId?:string) {
+  planWebhookChannel(workspaceId: string, connectorId = "generic") {
+    const active = this.required(workspaceId),
+      channelId = randomBytes(24).toString("base64url"),
+      transportMode = active.transport?.mode ?? "hosted-relay";
+    return {
+      channelId,
+      endpoint: `${active.endpoint.replace(/\/$/, "")}/${connectorId === "generic" ? "v1/hooks" : "v1/native-hooks"}/${channelId}`,
+      reachability:
+        transportMode === "hosted-relay"
+          ? ("public_relay" as const)
+          : ("local_network" as const),
+    };
+  }
+  async createWebhookChannel(
+    workspaceId: string,
+    label: string,
+    connectorId = "generic",
+    requestedChannelId?: string,
+  ) {
     let active = this.requiredWebhookTransport(workspaceId);
-    const plannedChannelId=requestedChannelId,plannedEndpoint=plannedChannelId?`${active.endpoint.replace(/\/$/, "")}/${connectorId === "generic" ? "v1/hooks" : "v1/native-hooks"}/${plannedChannelId}`:undefined;
-    let result:Awaited<ReturnType<DesktopRelayClient['createWebhookChannel']>>;
-    try{result=await (await DesktopRelayClient.create(active)).createWebhookChannel(label, connectorId, requestedChannelId)}catch(error){throw Object.assign(new Error("Waypoint channel creation outcome is uncertain; inspect the approved channel before retrying",{cause:error}),{waypointMutation:{outcome:'uncertain',channelId:plannedChannelId,endpoint:plannedEndpoint,rollback:{operation:'inspect_revoke_and_delete_channel',channelId:plannedChannelId}}})}
+    const plannedChannelId = requestedChannelId,
+      plannedEndpoint = plannedChannelId
+        ? `${active.endpoint.replace(/\/$/, "")}/${connectorId === "generic" ? "v1/hooks" : "v1/native-hooks"}/${plannedChannelId}`
+        : undefined;
+    let result: Awaited<ReturnType<DesktopRelayClient["createWebhookChannel"]>>;
+    try {
+      result = await (
+        await DesktopRelayClient.create(active)
+      ).createWebhookChannel(label, connectorId, requestedChannelId);
+    } catch (error) {
+      throw Object.assign(
+        new Error(
+          "Waypoint channel creation outcome is uncertain; inspect the approved channel before retrying",
+          { cause: error },
+        ),
+        {
+          waypointMutation: {
+            outcome: "uncertain",
+            channelId: plannedChannelId,
+            endpoint: plannedEndpoint,
+            rollback: {
+              operation: "inspect_revoke_and_delete_channel",
+              channelId: plannedChannelId,
+            },
+          },
+        },
+      );
+    }
     active = {
       ...active,
       webhookSecrets: [
@@ -301,13 +474,36 @@ export class DesktopSyncService {
         },
       ],
     };
-    try{this.vault.save(active)}catch(error){throw Object.assign(new Error("Waypoint channel was created but its signing secret could not be persisted locally",{cause:error}),{waypointMutation:{outcome:'known',channelId:result.channelId,endpoint:`${active.endpoint.replace(/\/$/, "")}/${result.connectorId === "generic" ? "v1/hooks" : "v1/native-hooks"}/${result.channelId}`,rollback:{operation:'revoke_and_delete_channel',channelId:result.channelId}}})}
+    try {
+      this.vault.save(active);
+    } catch (error) {
+      throw Object.assign(
+        new Error(
+          "Waypoint channel was created but its signing secret could not be persisted locally",
+          { cause: error },
+        ),
+        {
+          waypointMutation: {
+            outcome: "known",
+            channelId: result.channelId,
+            endpoint: `${active.endpoint.replace(/\/$/, "")}/${result.connectorId === "generic" ? "v1/hooks" : "v1/native-hooks"}/${result.channelId}`,
+            rollback: {
+              operation: "revoke_and_delete_channel",
+              channelId: result.channelId,
+            },
+          },
+        },
+      );
+    }
     return {
       ...result,
       endpoint: `${active.endpoint.replace(/\/$/, "")}/${result.connectorId === "generic" ? "v1/hooks" : "v1/native-hooks"}/${result.channelId}`,
       transportMode: active.transport?.mode ?? "hosted-relay",
       ...(active.transport?.mode === "desktop-host"
-        ? { certificatePem: active.transport.certificatePem, fingerprintSha256: this.peerHost?.status().fingerprintSha256 }
+        ? {
+            certificatePem: active.transport.certificatePem,
+            fingerprintSha256: this.peerHost?.status().fingerprintSha256,
+          }
         : {}),
     };
   }
@@ -315,30 +511,55 @@ export class DesktopSyncService {
     const active = this.required(workspaceId),
       transportMode = active.transport?.mode ?? "hosted-relay",
       host = this.peerHost?.status();
-    if (transportMode === "desktop-host" && (!host?.running || host.workspaceId !== workspaceId)) return {
-      channels: [],
-      killSwitch: null,
-      managementState: "unknown" as const,
-      endpoint: active.endpoint,
-      transportMode,
-      reachability: "local-network" as const,
-      reachable: false,
-      reason: "Desktop host is stopped. Channel and kill-switch state are unavailable until it starts; retained TLS trust remains available for sender configuration.",
-      ...(active.transport?.mode === "desktop-host" ? { certificatePem: active.transport.certificatePem, fingerprintSha256: createHash("sha256").update(new X509Certificate(active.transport.certificatePem).raw).digest("hex") } : {}),
-    };
-    const result = await (await DesktopRelayClient.create(active)).webhookChannels();
+    if (
+      transportMode === "desktop-host" &&
+      (!host?.running || host.workspaceId !== workspaceId)
+    )
+      return {
+        channels: [],
+        killSwitch: null,
+        managementState: "unknown" as const,
+        endpoint: active.endpoint,
+        transportMode,
+        reachability: "local-network" as const,
+        reachable: false,
+        reason:
+          "Desktop host is stopped. Channel and kill-switch state are unavailable until it starts; retained TLS trust remains available for sender configuration.",
+        ...(active.transport?.mode === "desktop-host"
+          ? {
+              certificatePem: active.transport.certificatePem,
+              fingerprintSha256: createHash("sha256")
+                .update(
+                  new X509Certificate(active.transport.certificatePem).raw,
+                )
+                .digest("hex"),
+            }
+          : {}),
+      };
+    const result = await (
+      await DesktopRelayClient.create(active)
+    ).webhookChannels();
     return {
       ...result,
       endpoint: active.endpoint,
       transportMode,
       reachability:
-        transportMode === "desktop-host"
-          ? "local-network"
-          : "public-relay",
+        transportMode === "desktop-host" ? "local-network" : "public-relay",
       reachable: true,
       managementState: "current" as const,
-      reason: transportMode === "desktop-host" ? "Desktop host is running with a self-signed HTTPS certificate; configure senders with the pinned certificate and full SHA-256 fingerprint." : "Hosted relay is reachable over public trusted HTTPS.",
-      ...(transportMode === "desktop-host" ? { fingerprintSha256: host?.fingerprintSha256, certificatePem: active.transport?.mode === "desktop-host" ? active.transport.certificatePem : undefined } : {}),
+      reason:
+        transportMode === "desktop-host"
+          ? "Desktop host is running with a self-signed HTTPS certificate; configure senders with the pinned certificate and full SHA-256 fingerprint."
+          : "Hosted relay is reachable over public trusted HTTPS.",
+      ...(transportMode === "desktop-host"
+        ? {
+            fingerprintSha256: host?.fingerprintSha256,
+            certificatePem:
+              active.transport?.mode === "desktop-host"
+                ? active.transport.certificatePem
+                : undefined,
+          }
+        : {}),
     } as const;
   }
   async rotateWebhookChannel(workspaceId: string, channelId: string) {
@@ -402,7 +623,8 @@ export class DesktopSyncService {
         input: {
           eventId: string;
           channelId: string;
-          connectorId?: "generic" | "github" | "azure_devops" | "stripe" | "resend";
+          connectorId?:
+            "generic" | "github" | "azure_devops" | "stripe" | "resend";
           eventType: string;
           occurredAt: string;
           receivedAt: string;
@@ -411,7 +633,12 @@ export class DesktopSyncService {
       ): unknown;
       recordRejectedInboundEvent(
         workspaceId: string,
-        input: { eventId: string; channelId: string; receivedAt: string; reason: string },
+        input: {
+          eventId: string;
+          channelId: string;
+          receivedAt: string;
+          reason: string;
+        },
       ): void;
     },
     signal?: AbortSignal,
@@ -419,7 +646,8 @@ export class DesktopSyncService {
     const active = this.requiredWebhookTransport(workspaceId),
       client = await DesktopRelayClient.create(active),
       result = await client.pullWebhookEvents(50, signal);
-    let imported = 0, rejected = 0;
+    let imported = 0,
+      rejected = 0;
     for (const event of result.events) {
       let payload: Awaited<ReturnType<typeof openInboundWebhook>>;
       try {
@@ -433,10 +661,19 @@ export class DesktopSyncService {
           eventId: event.eventId,
           channelId: event.channelId,
           receivedAt: event.receivedAt,
-          reason: error instanceof Error ? error.message : "Inbound webhook payload is invalid",
+          reason:
+            error instanceof Error
+              ? error.message
+              : "Inbound webhook payload is invalid",
         });
         rejected++;
-        if (!(await client.acknowledgeWebhookEvent(event.eventId, signal)).acknowledged) throw new Error("Inbound webhook acknowledgement failed", { cause: error });
+        if (
+          !(await client.acknowledgeWebhookEvent(event.eventId, signal))
+            .acknowledged
+        )
+          throw new Error("Inbound webhook acknowledgement failed", {
+            cause: error,
+          });
         continue;
       }
       try {
@@ -444,7 +681,9 @@ export class DesktopSyncService {
           eventId: payload.sourceEventId ?? event.eventId,
           channelId: event.channelId,
           connectorId: payload.connectorId ?? "generic",
-          eventType: payload.connectorId ? payload.eventType : `generic.${payload.eventType}`,
+          eventType: payload.connectorId
+            ? payload.eventType
+            : `generic.${payload.eventType}`,
           occurredAt: payload.occurredAt,
           receivedAt: event.receivedAt,
           payload: payload.payload,
@@ -455,13 +694,26 @@ export class DesktopSyncService {
           eventId: event.eventId,
           channelId: event.channelId,
           receivedAt: event.receivedAt,
-          reason: error instanceof Error ? error.message : "Inbound webhook storage validation rejected the event",
+          reason:
+            error instanceof Error
+              ? error.message
+              : "Inbound webhook storage validation rejected the event",
         });
         rejected++;
-        if (!(await client.acknowledgeWebhookEvent(event.eventId, signal)).acknowledged) throw new Error("Inbound webhook acknowledgement failed", { cause: error });
+        if (
+          !(await client.acknowledgeWebhookEvent(event.eventId, signal))
+            .acknowledged
+        )
+          throw new Error("Inbound webhook acknowledgement failed", {
+            cause: error,
+          });
         continue;
       }
-      if (!(await client.acknowledgeWebhookEvent(event.eventId, signal)).acknowledged) throw new Error("Inbound webhook acknowledgement failed");
+      if (
+        !(await client.acknowledgeWebhookEvent(event.eventId, signal))
+          .acknowledged
+      )
+        throw new Error("Inbound webhook acknowledgement failed");
       imported++;
     }
     return { imported, rejected };
@@ -534,6 +786,7 @@ export class DesktopSyncService {
     return { keyEpoch: committed.keyEpoch };
   }
   private required(workspaceId: string) {
+    this.assertAvailable(workspaceId);
     const value = this.vault.load(workspaceId);
     if (!value) throw new Error("Workspace sync is not configured");
     return value;
@@ -550,7 +803,17 @@ export class DesktopSyncService {
       );
     return value;
   }
-  webhookProvisioningSecret(workspaceId:string,channelId:string){const active=this.requiredWebhookTransport(workspaceId),secret=active.webhookSecrets?.find((item)=>item.channelId===channelId);if(!secret)throw new Error('Webhook channel secret is unavailable; rotate or recreate the channel');return{secret:secret.secret,secretVersion:secret.secretVersion}}
+  webhookProvisioningSecret(workspaceId: string, channelId: string) {
+    const active = this.requiredWebhookTransport(workspaceId),
+      secret = active.webhookSecrets?.find(
+        (item) => item.channelId === channelId,
+      );
+    if (!secret)
+      throw new Error(
+        "Webhook channel secret is unavailable; rotate or recreate the channel",
+      );
+    return { secret: secret.secret, secretVersion: secret.secretVersion };
+  }
   private async activateRotation(
     active: ReturnType<DesktopSyncService["required"]>,
     signal?: AbortSignal,
