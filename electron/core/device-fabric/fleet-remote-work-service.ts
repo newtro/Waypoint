@@ -141,6 +141,10 @@ function timestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+function portableAbsolutePath(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 function validHandoff(value: unknown): value is FleetHandoff {
   if (!value || typeof value !== "object") return false;
   const item = value as FleetHandoff;
@@ -187,11 +191,11 @@ export function validateFleetRemoteWorkOrder(
     !item.instruction.trim() ||
     item.instruction.length > 8_000 ||
     typeof item.controllerRoot !== "string" ||
-    !path.isAbsolute(item.controllerRoot) ||
+    !portableAbsolutePath(item.controllerRoot) ||
     item.controllerRoot.length > 1_024 ||
     !ID.test(String(item.controllerProfileId)) ||
     typeof item.targetRoot !== "string" ||
-    !path.isAbsolute(item.targetRoot) ||
+    !portableAbsolutePath(item.targetRoot) ||
     item.targetRoot.length > 1_024 ||
     !ID.test(String(item.targetProfileId)) ||
     !Number.isSafeInteger(item.timeoutMs) ||
@@ -231,7 +235,7 @@ function validateState(value: unknown): FleetRemoteWorkState {
       !["queued", "waiting_approval", "running", "completed", "failed", "canceled"].includes(job.status) ||
       (job.worktreePath !== undefined &&
         (typeof job.worktreePath !== "string" ||
-          !path.isAbsolute(job.worktreePath) ||
+          !portableAbsolutePath(job.worktreePath) ||
           job.worktreePath.length > 1_024)) ||
       (job.resultSummary !== undefined &&
         (typeof job.resultSummary !== "string" ||
