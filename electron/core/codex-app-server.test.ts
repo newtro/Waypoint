@@ -500,7 +500,7 @@ describe("Codex app-server workbench", () => {
                 threadId: "thread-redact",
                 turnId: "turn-redact",
                 itemId: "cmd",
-                delta: `token=SUPERSECRET ${slackAppToken} ${slackEnterpriseToken} whsec_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glft-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glimt-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glwt-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glffct-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 _gitlab_session=ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890`,
+                delta: `token=SUPERSECRET ${slackAppToken} ${slackEnterpriseToken} whsec_TEST glft-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glimt-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glwt-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 glffct-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 _gitlab_session=ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890`,
               },
             });
             send({
